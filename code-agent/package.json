@@ -1,0 +1,12 @@
+{
+  "name": "code-agent",
+  "version": "0.1.0",
+  "description": "Remote controller for Claude Code sessions on this laptop",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

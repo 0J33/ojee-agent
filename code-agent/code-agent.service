@@ -1,0 +1,16 @@
+[Unit]
+Description=Claude Code remote controller for this laptop
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/code-agent/env
+ExecStart=/usr/bin/node %h/.local/share/code-agent/server.js
+Restart=always
+RestartSec=3
+StandardOutput=append:%h/.local/share/code-agent/code-agent.log
+StandardError=append:%h/.local/share/code-agent/code-agent.log
+
+[Install]
+WantedBy=default.target
