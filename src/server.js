@@ -220,7 +220,7 @@ app.get('/module.json', (req, res) => res.json({
   name: 'Agent',
   version: pkg.version,
   views: [
-    { id: 'dashboard', label: 'Stats', icon: 'i-gauge' },
+    { id: 'dashboard', label: 'Stats', icon: 'i-server' },
     { id: 'services', label: 'Services', icon: 'i-grid' },
     { id: 'actions', label: 'Actions', icon: 'i-cog' },
     { id: 'chat', label: 'Code', icon: 'i-log' },

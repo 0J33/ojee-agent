@@ -1113,20 +1113,24 @@ const render = () => {
   if (toastStack) toastStack.remove();
 
   root.innerHTML = '';
-  const grid = el('div', { class: 'ag-grid' },
-    panelSystem(),
-    panelServices(),
-    panelActions(),
-    panelChatCode(),
-  );
-  // On mobile, mark the active panel
+  // One panel per view, on EVERY viewport.
+  //
+  // This used to render all four panels and then mark one `mobile-active` —
+  // a class that only does anything inside a mobile media query. So on a
+  // desktop, Stats, Services, Actions and Code all showed the identical page
+  // and three of the four nav entries did nothing at all. Rendering only the
+  // active panel makes every entry mean something and makes the desktop and
+  // the phone agree, which is why the LOQ module stopped diverging too.
   const activePanel = state.view === 'chat' ? 'chat'
     : state.view === 'services' ? 'services'
     : state.view === 'actions' ? 'actions'
     : 'dashboard';
-  for (const p of grid.children) {
-    if (p.dataset.panel === activePanel) p.classList.add('mobile-active');
-  }
+  const build = { dashboard: panelSystem, services: panelServices,
+                  actions: panelActions, chat: panelChatCode }[activePanel];
+  const grid = el('div', { class: 'ag-grid' }, build());
+  grid.dataset.view = activePanel;
+  // Kept: the mobile rules that bound the chat log key off this class.
+  for (const p of grid.children) p.classList.add('mobile-active');
 
   // The shell owns the HUD, nav, tab bar and status bar. A module that
   // rendered its own would end up with two of each.
