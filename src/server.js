@@ -19,8 +19,6 @@ const fs = require('fs');
 const path = require('path');
 
 const PORT = process.env.PORT || 8080;
-const CODE_AGENT_URL = process.env.CODE_AGENT_URL || '';
-const CODE_AGENT_TOKEN = process.env.CODE_AGENT_TOKEN || '';
 const DASHBOARD_BASE_URL = (process.env.DASHBOARD_BASE_URL || 'https://agent.example.com').replace(/\/+$/, '');
 const DASHBOARD_HOST = (() => { try { return new URL(DASHBOARD_BASE_URL).host; } catch { return 'this server'; } })();
 const TIMEZONE = process.env.TIMEZONE || 'UTC';
@@ -223,7 +221,6 @@ app.get('/module.json', (req, res) => res.json({
     { id: 'dashboard', label: 'Stats', icon: 'i-server' },
     { id: 'services', label: 'Services', icon: 'i-grid' },
     { id: 'actions', label: 'Actions', icon: 'i-cog' },
-    { id: 'chat', label: 'Code', icon: 'i-log' },
   ],
   ui: '/ui/index.js',
   health: '/api/health',
@@ -239,7 +236,6 @@ app.get('/api/health', async (req, res) => {
     ok,
     reason: ok ? null : 'docker.sock unreachable — container controls will not work',
     containers: docker.trim() ? docker.trim().split('\n').length : 0,
-    codeAgent: codeAgentUp(),
   });
 });
 
@@ -249,134 +245,5 @@ app.use('/ui', express.static(path.join(__dirname, '..', 'ui'), {
 }));
 // Standalone shell — never requested when mounted in a console.
 app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));
-
-// ─── Code Agent proxy (Loq laptop Claude Code) ─────────────────────────
-// Forward requests to the loq code-agent over the tailnet. Auth passthrough
-// using the server-side CODE_AGENT_TOKEN — clients use the dashboard's JWT.
-const codeAgentUp = () => !!CODE_AGENT_URL && !!CODE_AGENT_TOKEN;
-
-const codeAgentReq = async (pathAndQuery, opts = {}) => {
-  if (!codeAgentUp()) throw new Error('code agent not configured');
-  const r = await fetch(`${CODE_AGENT_URL}${pathAndQuery}`, {
-    ...opts,
-    headers: { Authorization: `Bearer ${CODE_AGENT_TOKEN}`, 'Content-Type': 'application/json', ...(opts.headers || {}) }
-  });
-  return r;
-};
-
-app.get('/api/code-agent/config', auth, (req, res) => res.json({ enabled: codeAgentUp() }));
-
-app.get('/api/code-agent/dirs', auth, async (req, res) => {
-  try {
-    const qs = req.query.path ? `?path=${encodeURIComponent(req.query.path)}` : '';
-    const r = await codeAgentReq(`/api/dirs${qs}`);
-    res.status(r.status).json(await r.json());
-  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
-});
-
-app.get('/api/code-agent/sessions', auth, async (req, res) => {
-  try { const r = await codeAgentReq('/api/sessions'); res.status(r.status).json(await r.json()); }
-  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
-});
-
-app.post('/api/code-agent/sessions', auth, async (req, res) => {
-  try {
-    const r = await codeAgentReq('/api/sessions', { method: 'POST', body: JSON.stringify(req.body || {}) });
-    res.status(r.status).json(await r.json());
-  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
-});
-
-app.patch('/api/code-agent/sessions/:id', auth, async (req, res) => {
-  try {
-    const r = await codeAgentReq(`/api/sessions/${req.params.id}`, { method: 'PATCH', body: JSON.stringify(req.body || {}) });
-    res.status(r.status).json(await r.json());
-  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
-});
-
-app.delete('/api/code-agent/sessions/:id', auth, async (req, res) => {
-  try { const r = await codeAgentReq(`/api/sessions/${req.params.id}`, { method: 'DELETE' }); res.status(r.status).json(await r.json()); }
-  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
-});
-
-app.get('/api/code-agent/sessions/:id/history', auth, async (req, res) => {
-  try { const r = await codeAgentReq(`/api/sessions/${req.params.id}/history`); res.status(r.status).json(await r.json()); }
-  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
-});
-
-// Past conversation history across all projects
-app.get('/api/code-agent/history', auth, async (req, res) => {
-  try { const r = await codeAgentReq('/api/history'); res.status(r.status).json(await r.json()); }
-  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
-});
-
-app.get('/api/code-agent/history/:project/:id', auth, async (req, res) => {
-  try { const r = await codeAgentReq(`/api/history/${encodeURIComponent(req.params.project)}/${encodeURIComponent(req.params.id)}`); res.status(r.status).json(await r.json()); }
-  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
-});
-
-app.delete('/api/code-agent/history/:project/:id', auth, async (req, res) => {
-  try { const r = await codeAgentReq(`/api/history/${encodeURIComponent(req.params.project)}/${encodeURIComponent(req.params.id)}`, { method: 'DELETE' }); res.status(r.status).json(await r.json()); }
-  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
-});
-
-app.patch('/api/code-agent/history/:project/:id', auth, async (req, res) => {
-  try {
-    const r = await codeAgentReq(`/api/history/${encodeURIComponent(req.params.project)}/${encodeURIComponent(req.params.id)}`, { method: 'PATCH', body: JSON.stringify(req.body || {}) });
-    res.status(r.status).json(await r.json());
-  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
-});
-
-// Reconnect to an in-progress session stream
-app.get('/api/code-agent/sessions/:id/stream', auth, async (req, res) => {
-  if (!codeAgentUp()) return res.status(503).json({ error: 'code agent not configured' });
-  const ac = new AbortController();
-  res.on('close', () => { if (!res.writableFinished) ac.abort(); });
-  try {
-    const upstream = await fetch(`${CODE_AGENT_URL}/api/sessions/${req.params.id}/stream`, {
-      headers: { Authorization: `Bearer ${CODE_AGENT_TOKEN}` },
-      signal: ac.signal
-    });
-    if (!upstream.ok) return res.status(upstream.status).json(await upstream.json().catch(() => ({})));
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    upstream.body.on('data', chunk => res.write(chunk));
-    upstream.body.on('end', () => res.end());
-    upstream.body.on('error', () => res.end());
-  } catch (e) {
-    if (e.name !== 'AbortError') res.status(502).json({ error: String(e.message || e) });
-  }
-});
-
-// Resume a past conversation
-app.post('/api/code-agent/sessions/resume', auth, async (req, res) => {
-  try {
-    const r = await codeAgentReq('/api/sessions/resume', { method: 'POST', body: JSON.stringify(req.body || {}) });
-    res.status(r.status).json(await r.json());
-  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
-});
-
-// Message endpoint: stream SSE from loq through to our client.
-app.post('/api/code-agent/sessions/:id/messages', auth, async (req, res) => {
-  if (!codeAgentUp()) return res.status(503).json({ error: 'code agent not configured' });
-  const ac = new AbortController();
-  res.on('close', () => { if (!res.writableFinished) ac.abort(); });
-  try {
-    const upstream = await fetch(`${CODE_AGENT_URL}/api/sessions/${req.params.id}/messages`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${CODE_AGENT_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body || {}),
-      signal: ac.signal
-    });
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    upstream.body.on('data', chunk => res.write(chunk));
-    upstream.body.on('end', () => res.end());
-    upstream.body.on('error', () => res.end());
-  } catch (e) {
-    if (e.name !== 'AbortError') res.status(502).json({ error: String(e.message || e) });
-  }
-});
 
 app.listen(PORT, '0.0.0.0', () => console.log(`dashboard listening on :${PORT}`));

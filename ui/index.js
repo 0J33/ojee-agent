@@ -47,13 +47,6 @@ const fmtTime = (ts) => {
     ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 };
-const fmtDur = (ms) => {
-  if (ms == null) return '';
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  const s = Math.round(ms / 1000);
-  return `${Math.floor(s / 60)}m${s % 60}s`;
-};
 const fmtBytes = (b) => {
   if (!b) return '0 B';
   if (b < 1024) return b + ' B';
@@ -76,7 +69,6 @@ let ctx = null;
 let root = null;
 let pollTimer = null;
 let keyHandler = null;
-let visHandler = null;
 
 /** Mirrors the old api(): null on 401/404 or a non-JSON body, never throws. */
 const api = async (path, opts = {}) => {
@@ -87,79 +79,11 @@ const api = async (path, opts = {}) => {
   }
 };
 
-// ─── Markdown (sanitized) ──────────────────────────────────────────────
-const escapeHtml = (s) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-function renderMarkdown(text) {
-  if (!text) return '';
-  const T_OPEN = '<' + 'thinking>', T_CLOSE = '</' + 'thinking>';
-  text = text.split(new RegExp(T_OPEN + '[\\s\\S]*?' + T_CLOSE, 'gi')).join('');
-  const oi = text.toLowerCase().indexOf(T_OPEN);
-  if (oi !== -1) text = text.slice(0, oi);
-  const ci = text.toLowerCase().indexOf(T_CLOSE);
-  if (ci !== -1) text = text.slice(ci + T_CLOSE.length);
-  text = text.trim();
-  if (!text) return '';
-  const blocks = [];
-  let src = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    blocks.push({ lang, code: code.replace(/\n$/, '') });
-    return `\u0000CODEBLOCK${blocks.length - 1}\u0000`;
-  });
-  src = escapeHtml(src);
-  src = src.replace(/`([^`\n]+)`/g, '<code class="md-ic">$1</code>');
-  src = src.replace(/^######\s+(.+)$/gm, '<h6>$1</h6>')
-           .replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>')
-           .replace(/^####\s+(.+)$/gm, '<h4>$1</h4>')
-           .replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
-           .replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
-           .replace(/^#\s+(.+)$/gm, '<h1>$1</h1>');
-  src = src.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-           .replace(/(^|\s)\*([^*\n]+)\*/g, '$1<em>$2</em>')
-           .replace(/(^|\s)_([^_\n]+)_/g, '$1<em>$2</em>');
-  src = src.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, t, u) => {
-    const safe = /^(https?:|mailto:|\/)/.test(u) ? u : '#';
-    return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${t}</a>`;
-  });
-  src = src.replace(/(?:^[ \t]*[-*]\s+.+(?:\n|$))+/gm, block => {
-    const items = block.trim().split(/\n/).map(l => `<li>${l.replace(/^[ \t]*[-*]\s+/, '')}</li>`).join('');
-    return `<ul class="md-ul">${items}</ul>`;
-  });
-  src = src.replace(/(?:^[ \t]*\d+\.\s+.+(?:\n|$))+/gm, block => {
-    const items = block.trim().split(/\n/).map(l => `<li>${l.replace(/^[ \t]*\d+\.\s+/, '')}</li>`).join('');
-    return `<ol class="md-ol">${items}</ol>`;
-  });
-  src = src.replace(/(?:^&gt;\s+.+(?:\n|$))+/gm, block => {
-    const body = block.trim().split(/\n/).map(l => l.replace(/^&gt;\s+/, '')).join('<br>');
-    return `<blockquote class="md-bq">${body}</blockquote>`;
-  });
-  // GitHub-flavored tables: header row, separator (| --- | --- |), data rows
-  src = src.replace(/^\|(.+)\|\s*\n\|([-:\s|]+)\|\s*\n((?:\|.*\|\s*\n?)+)/gm, (_, hdr, sep, body) => {
-    const cells = (row) => row.split('|').slice(1, -1).map(c => c.trim());
-    const aligns = sep.split('|').slice(1, -1).map(s => {
-      const t = s.trim();
-      if (t.startsWith(':') && t.endsWith(':')) return 'center';
-      if (t.endsWith(':')) return 'right';
-      if (t.startsWith(':')) return 'left';
-      return '';
-    });
-    const inlineFmt = (s) => s; // already through escapeHtml + inline replacements
-    const th = cells(hdr).map((c, i) => `<th${aligns[i] ? ` style="text-align:${aligns[i]}"` : ''}>${inlineFmt(c)}</th>`).join('');
-    const trs = body.trim().split(/\n/).map(row => {
-      const tds = cells(row).map((c, i) => `<td${aligns[i] ? ` style="text-align:${aligns[i]}"` : ''}>${inlineFmt(c)}</td>`).join('');
-      return `<tr>${tds}</tr>`;
-    }).join('');
-    return `<table class="md-table"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
-  });
-  src = src.split(/\n{2,}/).map(p => {
-    if (/^<(h\d|ul|ol|pre|blockquote|table|p)/.test(p.trim())) return p;
-    return `<p>${p.trim().replace(/\n/g, '<br>')}</p>`;
-  }).join('');
-  src = src.replace(/\u0000CODEBLOCK(\d+)\u0000/g, (_, i) => {
-    const b = blocks[+i];
-    const langAttr = b.lang ? ` data-lang="${escapeHtml(b.lang)}"` : '';
-    return `<pre class="md-code"${langAttr}><code>${escapeHtml(b.code)}</code></pre>`;
-  });
-  return src;
-}
+/* Interpolated into html: strings below. It lived in the markdown renderer
+   the code panel needed; it outlives it because every readout that builds
+   markup from a server-supplied name still has to escape it. */
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // ─── Icons ─────────────────────────────────────────────────────────────
 const brandIcon = (cls) => {
@@ -239,46 +163,9 @@ let state = {
   history: { cpu: [], ram: [], swap: [], net_in: [], net_out: [], disk_read: [], disk_write: [] },
   actionMsg: '',
   toasts: [],
-  codeAgent: {
-    enabled: false, checked: false,
-    sessions: [], active: null, messages: [],
-    busy: false, status: null, startTs: null,
-    pickerOpen: false,
-    pickerPath: '/home/ojee',
-    pickerEntries: [], pickerParent: null,
-    historyOpen: false, historyList: [],
-    historyView: null, historyMessages: [], historyShowTools: false, historyCwd: null,
-  },
 };
 
 // ─── Persistence ───────────────────────────────────────────────────────
-
-const persistCode = () => {
-  try {
-    localStorage.setItem('code_state', JSON.stringify({
-      active: state.codeAgent.active,
-      messages: state.codeAgent.messages,
-      busy: state.codeAgent.busy,
-      startTs: state.codeAgent.startTs || null,
-    }));
-  } catch {}
-};
-const restoreCode = () => {
-  try {
-    const s = JSON.parse(localStorage.getItem('code_state'));
-    if (s && s.active) {
-      state.codeAgent.active = s.active;
-      state.codeAgent.messages = s.messages || [];
-      if (s.busy) {
-        state.codeAgent.busy = true;
-        state.codeAgent.startTs = s.startTs || null;
-        state.codeAgent.status = 'reconnecting';
-      }
-    }
-  } catch {}
-  const defCwd = localStorage.getItem('code_default_cwd');
-  if (defCwd) state.codeAgent.pickerPath = defCwd;
-};
 
 // Navigation goes through the shell so the nav highlight stays in sync.
 const setMobileView = (v) => {
@@ -402,14 +289,21 @@ const sparkSvg2 = (vals1, vals2, color1 = 'var(--accent)', color2 = 'var(--accen
     <path d="M${make(vals2)}" stroke="${color2}" stroke-width="1.5" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
   </svg>`;
 };
-const sparklineCard2 = (label, val1, val2, lbl1, lbl2, vals1, vals2, c1 = 'var(--accent)', c2 = 'var(--accent-dark)') =>
-  el('div', { class: 'sparkline-card', html: `
-    <div class="sparkline-card-head"><span>${escapeHtml(label)}</span><span class="sparkline-card-val">${escapeHtml(val1)} / ${escapeHtml(val2)}</span></div>
+/* Disk I/O and Network. `.panel` + `.label` + `.value` + `.meta`: the same
+ * four parts as a stat tile, so a chart reads as a readout that happens to
+ * have a graph rather than as a different kind of box. It was `.sparkline-card`
+ * with `.sparkline-card-head` / `.sparkline-card-val` / `.spark-legend`, a
+ * private set that matched nothing else. */
+const sparklineCard2 = (label, val1, val2, lbl1, lbl2, vals1, vals2,
+                        c1 = 'var(--accent)', c2 = 'var(--accent-dark)') =>
+  el('div', { class: 'panel ag-chart', html: `
+    <span class="label">${escapeHtml(label)}</span>
+    <span class="value">${escapeHtml(val1)}<span class="ag-chart-sep">/</span>${escapeHtml(val2)}</span>
     ${sparkSvg2(vals1, vals2, c1, c2)}
-    <div class="spark-legend">
-      <span><span class="dot" style="background:${c1}"></span>${escapeHtml(lbl1)}</span>
-      <span><span class="dot" style="background:${c2}"></span>${escapeHtml(lbl2)}</span>
-    </div>
+    <span class="meta">
+      <span class="dot" style="background:${c1}"></span>${escapeHtml(lbl1)}
+      <span class="dot" style="background:${c2}"></span>${escapeHtml(lbl2)}
+    </span>
   ` });
 
 // ─── Panels ────────────────────────────────────────────────────────────
@@ -464,7 +358,7 @@ const panelSystem = () => {
     s.home ? gauge('Disk /home', s.home.percent, `${fmtBytes(s.home.used)} / ${fmtBytes(s.home.total)}`) : null,
   );
 
-  const sparks = el('div', { class: 'sparkline-row' },
+  const sparks = el('div', { class: 'tiles' },
     sparklineCard2('Disk I/O',
       `↓${fmtBytes(s.disk?.read_per_s || 0)}/s`, `↑${fmtBytes(s.disk?.write_per_s || 0)}/s`,
       'read', 'write',
@@ -494,7 +388,7 @@ const panelServices = () => {
     // in three places. Agent had `.skeleton.skeleton-row`, a private one.
     return el('div', { class: 'stack-lg', 'data-panel': 'services' },
       section('B / SERVICES', 'Services'),
-      el('div', { class: 'svc-list' },
+      el('div', { class: 'panel' },
         el('div', { class: 'skel' }), el('div', { class: 'skel' }), el('div', { class: 'skel' })),
     );
   }
@@ -506,22 +400,18 @@ const panelServices = () => {
         <span>The agent could not read the container list.</span>` }),
     );
   }
-  // A service row states what it is, whether it is up, and for how long —
-  // the same three-part shape as a home device row, using `.dot` and `.meta`
-  // rather than `.svc-dot` and `.svc-meta`.
+  // One panel, rows inside — the same shape as Quick links and as home's
+  // activity log. Each row was its own bordered panel before, which is a
+  // shape nothing else in the console uses for a list.
   return el('div', { class: 'stack-lg', 'data-panel': 'services' },
     section('B / SERVICES', 'Services',
       el('span', { class: 'meta' }, `${rows.filter(([, x]) => x.active).length}/${rows.length} up`)),
-    el('div', { class: 'svc-list' },
-      ...rows.map(([name, x]) =>
-        el('div', { class: 'panel svc-card' },
-          el('span', { class: `dot ${x.active ? 'dot--ok' : ''}` }),
-          el('div', { class: 'svc-info' },
-            el('div', { class: 'svc-name' }, x.desc || name),
-            el('div', { class: 'meta' }, x.status || (x.active ? 'Running' : 'Stopped')),
-          ),
-        ),
-      ),
+    el('div', { class: 'panel' },
+      ...rows.map(([name, x]) => row(
+        el('span', { class: `dot ${x.active ? 'dot--ok' : ''}` }),
+        x.desc || name,
+        x.status || (x.active ? 'Running' : 'Stopped'),
+      )),
     ),
   );
 };
@@ -536,6 +426,47 @@ const doAction = async (action, label) => {
   else toast(`${label || action}: ${d?.stderr || d?.error || 'failed'}`, 'danger', 6000);
 };
 
+/* A row in a list. Home renders lists as ONE `.panel` containing rows
+ * separated by a hairline — the activity log is exactly this — not as a
+ * panel per row. `.logline` is that row, so links, services and anything
+ * else that lists share one shape. */
+const row = (icon, name, sub, opts = {}) => el(opts.href ? 'a' : 'div', {
+  class: 'logline ag-row' + (opts.href || opts.onclick ? ' ag-row--go' : ''),
+  ...(opts.href ? { href: opts.href, target: '_blank', rel: 'noreferrer' } : {}),
+  ...(opts.onclick ? { onclick: opts.onclick, style: 'cursor:pointer' } : {}),
+},
+  icon ? el('span', { class: 'ag-row-ic' }, icon) : null,
+  el('span', { class: 'ag-row-body' },
+    el('span', { class: 'ag-row-name' }, name),
+    sub ? el('span', { class: 'meta' }, sub) : null,
+  ),
+  opts.trail || null,
+);
+
+const quickLinks = () => {
+  const c = state.config;
+  const items = [
+    c.n8nDomain && row(ico('reload', 16), 'n8n', 'Workflow automation',
+      { href: `https://${c.n8nDomain}`, trail: ico('arrow', 16) }),
+    c.odysseusDomain && row(ico('cpu', 16), 'Odysseus', 'Self-hosted AI workspace',
+      { href: `https://${c.odysseusDomain}`, trail: ico('arrow', 16) }),
+    c.loqSftpUrl && row(ico('net', 16), 'Loq files (SFTP)', `Tap to copy ${c.loqSftpUrl}`, {
+      trail: ico('copy', 16),
+      onclick: async (e) => {
+        e.preventDefault();
+        try { await navigator.clipboard.writeText(c.loqSftpUrl); toast('SFTP URL copied', 'success'); }
+        catch { toast(c.loqSftpUrl, 'info', 8000); }
+      },
+    }),
+  ].filter(Boolean);
+  if (!items.length) return null;
+  return el('div', {},
+    el('div', { class: 'section-head' },
+      el('span', { class: 'idx' }, 'C.1'), el('h3', { class: 'h2' }, 'Quick links')),
+    el('div', { class: 'panel' }, ...items),
+  );
+};
+
 const panelActions = () => el('div', { class: 'stack-lg', 'data-panel': 'actions' },
   section('C / ACTIONS', 'Actions'),
   el('div', { class: 'btn-row' },
@@ -546,566 +477,8 @@ const panelActions = () => el('div', { class: 'stack-lg', 'data-panel': 'actions
     el('button', { class: 'btn btn--ghost', onclick: () => doAction('compose-up', 'Compose Up') }, ico('power'), ' Up'),
     el('button', { class: 'btn btn--danger', onclick: () => { if (confirm('Bring stack down?')) doAction('compose-down', 'Compose Down'); } }, ico('power'), ' Down'),
   ),
-  el('div', { class: 'panel-section' }, 'Quick links'),
-  state.config.n8nDomain ? el('a', { class: 'link-card', href: `https://${state.config.n8nDomain}`, target: '_blank' },
-    el('div', { class: 'link-card-title' },
-      el('span', {}, 'n8n'),
-      el('span', { class: 'link-card-sub' }, 'Workflow automation'),
-    ),
-    ico('arrow', 16),
-  ) : null,
-  state.config.odysseusDomain ? el('a', { class: 'link-card', href: `https://${state.config.odysseusDomain}`, target: '_blank' },
-    el('div', { class: 'link-card-title' },
-      el('span', {}, 'Odysseus'),
-      el('span', { class: 'link-card-sub' }, 'Self-hosted AI workspace'),
-    ),
-    ico('arrow', 16),
-  ) : null,
-  state.config.loqSftpUrl ? el('div', { class: 'link-card', onclick: async (e) => {
-    e.preventDefault();
-    try { await navigator.clipboard.writeText(state.config.loqSftpUrl); toast('SFTP URL copied', 'success'); }
-    catch { toast(state.config.loqSftpUrl, 'info', 8000); }
-  }, style: 'cursor:pointer' },
-    el('div', { class: 'link-card-title' },
-      el('span', {}, 'Loq files (SFTP)'),
-      el('span', { class: 'link-card-sub' }, 'Tap to copy ' + state.config.loqSftpUrl),
-    ),
-    ico('copy', 16),
-  ) : null,
+  quickLinks(),
 );
-
-// ─── Chat message rendering ────────────────────────────────────────────
-const typingDots = () => el('span', { class: 'typing-dots' }, el('span'), el('span'), el('span'));
-const chip = (kind, label, iconName) => el('span', { class: `chat-chip chip-${kind}`, title: label },
-  ico(iconName, 12), el('span', {}, label));
-
-const renderChatMsg = (m, opts = {}) => {
-  const { isLast = false, busy = false, busyStatus = null, busyStart = null } = opts;
-  const streaming = isLast && m.role === 'assistant' && busy;
-
-  const body = el('div', { class: 'md-body' });
-  if (streaming && !m.content && !m.text) {
-    body.appendChild(typingDots());
-  } else if (m.role === 'assistant') {
-    const txt = m.content || m.text || '';
-    body.innerHTML = renderMarkdown(txt) || (streaming ? '' : '<em class="muted">(empty)</em>');
-    if (streaming) body.appendChild(el('span', { class: 'typing-cursor' }, '▍'));
-  } else {
-    body.textContent = m.content || m.text || '';
-  }
-
-  if (m.role === 'tool_use') {
-    const inputStr = typeof m.input === 'object' ? JSON.stringify(m.input).slice(0, 120) : String(m.input || '').slice(0, 120);
-    return el('div', { class: 'ca-tool' }, ico('tools', 12), el('span', {}, `${m.tool}(${inputStr})`));
-  }
-
-  if (m.role === 'user') {
-    return el('div', { class: 'chat-msg chat-user' },
-      el('div', { class: 'chat-label-row' },
-        el('div', { class: 'chat-label' }, 'You'),
-        m.ts ? el('span', { class: 'chat-time' }, fmtTime(m.ts)) : null,
-      ),
-      body,
-    );
-  }
-
-  // Assistant message
-  const model = m.model || null;
-  const tools = m.tools || [];
-  const filesChanged = m.files_changed || [];
-  const statusText = streaming
-    ? (busyStatus && busyStatus !== 'typing' && busyStatus !== 'reconnecting' ? busyStatus : ((m.content || m.text) ? 'typing' : 'thinking'))
-    : null;
-
-  const elapsed = streaming && busyStart ? Date.now() - busyStart : m.elapsed_ms;
-  const timeStr = m.ts && !streaming ? fmtTime(m.ts) : '';
-  const durStr = elapsed != null ? fmtDur(elapsed) : '';
-  const timeDisplay = (timeStr ? timeStr : '') + (durStr ? (timeStr ? ' · ' : '') + durStr : '');
-
-  const chipRow = el('div', { class: 'chat-chips' },
-    model ? chip('model', model, 'model') : null,
-    ...tools.map(t => chip('tool', toolLabel(t), toolIcon(t))),
-    ...filesChanged.map(f => chip('tool', f, 'file')),
-    statusText ? chip('status', statusText + '…', 'spinner') : null,
-    timeDisplay
-      ? el('span', {
-          class: 'chat-time' + (streaming ? ' live-timer' : ''),
-          'data-start': streaming && busyStart ? String(busyStart) : '',
-          'data-prefix': streaming && timeStr ? timeStr : '',
-        }, timeDisplay)
-      : null,
-  );
-
-  return el('div', { class: 'chat-msg chat-assistant' }, chipRow, body);
-};
-
-// ─── Chat panel (unified Ollama + Code) ───────────────────────────────
-
-// ─── Code Agent (Claude Code) ──────────────────────────────────────────
-const caLoadDir = async (p) => {
-  const data = await api('/api/code-agent/dirs' + (p ? '?path=' + encodeURIComponent(p) : ''));
-  if (data) {
-    state.codeAgent.pickerPath = data.path;
-    state.codeAgent.pickerParent = data.parent;
-    state.codeAgent.pickerEntries = data.entries || [];
-  }
-  render();
-};
-const caRefreshSessions = async () => {
-  const data = await api('/api/code-agent/sessions');
-  if (data) state.codeAgent.sessions = data.active || [];
-  render();
-};
-const caOpenSessionAt = async (cwd) => {
-  if (!cwd) return;
-  const d = await api('/api/code-agent/sessions', { method: 'POST', body: JSON.stringify({ cwd }) });
-  if (d?.id) {
-    state.codeAgent.active = d.id;
-    state.codeAgent.messages = [];
-    state.codeAgent.pickerOpen = false;
-    localStorage.setItem('code_default_cwd', cwd);
-    persistCode();
-    await caRefreshSessions();
-  }
-};
-const caOpenHere = () => caOpenSessionAt(state.codeAgent.pickerPath);
-const caNewDefault = () => {
-  const def = localStorage.getItem('code_default_cwd');
-  if (def) caOpenSessionAt(def);
-  else { state.codeAgent.pickerOpen = true; render(); caLoadDir(state.codeAgent.pickerPath); }
-};
-const caSelect = async (id) => {
-  state.codeAgent.active = id;
-  state.codeAgent.messages = [];
-  persistCode(); render();
-  const h = await api(`/api/code-agent/sessions/${id}/history`);
-  if (h?.messages) state.codeAgent.messages = h.messages;
-  persistCode(); render();
-};
-const caRename = async (id, e) => {
-  e?.stopPropagation();
-  const s = state.codeAgent.sessions.find(x => x.id === id);
-  const t = prompt('Rename session:', s?.title || '');
-  if (!t || t === s?.title) return;
-  const r = await api(`/api/code-agent/sessions/${id}`, { method: 'PATCH', body: JSON.stringify({ title: t }) });
-  if (r && !r.error) await caRefreshSessions();
-};
-// Archive: ends the running session.  The conversation transcript lives in
-// Claude's projects dir on disk, so it stays browsable from the History
-// button — "Archive" is the natural label for that, not "Close" or "Delete".
-const caClose = async (id, e) => {
-  e?.stopPropagation();
-  await api(`/api/code-agent/sessions/${id}`, { method: 'DELETE' });
-  if (state.codeAgent.active === id) {
-    state.codeAgent.active = null; state.codeAgent.messages = [];
-    state.codeAgent.busy = false; persistCode();
-  }
-  toast('Moved to history', 'success');
-  await caRefreshSessions();
-};
-
-const caReconnect = async (id) => {
-  // Snapshot: if reconnect produces nothing, restore what we had.
-  const snapshot = state.codeAgent.messages.map(m => ({ ...m }));
-  try {
-    const r = await fetch(`/api/code-agent/sessions/${id}/stream`, { headers: headers() });
-    if (!r.ok) {
-      state.codeAgent.busy = false; state.codeAgent.status = null; state.codeAgent.startTs = null;
-      const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
-      if (last && last.role === 'assistant') {
-        if (last.text) last.text = last.text.replace(/\n?\n?Error: .+$/, '').trim();
-        if (!last.text) last.text = '*(session ended while disconnected)*';
-      }
-      persistCode(); render(); return;
-    }
-    const lastUserIdx = state.codeAgent.messages.reduce((a, m, i) => m.role === 'user' ? i : a, -1);
-    if (lastUserIdx >= 0) state.codeAgent.messages.splice(lastUserIdx + 1);
-    render();
-    const reader = r.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    let gotAny = false;
-    const ensureLast = () => {
-      const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
-      if (!last || last.role !== 'assistant') {
-        state.codeAgent.messages.push({ role: 'assistant', text: '', ts: Date.now(), elapsed_ms: null });
-      }
-    };
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() || '';
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const p = line.slice(6);
-        if (p === '[DONE]') continue;
-        try {
-          const e = JSON.parse(p);
-          gotAny = true;
-          let isTextChunk = false;
-          if (e.type === 'text') { ensureLast(); state.codeAgent.messages[state.codeAgent.messages.length - 1].text += e.text; state.codeAgent.status = 'typing'; isTextChunk = true; }
-          else if (e.type === 'tool_use') {
-            state.codeAgent.messages.push({ role: 'tool_use', tool: e.tool, input: e.input, ts: Date.now() });
-            state.codeAgent.messages.push({ role: 'assistant', text: '', ts: Date.now(), elapsed_ms: null });
-            state.codeAgent.status = `running ${e.tool}`;
-          }
-          else if (e.type === 'tool_result') state.codeAgent.status = 'thinking';
-          else if (e.type === 'result') state.codeAgent.status = e.is_error ? 'error' : null;
-          persistCode();
-          if (isTextChunk) updateStreamingMessage(); else render();
-        } catch {}
-      }
-    }
-    // If we got NOTHING from the stream and our local state is empty/shorter, restore snapshot
-    if (!gotAny && snapshot.length > state.codeAgent.messages.length) {
-      state.codeAgent.messages = snapshot;
-    }
-  } catch {}
-  while (state.codeAgent.messages.length && state.codeAgent.messages[state.codeAgent.messages.length - 1].role === 'assistant' && !state.codeAgent.messages[state.codeAgent.messages.length - 1].text) {
-    state.codeAgent.messages.pop();
-  }
-  for (let i = state.codeAgent.messages.length - 1; i >= 0; i--) {
-    const m = state.codeAgent.messages[i];
-    if (m.role === 'assistant' && m.ts && m.elapsed_ms == null) { m.elapsed_ms = Date.now() - m.ts; break; }
-  }
-  state.codeAgent.busy = false; state.codeAgent.status = null; state.codeAgent.startTs = null;
-  persistCode(); render();
-};
-
-const caSend = async (text) => {
-  if (!state.codeAgent.active || !text.trim()) return;
-  const now = Date.now();
-  state.codeAgent.messages.push({ role: 'user', text, ts: now });
-  state.codeAgent.messages.push({ role: 'assistant', text: '', ts: now, elapsed_ms: null });
-  state.codeAgent.busy = true; state.codeAgent.status = 'thinking'; state.codeAgent.startTs = now;
-  persistCode(); render();
-  try {
-    const r = await fetch(`/api/code-agent/sessions/${state.codeAgent.active}/messages`, {
-      method: 'POST',
-      headers: { ...headers(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: text }),
-    });
-    const reader = r.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    let gotDone = false;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() || '';
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const p = line.slice(6);
-        if (p === '[DONE]') { gotDone = true; continue; }
-        try {
-          const e = JSON.parse(p);
-          const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
-          if (e.type === 'text') { last.text += e.text; state.codeAgent.status = 'typing'; persistCode(); updateStreamingMessage(); }
-          else if (e.type === 'tool_use') {
-            state.codeAgent.messages.push({ role: 'tool_use', tool: e.tool, input: e.input, ts: Date.now() });
-            state.codeAgent.messages.push({ role: 'assistant', text: '', ts: Date.now(), elapsed_ms: null });
-            state.codeAgent.status = `running ${e.tool}`; persistCode(); render();
-          }
-          else if (e.type === 'tool_result') { state.codeAgent.status = 'thinking'; render(); }
-          else if (e.type === 'result') { state.codeAgent.status = e.is_error ? 'error' : null; }
-        } catch {}
-      }
-    }
-    // Stream ended without [DONE] — connection dropped but the session
-    // may still be producing output.  Reconnect and replay.
-    if (!gotDone && state.codeAgent.active && state.codeAgent.busy) {
-      state.codeAgent.status = 'reconnecting'; persistCode(); render();
-      caReconnect(state.codeAgent.active);
-      return;
-    }
-  } catch (e) {
-    if (e.name === 'AbortError') {}
-    else if (state.codeAgent.active) {
-      state.codeAgent.status = 'reconnecting'; persistCode(); render();
-      caReconnect(state.codeAgent.active); return;
-    } else {
-      const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
-      if (last) last.text = (last.text || '') + `\n\nError: ${e.message}`;
-    }
-  }
-  while (state.codeAgent.messages.length && state.codeAgent.messages[state.codeAgent.messages.length - 1].role === 'assistant' && !state.codeAgent.messages[state.codeAgent.messages.length - 1].text) {
-    state.codeAgent.messages.pop();
-  }
-  for (let i = state.codeAgent.messages.length - 1; i >= 0; i--) {
-    const m = state.codeAgent.messages[i];
-    if (m.role === 'assistant' && m.ts && m.elapsed_ms == null) { m.elapsed_ms = Date.now() - m.ts; break; }
-  }
-  state.codeAgent.busy = false; state.codeAgent.status = null; state.codeAgent.startTs = null;
-  persistCode(); render();
-};
-
-// History browser
-const caLoadHistory = async () => {
-  state.codeAgent.historyOpen = true;
-  state.codeAgent.historyView = null;
-  state.codeAgent.historyMessages = [];
-  render();
-  const data = await api('/api/code-agent/history');
-  state.codeAgent.historyList = data?.conversations || [];
-  render();
-};
-const caViewHistory = async (conv) => {
-  state.codeAgent.historyView = conv;
-  state.codeAgent.historyMessages = [];
-  state.codeAgent.historyCwd = null;
-  render();
-  const data = await api(`/api/code-agent/history/${encodeURIComponent(conv.project)}/${encodeURIComponent(conv.id)}`);
-  state.codeAgent.historyMessages = data?.messages || [];
-  state.codeAgent.historyCwd = data?.cwd || null;
-  render();
-};
-const caContinue = async () => {
-  const conv = state.codeAgent.historyView;
-  const cwd = state.codeAgent.historyCwd;
-  if (!conv || !cwd) { toast('Original directory not found', 'warn'); return; }
-  const r = await api('/api/code-agent/sessions/resume', {
-    method: 'POST',
-    body: JSON.stringify({ id: conv.id, cwd, title: conv.title.slice(0, 60) }),
-  });
-  if (!r || r.error) { toast('Resume failed: ' + (r?.error || 'unknown'), 'danger'); return; }
-  state.codeAgent.active = r.id;
-  state.codeAgent.messages = state.codeAgent.historyMessages.slice();
-  state.codeAgent.historyOpen = false;
-  state.codeAgent.historyView = null;
-  state.codeAgent.historyMessages = [];
-  persistCode();
-  await caRefreshSessions();
-};
-const caRenameHistory = async (conv, e) => {
-  e?.stopPropagation();
-  const t = prompt('Rename:', conv.title || '');
-  if (!t || t === conv.title) return;
-  const r = await api(`/api/code-agent/history/${encodeURIComponent(conv.project)}/${encodeURIComponent(conv.id)}`, {
-    method: 'PATCH', body: JSON.stringify({ title: t }),
-  });
-  if (r?.ok) {
-    conv.title = r.title || t;
-    render();
-  } else toast('Rename failed', 'danger');
-};
-const caDeleteHistory = async (conv, e) => {
-  e?.stopPropagation();
-  if (!confirm(`Delete "${conv.title.slice(0, 60)}${conv.title.length > 60 ? '…' : ''}"?`)) return;
-  const r = await api(`/api/code-agent/history/${encodeURIComponent(conv.project)}/${encodeURIComponent(conv.id)}`, { method: 'DELETE' });
-  if (r?.ok) {
-    state.codeAgent.historyList = state.codeAgent.historyList.filter(c => !(c.project === conv.project && c.id === conv.id));
-    if (state.codeAgent.historyView?.id === conv.id) {
-      state.codeAgent.historyView = null;
-      state.codeAgent.historyMessages = [];
-    }
-    render();
-  }
-};
-
-// Code chat panel (mode = "code")
-const panelChatCode = () => {
-  const ca = state.codeAgent;
-  const activeSession = ca.sessions.find(s => s.id === ca.active);
-
-  // Directory picker
-  if (ca.pickerOpen) {
-    const rows = [];
-    if (ca.pickerParent && ca.pickerParent !== ca.pickerPath) {
-      rows.push(el('div', { class: 'ca-dir-row', onclick: () => caLoadDir(ca.pickerParent) }, ico('arrow_left', 14), el('span', {}, 'Up a level')));
-    }
-    for (const e of ca.pickerEntries.filter(x => x.type === 'dir')) {
-      rows.push(el('div', { class: 'ca-dir-row', onclick: () => caLoadDir(e.path) }, ico('folder', 14), el('span', {}, e.name)));
-    }
-    return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
-      el('div', { class: 'panel-head' }, el('span', {}, 'Open Code In…')),
-      el('div', { class: 'ca-path' }, ca.pickerPath),
-      el('div', { class: 'ca-dir-list' }, ...rows),
-      el('div', { class: 'btn-row' },
-        el('button', { class: 'btn btn--ghost btn--sm', onclick: () => { ca.pickerOpen = false; render(); } }, 'Cancel'),
-        el('button', { class: 'btn btn--sm', onclick: caOpenHere }, 'Open here'),
-      ),
-    );
-  }
-
-  // History browser
-  if (ca.historyOpen) {
-    if (ca.historyView) {
-      const grouped = [];
-      let toolCount = 0;
-      for (const m of ca.historyMessages) {
-        if (m.role === 'tool_use') { toolCount++; if (!ca.historyShowTools) continue; grouped.push(m); continue; }
-        const last = grouped[grouped.length - 1];
-        if (last && last.role === m.role && (last.role === 'user' || last.role === 'assistant')) {
-          last.text = (last.text || '') + '\n\n' + (m.text || '');
-        } else grouped.push({ ...m });
-      }
-      const msgs = grouped.map(m => renderChatMsg(m));
-      return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
-        el('div', { class: 'panel-head' }, el('span', {}, 'History')),
-        el('div', { class: 'btn-row' },
-          el('button', { class: 'btn btn--ghost btn--sm', onclick: () => { ca.historyView = null; ca.historyMessages = []; ca.historyCwd = null; render(); } }, ico('arrow_left', 14), ' Back'),
-          toolCount > 0 ? el('button', { class: 'btn btn--ghost btn--sm', onclick: () => { ca.historyShowTools = !ca.historyShowTools; render(); } },
-            ca.historyShowTools ? `Hide tools (${toolCount})` : `Show tools (${toolCount})`) : null,
-          ca.historyCwd ? el('button', { class: 'btn btn--sm', onclick: caContinue }, 'Continue ', ico('arrow', 14)) : null,
-        ),
-        el('div', { class: 'ca-hist-title' }, ca.historyView.title),
-        el('div', { class: 'ca-hist-meta' }, `${ca.historyView.project} · ${ca.historyView.messageCount} events${ca.historyCwd ? ' · ' + ca.historyCwd : ''}`),
-        el('div', { class: 'chat-wrap' }, el('div', { class: 'chat-log' }, ...msgs)),
-      );
-    }
-    return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
-      el('div', { class: 'panel-head' }, el('span', {}, 'History')),
-      el('button', { class: 'btn btn--ghost btn--sm', onclick: () => { ca.historyOpen = false; render(); } }, ico('arrow_left', 14), ' Back'),
-      ca.historyList.length === 0
-        ? el('div', { class: 'muted', style: 'padding:20px;text-align:center;font-size:0.78rem' }, 'no past conversations')
-        : el('div', { class: 'ca-hist-list' },
-            ...ca.historyList.map(conv =>
-              el('div', { class: 'saved-item', onclick: () => caViewHistory(conv) },
-                el('div', { class: 'ca-hist-row' },
-                  el('div', { class: 'saved-title' }, conv.title),
-                  el('div', { class: 'saved-actions' },
-                    el('button', { class: 'btn btn--ghost btn--icon', onclick: (e) => caRenameHistory(conv, e), title: 'Rename' }, ico('pencil', 12)),
-                    el('button', { class: 'btn btn--ghost btn--icon btn--danger', onclick: (e) => caDeleteHistory(conv, e), title: 'Delete' }, ico('trash', 12)),
-                  ),
-                ),
-                el('div', { class: 'ca-hist-meta-row' },
-                  el('span', { class: 'ca-hist-date' }, fmtTime(conv.modified)),
-                  conv.messageCount ? el('span', { class: 'ca-hist-count' }, `${conv.messageCount} msgs`) : null,
-                ),
-              ),
-            ),
-          ),
-    );
-  }
-
-  // Build session message log
-  const log = el('div', { class: 'chat-log' });
-  if (!activeSession) {
-    log.appendChild(el('div', { class: 'chat-empty' },
-      ico('code', 28),
-      el('div', {}, ca.sessions.length ? 'Pick a session above' : 'Open a folder to start'),
-    ));
-  } else {
-    const lastIdx = ca.messages.length - 1;
-    ca.messages.forEach((m, i) => {
-      // Skip empty assistant placeholders left over from a tool turn that
-      // produced no text — they show up as "(empty)" otherwise.  The streaming
-      // placeholder (last + busy) stays because it renders the typing dots.
-      const isLast = i === lastIdx;
-      const empty = m.role === 'assistant' && !(m.text || m.content);
-      if (empty && !(isLast && ca.busy)) return;
-      log.appendChild(renderChatMsg(m, {
-        isLast, busy: ca.busy, busyStatus: ca.status, busyStart: ca.startTs,
-      }));
-    });
-  }
-
-  const input = el('textarea', { class: 'chat-input', rows: '1',
-    placeholder: activeSession ? 'Message Claude…' : 'Pick a session' });
-  input.value = localStorage.getItem('draft_code') || '';
-  const sendCode = () => {
-    const v = input.value.trim();
-    if (!v) return;
-    input.value = ''; localStorage.removeItem('draft_code');
-    caSend(v);
-  };
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCode(); }
-  });
-  input.addEventListener('input', () => {
-    localStorage.setItem('draft_code', input.value);
-    input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
-  });
-
-  const sessionTabs = ca.sessions.length
-    ? el('div', { class: 'ca-sess-list' },
-        ...ca.sessions.map(s =>
-          el('div', { class: 'ca-sess' + (s.id === ca.active ? ' active' : ''), onclick: () => caSelect(s.id) },
-            el('span', { class: 'ca-sess-title' }, s.title),
-            el('span', { class: 'ca-sess-cwd' }, s.cwd.replace(/^\/media\/ojee\/NVME\/Code\/\[GIT\]\//, '')),
-            el('div', { class: 'saved-actions' },
-              el('button', { class: 'btn btn--ghost btn--icon', onclick: (e) => caRename(s.id, e), title: 'Rename' }, ico('pencil', 12)),
-              el('button', { class: 'btn btn--ghost btn--icon', onclick: (e) => caClose(s.id, e), title: 'Archive — move to history' }, ico('archive', 12)),
-            ),
-          ),
-        ),
-      )
-    : el('div', { class: 'muted', style: 'padding:8px;font-size:0.78rem' }, 'no active sessions');
-
-  const headerSection = el('div', { class: 'panel-head' },
-    el('span', {}, 'Claude Code'),
-  );
-
-  const defCwd = localStorage.getItem('code_default_cwd');
-  const toolbar = el('div', { class: 'btn-row' },
-    el('button', { class: 'btn btn--sm', onclick: caNewDefault, title: defCwd ? `New in ${defCwd}` : 'Pick a folder' }, ico('plus', 14), ' New'),
-    el('button', { class: 'btn btn--ghost btn--sm', onclick: () => { ca.pickerOpen = true; render(); caLoadDir(ca.pickerPath); }, title: 'Browse for a different folder' }, ico('folder', 14)),
-    el('button', { class: 'btn btn--ghost btn--sm', onclick: caRefreshSessions, title: 'Refresh' }, ico('reload', 14)),
-    el('button', { class: 'btn btn--ghost btn--sm', onclick: caLoadHistory }, ico('history', 14), ' History'),
-  );
-
-  return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
-    headerSection,
-    toolbar,
-    sessionTabs,
-    activeSession ? el('div', { class: 'chat-wrap' },
-      el('div', { class: 'ca-active-head' },
-        el('span', { class: 'ca-active-title' }, activeSession.title),
-        el('span', { class: 'ca-active-cwd' }, activeSession.cwd),
-        el('button', { class: 'btn btn--ghost btn--icon', onclick: (e) => caRename(activeSession.id, e), title: 'Rename' }, ico('pencil', 12)),
-        el('button', { class: 'btn btn--ghost btn--icon', onclick: (e) => caClose(activeSession.id, e), title: 'Archive — move to history' }, ico('archive', 12)),
-      ),
-      log,
-      el('div', { class: 'chat-form' },
-        input,
-        ca.busy ? el('button', { class: 'btn btn--ghost chat-send chat-stop', title: 'Stop' }, ico('stop', 14)) : null,
-        el('button', { class: 'btn chat-send', onclick: sendCode, title: 'Send' }, ico('send', 14)),
-      ),
-    ) : null,
-  );
-};
-
-// Update only the last assistant message's body during streaming — avoids
-// the full DOM rebuild that was making the send button flash on every text
-// chunk.  Falls back to render() if we can't find the target node.
-const updateStreamingMessage = () => {
-  const log = document.querySelector('.chat-log');
-  if (!log) return render();
-  const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
-  if (!last || last.role !== 'assistant') return render();
-  const bodies = log.querySelectorAll('.chat-msg.chat-assistant .md-body');
-  const body = bodies[bodies.length - 1];
-  if (!body) return render();
-  const txt = last.content || last.text || '';
-  body.innerHTML = renderMarkdown(txt) || '';
-  body.appendChild(el('span', { class: 'typing-cursor' }, '▍'));
-  // Stick to bottom if we were near it
-  if (log.scrollHeight - log.scrollTop - log.clientHeight < 100) {
-    log.scrollTop = log.scrollHeight;
-  }
-};
-
-// ─── Live timer ────────────────────────────────────────────────────────
-let liveTimerInterval = null;
-const startLiveTimer = () => {
-  if (liveTimerInterval) clearInterval(liveTimerInterval);
-  liveTimerInterval = setInterval(() => {
-    const timers = document.querySelectorAll('.live-timer');
-    if (!timers.length) { clearInterval(liveTimerInterval); liveTimerInterval = null; return; }
-    for (const t of timers) {
-      const start = parseInt(t.dataset.start, 10);
-      if (!start) continue;
-      const elapsed = Date.now() - start;
-      const prefix = t.dataset.prefix || '';
-      t.textContent = (prefix ? prefix + ' · ' : '') + fmtDur(elapsed);
-    }
-  }, 1000);
-};
 
 // ─── Render ────────────────────────────────────────────────────────────
 const render = () => {
@@ -1143,12 +516,11 @@ const render = () => {
   // and three of the four nav entries did nothing at all. Rendering only the
   // active panel makes every entry mean something and makes the desktop and
   // the phone agree, which is why the LOQ module stopped diverging too.
-  const activePanel = state.view === 'chat' ? 'chat'
-    : state.view === 'services' ? 'services'
+  const activePanel = state.view === 'services' ? 'services'
     : state.view === 'actions' ? 'actions'
     : 'dashboard';
   const build = { dashboard: panelSystem, services: panelServices,
-                  actions: panelActions, chat: panelChatCode }[activePanel];
+                  actions: panelActions }[activePanel];
   const grid = el('div', { class: 'ag-grid' }, build());
   grid.dataset.view = activePanel;
   // Kept: the mobile rules that bound the chat log key off this class.
@@ -1182,7 +554,6 @@ const render = () => {
   }
   if (pageY) window.scrollTo(0, pageY);
 
-  if (state.codeAgent.busy && state.codeAgent.startTs) startLiveTimer();
 };
 
 // ─── Polling ───────────────────────────────────────────────────────────
@@ -1228,15 +599,6 @@ const refresh = async () => {
   }
   if (services) state.services = services;
 
-  if (!state.codeAgent.checked) {
-    state.codeAgent.checked = true;
-    const cfg = await api('/api/code-agent/config');
-    state.codeAgent.enabled = !!cfg?.enabled;
-  }
-  if (state.codeAgent.enabled && !state.codeAgent.busy) {
-    const s = await api('/api/code-agent/sessions');
-    if (s?.active) state.codeAgent.sessions = s.active;
-  }
   // Only swap the stat panels in place — full render() would dismiss the
   // mobile keyboard each tick.
   refreshStatsPanels();
@@ -1250,47 +612,17 @@ const boot = async () => {
   // config endpoint when mounted, not this module's.
   const cfg = await api('/api/config');
   if (cfg) state.config = cfg;
-  restoreCode();
   render();
   refresh();
   // Tracked so unmount() can stop it. An untracked interval keeps polling —
   // and keeps re-rendering into a detached root — after the module is gone.
   pollTimer = setInterval(refresh, 5000);
 
-  visHandler = () => {
-    if (document.visibilityState !== 'visible') return;
-    if (state.codeAgent.busy && state.codeAgent.active) {
-      state.codeAgent.status = 'reconnecting'; render();
-      caReconnect(state.codeAgent.active);
-    }
-  };
-  document.addEventListener('visibilitychange', visHandler);
-  if (state.codeAgent.active) {
-    try {
-      const h = await api(`/api/code-agent/sessions/${state.codeAgent.active}/history`);
-      if (h?.messages && h.messages.length >= state.codeAgent.messages.length) {
-        state.codeAgent.messages = h.messages;
-        persistCode(); render();
-      }
-    } catch {}
-    if (state.codeAgent.busy) caReconnect(state.codeAgent.active);
-  }
-
-  // Keyboard shortcuts: Cmd/Ctrl+K for new chat, Esc to close history/picker
+  // Esc closes the saved-actions list. Cmd/Ctrl+K used to open a new chat
+  // and is left to the shell, whose palette owns that chord console-wide.
   keyHandler = (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); newChat(); }
-    if (e.key === 'Escape') {
-      if (state.codeAgent.pickerOpen) { state.codeAgent.pickerOpen = false; render(); }
-      else if (state.codeAgent.historyOpen) {
-        if (state.codeAgent.historyView) {
-          state.codeAgent.historyView = null;
-          state.codeAgent.historyMessages = [];
-          state.codeAgent.historyCwd = null;
-        } else state.codeAgent.historyOpen = false;
-        render();
-      } else if (state.showSavedList) {
-        state.showSavedList = false; render();
-      }
+    if (e.key === 'Escape' && state.showSavedList) {
+      state.showSavedList = false; render();
     }
   };
   document.addEventListener('keydown', keyHandler);
@@ -1329,8 +661,7 @@ export default {
   async unmount() {
     if (pollTimer) clearInterval(pollTimer);
     if (keyHandler) document.removeEventListener('keydown', keyHandler);
-    if (visHandler) document.removeEventListener('visibilitychange', visHandler);
-    pollTimer = keyHandler = visHandler = null;
+    pollTimer = keyHandler = null;
     root = null;
     ctx = null;
   },
