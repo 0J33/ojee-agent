@@ -71,8 +71,14 @@
   --font-hud:   var(--hud);
 
   /* Space */
-  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: var(--s-3);
-  --sp-5: 20px; --sp-6: var(--s-4); --sp-8: var(--s-5);
+  /* Every step is an ojee-ui step. 12px and 20px were off the system's
+     4/8/16/24/40/64 rhythm, so this module's padding and gaps landed a few
+     pixels away from every other module's — close enough to look like a
+     mistake rather than a choice, which is what "doesn't follow the design
+     system" looks like from outside. */
+  --sp-1: var(--s-1); --sp-2: var(--s-2); --sp-3: var(--s-2);
+  --sp-4: var(--s-3); --sp-5: var(--s-3);
+  --sp-6: var(--s-4); --sp-8: var(--s-5);
 
   /* Radius — zero, everywhere. The system has no rounded corners; leaving
      these as real radii is what made the panels here read as a different app. */
