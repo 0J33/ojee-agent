@@ -397,7 +397,7 @@
 .ag-grid .saved-item:hover .saved-actions, .ag-grid .ca-sess:hover .saved-actions, .ag-grid .ca-hist-list .saved-item .saved-actions { opacity: 1; }
 .ag-grid .saved-actions .btn { padding: 4px; min-height: 24px; width: 24px; color: var(--dim); }
 .ag-grid .saved-actions .btn:hover { color: var(--ink); }
-.ag-grid .saved-actions .btn.danger { color: var(--err); }
+.ag-grid .saved-actions .btn--danger { color: var(--err); }
 .ag-grid .chat-active-badge {
   font-size: 0.68rem; color: var(--accent); font-weight: 500;
   padding: 4px 0;
@@ -767,7 +767,7 @@
   .ag-grid .stat-row { font-size: 0.85rem; }
   .ag-grid .stat-val { font-size: 0.78rem; }
   .ag-grid .btn { min-height: 40px; font-size: 0.82rem; padding: 10px 12px; }
-  .ag-grid .btn.sm { min-height: 34px; font-size: 0.76rem; padding: 8px 10px; }
+  .ag-grid .btn--sm { min-height: 34px; font-size: 0.76rem; padding: 8px 10px; }
   .ag-grid .svc-card { padding: var(--s-2); }
   .ag-grid .svc-name { font-size: 0.9rem; }
   .ag-grid .svc-meta { font-size: 0.78rem; }

@@ -199,13 +199,8 @@
    scrollbars, overscroll gutter, form controls — dark too. */
 html {
   background-color: var(--bg-0);
-  background-image:
-    radial-gradient(1200px 800px at 70% 26%, var(--glow-faint), transparent 60%),
-    linear-gradient(180deg, var(--bg-0), var(--bg-1));
-  background-attachment: fixed;
   min-height: 100%;
   color-scheme: dark;
-  overscroll-behavior: none;
 }
 
 body {
@@ -215,7 +210,28 @@ body {
   font-size: 14px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
-  overscroll-behavior: none;
+  /* `contain`, not `none`, and only on the scrolling element. It stops
+     pull-to-refresh and scroll chaining just the same, without `none`'s
+     habit of freezing the document scroller on iOS Safari. */
+  overscroll-behavior-y: contain;
+}
+
+/* The page gradients live on their own fixed layer behind everything.
+   They used to be `background-attachment: fixed` on <html> — which is
+   unsupported on iOS Safari, where it promotes the root to a fixed
+   backing layer and can leave the document refusing to scroll at all.
+   A real fixed element paints identically on every browser and takes
+   the root out of the compositor's way. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: var(--bg-0);
+  background-image:
+    radial-gradient(1200px 800px at 70% 26%, var(--glow-faint), transparent 60%),
+    linear-gradient(180deg, var(--bg-0), var(--bg-1));
 }
 
 ::selection { background: var(--accent); color: var(--on-accent); }
