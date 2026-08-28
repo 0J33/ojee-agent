@@ -726,7 +726,7 @@
 @media (max-width: 1100px) and (min-width: 701px) {
   .ag-grid .grid { grid-template-columns: 1fr 1fr; gap: var(--s-2); }
   .ag-grid .dash { overflow: auto; height: auto; min-height: 100dvh; }
-  .ag-grid .panel { max-height: 65vh; }
+  .ag-grid > [data-panel] { max-height: 65vh; }
   .ag-grid .chat-panel { max-height: none; min-height: 75vh; }
 }
 
@@ -747,9 +747,14 @@
     padding-bottom: calc(76px + env(safe-area-inset-bottom)); /* room for bottom-tabs */
     overflow: visible;
   }
-  /* Mobile uses tab navigation — only one panel visible at a time */
-  .ag-grid .panel { display: none; max-height: none; overflow-y: visible; }
-  .ag-grid .panel.mobile-active { display: flex; }
+  /* This used to be `.ag-grid .panel { display: none }` + `.mobile-active`,
+     from when `.panel` meant one of the four view panels. `.panel` is the
+     design system's own component now — the stat tiles and service rows are
+     panels — so that rule hid every readout on the phone while leaving the
+     page height it occupied. The renderer builds only the active view, and
+     the `> [data-panel]` rules below scope the same intent to direct
+     children, so nothing has to be hidden by class here at all. */
+  .ag-grid > [data-panel] { max-height: none; overflow-y: visible; }
   /* When the chat tab is active the page should NOT scroll — the chat-log
      inside scrolls instead.  Switch the shell to fixed-viewport mode and
      give chat-panel a bounded flex slot so its inner log can scroll. */
