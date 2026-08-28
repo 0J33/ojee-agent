@@ -340,14 +340,40 @@ const gaugeSvg = (pct, temp) => {
     ${tempText}
   </svg>`;
 };
+/**
+ * A readout tile, in the shape every other module uses: LABEL, a big tabular
+ * number, then a thin bar and a sub-line.
+ *
+ * This used to draw a circular ring gauge. Nothing else in the console has
+ * one — LOQ, Home and the launcher all use flat tiles — so this panel read as
+ * a different product sitting inside the same frame, which is exactly what it
+ * looked like. The donut also spent a 76px square saying what one line of
+ * text says better, and put the number at a size no other readout uses.
+ *
+ * `.stat` and `.bar` are ojee-ui's own components rather than local
+ * lookalikes, so this tracks the design system instead of re-approximating it.
+ */
 const gauge = (label, pct, sub, opts = {}) => {
   const t = opts.temp;
   const tHot = t != null && t > 85;
   const tWarm = t != null && t > 70;
-  const cls = (pct > 90 || tHot) ? ' danger'
-            : (pct > 75 || tWarm) ? ' warn' : '';
-  return el('div', { class: 'gauge' + cls,
-    html: `${gaugeSvg(pct, t)}<div class="gauge-label">${escapeHtml(label)}</div>${sub ? `<div class="gauge-sub">${escapeHtml(sub)}</div>` : ''}` });
+  // The percentage is coloured by the PERCENTAGE and the temperature by the
+  // TEMPERATURE. Folding them together made a CPU at 15% render in warning
+  // yellow because the die was at 72°C — the number and its colour disagreed,
+  // which is worse than not colouring at all.
+  const level = pct > 90 ? 'err' : pct > 75 ? 'warn' : '';
+  const tLevel = tHot ? 'err' : tWarm ? 'warn' : '';
+  const v = Math.round(pct);
+  return el('div', {
+    class: 'ag-stat' + (level ? ` is-${level}` : ''),
+    html: `
+      <span class="ag-stat-k">${escapeHtml(label)}</span>
+      <span class="ag-stat-v">${v}<span class="ag-stat-u">%</span>${
+        t != null ? `<span class="ag-stat-t${tLevel ? ` is-${tLevel}` : ''}">${Math.round(t)}°C</span>` : ''}</span>
+      <span class="bar"><span class="fill${level ? ` fill--${level}` : ''}"
+        style="width:${Math.max(0, Math.min(100, v))}%"></span></span>
+      ${sub ? `<span class="ag-stat-sub">${escapeHtml(sub)}</span>` : ''}`,
+  });
 };
 
 // Sparkline SVG from values array (auto-scaled)
@@ -408,7 +434,7 @@ const panelSystem = () => {
   if (!s) {
     return el('div', { class: 'panel', 'data-panel': 'dashboard' },
       el('div', { class: 'panel-head' }, el('span', {}, 'System')),
-      el('div', { class: 'gauge-grid' },
+      el('div', { class: 'ag-tiles' },
         el('div', { class: 'skeleton skeleton-gauge' }),
         el('div', { class: 'skeleton skeleton-gauge' }),
         el('div', { class: 'skeleton skeleton-gauge' }),

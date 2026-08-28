@@ -1114,3 +1114,47 @@
   .ag-grid > [data-panel] { display: none; }
   .ag-grid > [data-panel].mobile-active { display: flex; }
 }
+
+/* ---------- readout tiles ----------
+   The shape every other module uses: label, a big tabular number, a thin bar,
+   a sub-line. This panel used to draw circular ring gauges, which appear
+   nowhere else in the console — that single choice is most of why it read as
+   a different product inside the same frame. */
+.ag-grid .ag-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 2px;
+}
+.ag-grid .ag-stat {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  min-width: 0;
+}
+.ag-grid .ag-stat-k {
+  font-size: 0.6rem; font-weight: 900; letter-spacing: 0.18em;
+  text-transform: uppercase; color: var(--dim); white-space: nowrap;
+}
+.ag-grid .ag-stat-v {
+  display: flex; align-items: baseline; gap: 6px;
+  font-family: var(--mono); font-size: 1.5rem; font-weight: 700;
+  line-height: 1; color: var(--ink);
+  /* Tabular, so the row does not re-flow as digits change width. */
+  font-variant-numeric: tabular-nums;
+}
+.ag-grid .ag-stat-u { font-size: 0.72rem; font-weight: 400; color: var(--ink-2); }
+.ag-grid .ag-stat-t {
+  margin-left: auto;
+  font-size: 0.7rem; font-weight: 400; color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.ag-grid .ag-stat-sub {
+  font-size: 0.62rem; color: var(--dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Heat is reinforcement: the number and the bar already carry it. */
+.ag-grid .ag-stat.is-warn .ag-stat-v { color: var(--warn); }
+.ag-grid .ag-stat.is-err  .ag-stat-v { color: var(--err); }
+.ag-grid .ag-stat-t.is-warn { color: var(--warn); }
+.ag-grid .ag-stat-t.is-err  { color: var(--err); }
