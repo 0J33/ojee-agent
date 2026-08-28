@@ -313,45 +313,27 @@ const renderToasts = () => {
 
 // ─── Bottom-tab nav (mobile) ───────────────────────────────────────────
 
-// ─── SVG primitives: gauge + sparkline ─────────────────────────────────
-// Returns a circular gauge SVG. Stroke color comes from CSS via the parent's
-// .warn/.danger class — don't set inline stroke here or it'd override CSS.
-// When temp is provided, render it as a small text inside the ring below the
-// percent (no extra DOM, no badge — feels like part of the gauge itself).
-const gaugeSvg = (pct, temp) => {
-  const r = 30, cx = 38, cy = 38;
-  const circ = 2 * Math.PI * r;
-  const dash = (Math.max(0, Math.min(100, pct)) / 100) * circ;
-  const hasTemp = temp != null;
-  const tHot = hasTemp && temp > 85;
-  const tWarm = hasTemp && temp > 70;
-  const tcls = tHot ? ' hot' : tWarm ? ' warm' : '';
-  const pctY = hasTemp ? '38%' : '50%';
-  const pctCls = hasTemp ? ' with-temp' : '';
-  const tempText = hasTemp
-    ? `<text class="gauge-temp-text${tcls}" x="50%" y="66%" dominant-baseline="middle" text-anchor="middle">${temp}°C</text>`
-    : '';
-  return `<svg viewBox="0 0 76 76" width="76" height="76">
-    <circle class="gauge-track" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke-width="6"/>
-    <circle class="gauge-fill" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke-width="6"
-      stroke-dasharray="${dash} ${circ}" stroke-linecap="butt"
-      transform="rotate(-90 ${cx} ${cy})"/>
-    <text class="gauge-text${pctCls}" x="50%" y="${pctY}" dominant-baseline="middle" text-anchor="middle">${Math.round(pct)}%</text>
-    ${tempText}
-  </svg>`;
-};
 /**
- * A readout tile, in the shape every other module uses: LABEL, a big tabular
- * number, then a thin bar and a sub-line.
- *
- * This used to draw a circular ring gauge. Nothing else in the console has
- * one — LOQ, Home and the launcher all use flat tiles — so this panel read as
- * a different product sitting inside the same frame, which is exactly what it
- * looked like. The donut also spent a 76px square saying what one line of
- * text says better, and put the number at a size no other readout uses.
- *
- * `.stat` and `.bar` are ojee-ui's own components rather than local
- * lookalikes, so this tracks the design system instead of re-approximating it.
+ * Home opens every view with an indexed section header — `A / STATS` in
+ * accent mono, the title beside it, optional meta pushed right. Agent opened
+ * with a bordered box whose header was small grey text, so the two modules
+ * did not even start the page the same way. Same markup now.
+ */
+const section = (idx, title, right = null) => el('div', { class: 'section-head' },
+  el('span', { class: 'idx' }, idx),
+  el('h2', { class: 'h2' }, title),
+  el('span', { class: 'spacer' }),
+  right,
+);
+
+// ─── SVG primitives: sparkline ─────────────────────────────────────────
+/**
+ * A readout tile. This is HOME's tile markup, not an approximation of it:
+ * `.panel.corners` + `<i class="c">` for the four bracket marks, then
+ * `.stat` > `.label` / `.value` / `.meta`. Agent had grown its own
+ * `.ag-stat-*` set that looked nearly the same and drifted independently —
+ * which is exactly why this module read as a different product inside the
+ * same frame. Sharing the classes means it cannot drift again.
  */
 const gauge = (label, pct, sub, opts = {}) => {
   const t = opts.temp;
@@ -365,14 +347,16 @@ const gauge = (label, pct, sub, opts = {}) => {
   const tLevel = tHot ? 'err' : tWarm ? 'warn' : '';
   const v = Math.round(pct);
   return el('div', {
-    class: 'ag-stat' + (level ? ` is-${level}` : ''),
-    html: `
-      <span class="ag-stat-k">${escapeHtml(label)}</span>
-      <span class="ag-stat-v">${v}<span class="ag-stat-u">%</span>${
-        t != null ? `<span class="ag-stat-t${tLevel ? ` is-${tLevel}` : ''}">${Math.round(t)}°C</span>` : ''}</span>
-      <span class="bar"><span class="fill${level ? ` fill--${level}` : ''}"
-        style="width:${Math.max(0, Math.min(100, v))}%"></span></span>
-      ${sub ? `<span class="ag-stat-sub">${escapeHtml(sub)}</span>` : ''}`,
+    class: 'panel corners' + (level ? ` is-${level}` : ''),
+    html: `<i class="c"></i>
+      <div class="stat">
+        <span class="label">${escapeHtml(label)}</span>
+        <span class="value">${v}<sup style="font-size:0.9rem">%</sup>${
+          t != null ? `<span class="ag-temp${tLevel ? ` is-${tLevel}` : ''}">${Math.round(t)}°C</span>` : ''}</span>
+        <span class="bar"><span class="fill${level ? ` fill--${level}` : ''}"
+          style="width:${Math.max(0, Math.min(100, v))}%"></span></span>
+        ${sub ? `<span class="meta">${escapeHtml(sub)}</span>` : ''}
+      </div>`,
   });
 };
 
@@ -432,17 +416,14 @@ const sparklineCard2 = (label, val1, val2, lbl1, lbl2, vals1, vals2, c1 = 'var(-
 const panelSystem = () => {
   const s = state.stats;
   if (!s) {
-    return el('div', { class: 'panel', 'data-panel': 'dashboard' },
-      el('div', { class: 'panel-head' }, el('span', {}, 'System')),
-      el('div', { class: 'ag-tiles' },
-        el('div', { class: 'skeleton skeleton-gauge' }),
-        el('div', { class: 'skeleton skeleton-gauge' }),
-        el('div', { class: 'skeleton skeleton-gauge' }),
-        el('div', { class: 'skeleton skeleton-gauge' }),
+    return el('div', { class: 'stack-lg', 'data-panel': 'dashboard' },
+      section('A / STATS', 'System'),
+      el('div', { class: 'tiles' },
+        el('div', { class: 'skel' }), el('div', { class: 'skel' }),
+        el('div', { class: 'skel' }), el('div', { class: 'skel' }),
       ),
-      el('div', { class: 'skeleton skeleton-row' }),
-      el('div', { class: 'skeleton skeleton-row' }),
-      el('div', { class: 'skeleton skeleton-row' }),
+      el('div', { class: 'skel' }),
+      el('div', { class: 'skel' }),
     );
   }
 
@@ -459,17 +440,20 @@ const panelSystem = () => {
 
   const swapPct = s.swap?.total ? Math.round((s.swap.used / s.swap.total) * 100) : 0;
 
-  // Top banner: OS + uptime + hostname
-  const banner = el('div', { class: 'sys-banner' },
-    el('div', { class: 'sys-banner-item' }, ico('power', 14),
-      el('span', { class: 'k' }, 'Up'), el('span', { class: 'v' }, fmtUp(s.uptime))),
-    el('div', { class: 'sys-banner-item' }, ico('cpu', 14),
-      el('span', { class: 'k' }, 'OS'), el('span', { class: 'v' }, s.os || '—')),
-    s.hostname ? el('div', { class: 'sys-banner-item' }, ico('net', 14),
-      el('span', { class: 'k' }, 'Host'), el('span', { class: 'v' }, s.hostname)) : null,
+  // The machine's facts as a key/value block — the same `.titleblock`/`.tb`
+  // component home uses under the AC panel. It was a bespoke `.sys-banner`
+  // with its own icons and spacing, which is one more thing to keep in sync
+  // with a component that already existed.
+  const banner = el('div', { class: 'titleblock' },
+    el('div', { class: 'tb' }, el('span', { class: 'tb-k' }, 'Up'),
+      el('span', { class: 'tb-v tb-v--accent' }, fmtUp(s.uptime))),
+    el('div', { class: 'tb' }, el('span', { class: 'tb-k' }, 'OS'),
+      el('span', { class: 'tb-v' }, s.os || '—')),
+    s.hostname ? el('div', { class: 'tb' }, el('span', { class: 'tb-k' }, 'Host'),
+      el('span', { class: 'tb-v' }, s.hostname)) : null,
   );
 
-  const gauges = el('div', { class: 'gauge-grid' },
+  const gauges = el('div', { class: 'tiles' },
     gauge('CPU', s.cpu.avg, cpuShort, { temp: cpuTemp ? cpuTemp.current : null }),
     g && g.util != null
       ? gauge('GPU', g.util, `${gpuShort}${g.vram_mb ? ' · ' + (g.vram_mb / 1024).toFixed(1) + 'G' : ''}`, { temp: g.temp })
@@ -491,11 +475,12 @@ const panelSystem = () => {
       state.history.net_in, state.history.net_out),
   );
 
-  return el('div', { class: 'panel', 'data-panel': 'dashboard' },
-    el('div', { class: 'panel-head' },
-      el('span', {}, 'System'),
-      el('span', { class: 'head-actions' }, ico('cpu', 14)),
-    ),
+  // No outer panel. Home lays sections directly on the page background and
+  // reserves `.panel` for the things inside them; agent wrapped a panel round
+  // every view and then put panels inside it, so everything sat one border
+  // deeper than the same content does in home.
+  return el('div', { class: 'stack-lg', 'data-panel': 'dashboard' },
+    section('A / STATS', 'System', el('span', { class: 'meta' }, s.hostname || '')),
     banner,
     gauges,
     sparks,
@@ -505,24 +490,35 @@ const panelSystem = () => {
 const panelServices = () => {
   const sv = state.services;
   if (!sv) {
-    return el('div', { class: 'panel', 'data-panel': 'services' },
-      el('div', { class: 'panel-head' }, el('span', {}, 'Services')),
+    // `.skel` is the design system's own loading placeholder — home uses it
+    // in three places. Agent had `.skeleton.skeleton-row`, a private one.
+    return el('div', { class: 'stack-lg', 'data-panel': 'services' },
+      section('B / SERVICES', 'Services'),
       el('div', { class: 'svc-list' },
-        el('div', { class: 'skeleton skeleton-row' }),
-        el('div', { class: 'skeleton skeleton-row' }),
-        el('div', { class: 'skeleton skeleton-row' }),
-      ),
+        el('div', { class: 'skel' }), el('div', { class: 'skel' }), el('div', { class: 'skel' })),
     );
   }
-  return el('div', { class: 'panel', 'data-panel': 'services' },
-    el('div', { class: 'panel-head' }, el('span', {}, 'Services')),
+  const rows = Object.entries(sv);
+  if (!rows.length) {
+    return el('div', { class: 'stack-lg', 'data-panel': 'services' },
+      section('B / SERVICES', 'Services'),
+      el('div', { class: 'empty', html: `<b>No services reported</b>
+        <span>The agent could not read the container list.</span>` }),
+    );
+  }
+  // A service row states what it is, whether it is up, and for how long —
+  // the same three-part shape as a home device row, using `.dot` and `.meta`
+  // rather than `.svc-dot` and `.svc-meta`.
+  return el('div', { class: 'stack-lg', 'data-panel': 'services' },
+    section('B / SERVICES', 'Services',
+      el('span', { class: 'meta' }, `${rows.filter(([, x]) => x.active).length}/${rows.length} up`)),
     el('div', { class: 'svc-list' },
-      ...Object.entries(sv).map(([name, s]) =>
-        el('div', { class: 'svc-card' },
-          el('span', { class: s.active ? 'svc-dot' : 'svc-dot off' }),
+      ...rows.map(([name, x]) =>
+        el('div', { class: 'panel svc-card' },
+          el('span', { class: `dot ${x.active ? 'dot--ok' : ''}` }),
           el('div', { class: 'svc-info' },
-            el('div', { class: 'svc-name' }, s.desc || name),
-            el('div', { class: 'svc-meta' }, s.status || (s.active ? 'Running' : 'Stopped')),
+            el('div', { class: 'svc-name' }, x.desc || name),
+            el('div', { class: 'meta' }, x.status || (x.active ? 'Running' : 'Stopped')),
           ),
         ),
       ),
@@ -540,15 +536,15 @@ const doAction = async (action, label) => {
   else toast(`${label || action}: ${d?.stderr || d?.error || 'failed'}`, 'danger', 6000);
 };
 
-const panelActions = () => el('div', { class: 'panel', 'data-panel': 'actions' },
-  el('div', { class: 'panel-head' }, el('span', {}, 'Actions')),
+const panelActions = () => el('div', { class: 'stack-lg', 'data-panel': 'actions' },
+  section('C / ACTIONS', 'Actions'),
   el('div', { class: 'btn-row' },
-    el('button', { class: 'btn', onclick: () => doAction('restart-n8n', 'Restart n8n') }, ico('reload'), ' n8n'),
-    el('button', { class: 'btn', onclick: () => doAction('restart-dashboard', 'Restart Dashboard') }, ico('reload'), ' Dashboard'),
-    el('button', { class: 'btn', onclick: () => doAction('restart-couchdb', 'Restart CouchDB') }, ico('reload'), ' CouchDB'),
-    el('button', { class: 'btn', onclick: () => doAction('restart-odysseus', 'Restart Odysseus') }, ico('reload'), ' Odysseus'),
-    el('button', { class: 'btn', onclick: () => doAction('compose-up', 'Compose Up') }, ico('power'), ' Up'),
-    el('button', { class: 'btn danger', onclick: () => { if (confirm('Bring stack down?')) doAction('compose-down', 'Compose Down'); } }, ico('power'), ' Down'),
+    el('button', { class: 'btn btn--ghost', onclick: () => doAction('restart-n8n', 'Restart n8n') }, ico('reload'), ' n8n'),
+    el('button', { class: 'btn btn--ghost', onclick: () => doAction('restart-dashboard', 'Restart Dashboard') }, ico('reload'), ' Dashboard'),
+    el('button', { class: 'btn btn--ghost', onclick: () => doAction('restart-couchdb', 'Restart CouchDB') }, ico('reload'), ' CouchDB'),
+    el('button', { class: 'btn btn--ghost', onclick: () => doAction('restart-odysseus', 'Restart Odysseus') }, ico('reload'), ' Odysseus'),
+    el('button', { class: 'btn btn--ghost', onclick: () => doAction('compose-up', 'Compose Up') }, ico('power'), ' Up'),
+    el('button', { class: 'btn btn--danger', onclick: () => { if (confirm('Bring stack down?')) doAction('compose-down', 'Compose Down'); } }, ico('power'), ' Down'),
   ),
   el('div', { class: 'panel-section' }, 'Quick links'),
   state.config.n8nDomain ? el('a', { class: 'link-card', href: `https://${state.config.n8nDomain}`, target: '_blank' },
@@ -929,8 +925,8 @@ const panelChatCode = () => {
       el('div', { class: 'ca-path' }, ca.pickerPath),
       el('div', { class: 'ca-dir-list' }, ...rows),
       el('div', { class: 'btn-row' },
-        el('button', { class: 'btn sm', onclick: () => { ca.pickerOpen = false; render(); } }, 'Cancel'),
-        el('button', { class: 'btn sm primary', onclick: caOpenHere }, 'Open here'),
+        el('button', { class: 'btn btn--ghost btn--sm', onclick: () => { ca.pickerOpen = false; render(); } }, 'Cancel'),
+        el('button', { class: 'btn btn--sm', onclick: caOpenHere }, 'Open here'),
       ),
     );
   }
@@ -951,10 +947,10 @@ const panelChatCode = () => {
       return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
         el('div', { class: 'panel-head' }, el('span', {}, 'History')),
         el('div', { class: 'btn-row' },
-          el('button', { class: 'btn sm', onclick: () => { ca.historyView = null; ca.historyMessages = []; ca.historyCwd = null; render(); } }, ico('arrow_left', 14), ' Back'),
-          toolCount > 0 ? el('button', { class: 'btn sm', onclick: () => { ca.historyShowTools = !ca.historyShowTools; render(); } },
+          el('button', { class: 'btn btn--ghost btn--sm', onclick: () => { ca.historyView = null; ca.historyMessages = []; ca.historyCwd = null; render(); } }, ico('arrow_left', 14), ' Back'),
+          toolCount > 0 ? el('button', { class: 'btn btn--ghost btn--sm', onclick: () => { ca.historyShowTools = !ca.historyShowTools; render(); } },
             ca.historyShowTools ? `Hide tools (${toolCount})` : `Show tools (${toolCount})`) : null,
-          ca.historyCwd ? el('button', { class: 'btn sm primary', onclick: caContinue }, 'Continue ', ico('arrow', 14)) : null,
+          ca.historyCwd ? el('button', { class: 'btn btn--sm', onclick: caContinue }, 'Continue ', ico('arrow', 14)) : null,
         ),
         el('div', { class: 'ca-hist-title' }, ca.historyView.title),
         el('div', { class: 'ca-hist-meta' }, `${ca.historyView.project} · ${ca.historyView.messageCount} events${ca.historyCwd ? ' · ' + ca.historyCwd : ''}`),
@@ -963,7 +959,7 @@ const panelChatCode = () => {
     }
     return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
       el('div', { class: 'panel-head' }, el('span', {}, 'History')),
-      el('button', { class: 'btn sm', onclick: () => { ca.historyOpen = false; render(); } }, ico('arrow_left', 14), ' Back'),
+      el('button', { class: 'btn btn--ghost btn--sm', onclick: () => { ca.historyOpen = false; render(); } }, ico('arrow_left', 14), ' Back'),
       ca.historyList.length === 0
         ? el('div', { class: 'muted', style: 'padding:20px;text-align:center;font-size:0.78rem' }, 'no past conversations')
         : el('div', { class: 'ca-hist-list' },
@@ -972,8 +968,8 @@ const panelChatCode = () => {
                 el('div', { class: 'ca-hist-row' },
                   el('div', { class: 'saved-title' }, conv.title),
                   el('div', { class: 'saved-actions' },
-                    el('button', { class: 'btn ghost icon', onclick: (e) => caRenameHistory(conv, e), title: 'Rename' }, ico('pencil', 12)),
-                    el('button', { class: 'btn ghost icon danger', onclick: (e) => caDeleteHistory(conv, e), title: 'Delete' }, ico('trash', 12)),
+                    el('button', { class: 'btn btn--ghost btn--icon', onclick: (e) => caRenameHistory(conv, e), title: 'Rename' }, ico('pencil', 12)),
+                    el('button', { class: 'btn btn--ghost btn--icon btn--danger', onclick: (e) => caDeleteHistory(conv, e), title: 'Delete' }, ico('trash', 12)),
                   ),
                 ),
                 el('div', { class: 'ca-hist-meta-row' },
@@ -1033,8 +1029,8 @@ const panelChatCode = () => {
             el('span', { class: 'ca-sess-title' }, s.title),
             el('span', { class: 'ca-sess-cwd' }, s.cwd.replace(/^\/media\/ojee\/NVME\/Code\/\[GIT\]\//, '')),
             el('div', { class: 'saved-actions' },
-              el('button', { class: 'btn ghost icon', onclick: (e) => caRename(s.id, e), title: 'Rename' }, ico('pencil', 12)),
-              el('button', { class: 'btn ghost icon', onclick: (e) => caClose(s.id, e), title: 'Archive — move to history' }, ico('archive', 12)),
+              el('button', { class: 'btn btn--ghost btn--icon', onclick: (e) => caRename(s.id, e), title: 'Rename' }, ico('pencil', 12)),
+              el('button', { class: 'btn btn--ghost btn--icon', onclick: (e) => caClose(s.id, e), title: 'Archive — move to history' }, ico('archive', 12)),
             ),
           ),
         ),
@@ -1047,10 +1043,10 @@ const panelChatCode = () => {
 
   const defCwd = localStorage.getItem('code_default_cwd');
   const toolbar = el('div', { class: 'btn-row' },
-    el('button', { class: 'btn sm primary', onclick: caNewDefault, title: defCwd ? `New in ${defCwd}` : 'Pick a folder' }, ico('plus', 14), ' New'),
-    el('button', { class: 'btn sm', onclick: () => { ca.pickerOpen = true; render(); caLoadDir(ca.pickerPath); }, title: 'Browse for a different folder' }, ico('folder', 14)),
-    el('button', { class: 'btn sm', onclick: caRefreshSessions, title: 'Refresh' }, ico('reload', 14)),
-    el('button', { class: 'btn sm', onclick: caLoadHistory }, ico('history', 14), ' History'),
+    el('button', { class: 'btn btn--sm', onclick: caNewDefault, title: defCwd ? `New in ${defCwd}` : 'Pick a folder' }, ico('plus', 14), ' New'),
+    el('button', { class: 'btn btn--ghost btn--sm', onclick: () => { ca.pickerOpen = true; render(); caLoadDir(ca.pickerPath); }, title: 'Browse for a different folder' }, ico('folder', 14)),
+    el('button', { class: 'btn btn--ghost btn--sm', onclick: caRefreshSessions, title: 'Refresh' }, ico('reload', 14)),
+    el('button', { class: 'btn btn--ghost btn--sm', onclick: caLoadHistory }, ico('history', 14), ' History'),
   );
 
   return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
@@ -1061,14 +1057,14 @@ const panelChatCode = () => {
       el('div', { class: 'ca-active-head' },
         el('span', { class: 'ca-active-title' }, activeSession.title),
         el('span', { class: 'ca-active-cwd' }, activeSession.cwd),
-        el('button', { class: 'btn ghost icon', onclick: (e) => caRename(activeSession.id, e), title: 'Rename' }, ico('pencil', 12)),
-        el('button', { class: 'btn ghost icon', onclick: (e) => caClose(activeSession.id, e), title: 'Archive — move to history' }, ico('archive', 12)),
+        el('button', { class: 'btn btn--ghost btn--icon', onclick: (e) => caRename(activeSession.id, e), title: 'Rename' }, ico('pencil', 12)),
+        el('button', { class: 'btn btn--ghost btn--icon', onclick: (e) => caClose(activeSession.id, e), title: 'Archive — move to history' }, ico('archive', 12)),
       ),
       log,
       el('div', { class: 'chat-form' },
         input,
-        ca.busy ? el('button', { class: 'btn chat-send chat-stop', title: 'Stop' }, ico('stop', 14)) : null,
-        el('button', { class: 'btn primary chat-send', onclick: sendCode, title: 'Send' }, ico('send', 14)),
+        ca.busy ? el('button', { class: 'btn btn--ghost chat-send chat-stop', title: 'Stop' }, ico('stop', 14)) : null,
+        el('button', { class: 'btn chat-send', onclick: sendCode, title: 'Send' }, ico('send', 14)),
       ),
     ) : null,
   );
