@@ -239,7 +239,7 @@ const gauge = (label, pct, sub, opts = {}) => {
       <div class="stat">
         <span class="label">${escapeHtml(label)}</span>
         <span class="value">${v}<sup style="font-size:0.9rem">%</sup>${
-          t != null ? `<span class="ag-temp${tLevel ? ` is-${tLevel}` : ''}">${Math.round(t)}°C</span>` : ''}</span>
+          t != null ? `<span class="vtag${tLevel ? ` vtag--${tLevel}` : ''}">${Math.round(t)}°C</span>` : ''}</span>
         <span class="bar"><span class="fill${level ? ` fill--${level}` : ''}"
           style="width:${Math.max(0, Math.min(100, v))}%"></span></span>
         ${sub ? `<span class="meta">${escapeHtml(sub)}</span>` : ''}
@@ -296,9 +296,9 @@ const sparkSvg2 = (vals1, vals2, color1 = 'var(--accent)', color2 = 'var(--accen
  * private set that matched nothing else. */
 const sparklineCard2 = (label, val1, val2, lbl1, lbl2, vals1, vals2,
                         c1 = 'var(--accent)', c2 = 'var(--accent-dark)') =>
-  el('div', { class: 'panel ag-chart', html: `
+  el('div', { class: 'panel chartcard', html: `
     <span class="label">${escapeHtml(label)}</span>
-    <span class="value">${escapeHtml(val1)}<span class="ag-chart-sep">/</span>${escapeHtml(val2)}</span>
+    <span class="value">${escapeHtml(val1)}<span class="chartcard-sep">/</span>${escapeHtml(val2)}</span>
     ${sparkSvg2(vals1, vals2, c1, c2)}
     <span class="meta">
       <span class="dot" style="background:${c1}"></span>${escapeHtml(lbl1)}
@@ -431,13 +431,13 @@ const doAction = async (action, label) => {
  * panel per row. `.logline` is that row, so links, services and anything
  * else that lists share one shape. */
 const row = (icon, name, sub, opts = {}) => el(opts.href ? 'a' : 'div', {
-  class: 'logline ag-row' + (opts.href || opts.onclick ? ' ag-row--go' : ''),
+  class: 'listrow' + (opts.href || opts.onclick ? ' listrow--go' : ''),
   ...(opts.href ? { href: opts.href, target: '_blank', rel: 'noreferrer' } : {}),
   ...(opts.onclick ? { onclick: opts.onclick, style: 'cursor:pointer' } : {}),
 },
-  icon ? el('span', { class: 'ag-row-ic' }, icon) : null,
-  el('span', { class: 'ag-row-body' },
-    el('span', { class: 'ag-row-name' }, name),
+  icon ? el('span', { class: 'listrow-ic' }, icon) : null,
+  el('span', { class: 'listrow-body' },
+    el('span', { class: 'listrow-name' }, name),
     sub ? el('span', { class: 'meta' }, sub) : null,
   ),
   opts.trail || null,

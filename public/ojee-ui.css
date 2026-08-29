@@ -383,6 +383,11 @@ a:hover { color: var(--accent); }
 .btn--danger { background: transparent; color: var(--err); border-color: var(--err-line); }
 .btn--danger:hover { background: var(--err); color: var(--on-accent); border-color: var(--err); }
 
+/* Square, icon-only. The system had no such modifier, so a module that
+   needed one wrote its own and inherited none of the button's states. */
+.btn--icon { padding: 0; width: var(--hit); min-width: var(--hit); gap: 0; }
+.btn--icon.btn--sm { width: 30px; min-width: 30px; }
+
 /* Small buttons keep their drawn size but grow an invisible hit area
    out to --hit, so a 30px-tall chip is still a 44px touch target. */
 .btn--sm {
@@ -1245,6 +1250,69 @@ body.app .nav    { position: sticky; top: calc(var(--hud-h) + env(safe-area-inse
 .row + .row { margin-top: 2px; }
 
 .cardgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 2px; }
+
+/* List row — one entry inside a single .panel, separated by a hairline.
+   Distinct from .row above, which is a standalone bordered row: use .row
+   when each entry is its own surface, .listrow when a list of them shares
+   one panel. The second is what the activity log, the service list and the
+   quick-links list all are, and each had been rebuilding it locally. */
+.listrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line-2);
+  text-decoration: none;
+  color: var(--ink-2);
+}
+.listrow:last-child { border-bottom: 0; }
+.listrow-ic { flex: none; display: inline-flex; color: var(--dim); }
+.listrow-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.listrow-name { color: var(--ink); font-size: 0.78rem; }
+/* Trailing value, for a key/value row. */
+.listrow-v {
+  margin-left: auto; flex: none;
+  font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+/* A row that goes somewhere. Hover is the only affordance a row this quiet
+   can carry, so it must be unambiguous. */
+.listrow--go { cursor: pointer; }
+.listrow--go:hover .listrow-name,
+.listrow--go:hover .listrow-ic { color: var(--accent); }
+
+/* ============================================================
+   CHART CARD
+   ============================================================
+   A stat tile whose sub-line is a trace: LABEL, the reading, the graph,
+   then a legend. Same four parts as .stat, so a chart reads as a readout
+   that happens to have a graph rather than as a different kind of box —
+   which is exactly how the modules' private versions of this drifted. */
+.chartcard { display: flex; flex-direction: column; gap: 6px; }
+.chartcard .value { font-size: 1.05rem; }
+.chartcard svg { width: 100%; height: 40px; display: block; margin: 4px 0; }
+.chartcard-sep { color: var(--dim); margin: 0 8px; }
+.chartcard .meta { display: flex; align-items: center; gap: 6px; }
+.chartcard .meta .dot { width: 6px; height: 6px; box-shadow: none; }
+.chartcard .meta .dot + span { margin-right: 4px; }
+
+/* Threshold tag beside a value — a temperature next to a percentage, say.
+   Coloured by ITS OWN threshold, never by the value it sits beside: a CPU
+   at 15% on a 72°C die must not render the 15 in warning yellow. */
+.vtag {
+  font-family: var(--hud); font-size: 0.6rem; letter-spacing: 0.12em;
+  color: var(--dim); margin-left: 8px; vertical-align: 0.35em;
+}
+.vtag--warn { color: var(--warn); }
+.vtag--err  { color: var(--err); }
+
+/* Threshold state on a readout tile. One spelling for all of them: agent
+   used .is-warn, LOQ used [data-heat="warn"], and the desktop app had no
+   mechanism at all, so its thresholds changed nothing on screen. */
+.stat.is-warn .value, .is-warn > .stat .value { color: var(--warn); }
+.stat.is-err  .value, .is-err  > .stat .value { color: var(--err); }
+.panel.is-warn { border-color: var(--warn); }
+.panel.is-err  { border-color: var(--err); }
 
 /* Log line — timestamped activity entry. */
 .logline {

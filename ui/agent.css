@@ -537,73 +537,8 @@
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 2px;
 }
-.ag-grid .ag-stat {
-  display: flex; flex-direction: column; gap: 8px;
-  padding: 14px 16px;
-  background: var(--panel);
-  border: 1px solid var(--line-2);
-  min-width: 0;
-}
-.ag-grid .ag-stat-k {
-  font-size: 0.6rem; font-weight: 900; letter-spacing: 0.18em;
-  text-transform: uppercase; color: var(--dim); white-space: nowrap;
-}
-.ag-grid .ag-stat-v {
-  display: flex; align-items: baseline; gap: 6px;
-  font-family: var(--mono); font-size: 1.5rem; font-weight: 700;
-  line-height: 1; color: var(--ink);
-  /* Tabular, so the row does not re-flow as digits change width. */
-  font-variant-numeric: tabular-nums;
-}
-.ag-grid .ag-stat-u { font-size: 0.72rem; font-weight: 400; color: var(--ink-2); }
-.ag-grid .ag-stat-t {
-  margin-left: auto;
-  font-size: 0.7rem; font-weight: 400; color: var(--dim);
-  font-variant-numeric: tabular-nums;
-}
-.ag-grid .ag-stat-sub {
-  font-size: 0.62rem; color: var(--dim);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-/* Heat is reinforcement: the number and the bar already carry it. */
-.ag-grid .ag-stat.is-warn .ag-stat-v { color: var(--warn); }
-.ag-grid .ag-stat.is-err  .ag-stat-v { color: var(--err); }
-.ag-grid .ag-stat-t.is-warn { color: var(--warn); }
-.ag-grid .ag-stat-t.is-err  { color: var(--err); }
-
-/* Square icon button. Layout only — colour comes from .btn / .btn--ghost. */
-.ag-grid .btn--icon { padding: 0; width: var(--hit); min-width: var(--hit); gap: 0; }
-.ag-grid .btn--icon.btn--sm { width: 28px; min-width: 28px; }
-
-/* The temperature that rides alongside a stat's value. Coloured by its own
-   threshold, never by the percentage — a cool CPU at 15% must not read hot. */
-.ag-grid .ag-temp { font-family: var(--hud); font-size: 0.6rem; letter-spacing: 0.12em;
-  color: var(--dim); margin-left: 8px; vertical-align: 0.35em; }
-.ag-grid .ag-temp.is-warn { color: var(--warn); }
-.ag-grid .ag-temp.is-err  { color: var(--err); }
-
-/* A service row: status dot, then name over status line. */
-.ag-grid .svc-list { display: grid; gap: 2px; }
-
-/* ── list rows ─────────────────────────────────────────────────────────
-   Layout only. `.logline` from ojee-ui supplies the hairline, the padding
-   rhythm and the type; these add the icon column and the two-line body
-   that a service or a link needs and a log entry does not. */
-.ag-grid .ag-row { align-items: center; gap: 12px; text-decoration: none; }
-.ag-grid .ag-row-ic { flex: none; display: inline-flex; color: var(--dim); }
-.ag-grid .ag-row-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
-.ag-grid .ag-row-name { color: var(--ink); font-size: 0.78rem; }
-.ag-grid .ag-row--go:hover .ag-row-name { color: var(--accent); }
-.ag-grid .ag-row--go:hover .ag-row-ic { color: var(--accent); }
-.ag-grid .ag-row .dot { align-self: center; }
-
-/* ── chart cards ───────────────────────────────────────────────────────
-   A stat tile whose sub-line is a graph. Only the graph slot and the
-   legend are local; label, value and meta come from the design system. */
-.ag-grid .ag-chart { display: flex; flex-direction: column; gap: 6px; }
-.ag-grid .ag-chart .value { font-size: 1.05rem; }
-.ag-grid .ag-chart-sep { color: var(--dim); margin: 0 8px; }
-.ag-grid .ag-chart svg { width: 100%; height: 40px; display: block; margin: 4px 0; }
-.ag-grid .ag-chart .meta { display: flex; align-items: center; gap: 6px; }
-.ag-grid .ag-chart .meta .dot { width: 6px; height: 6px; box-shadow: none; }
-.ag-grid .ag-chart .meta .dot:not(:first-child) { margin-left: 10px; }
+/* Layout-only leftovers. Everything else that used to live here —
+   the list row, the chart card, the temperature tag and the square icon
+   button — moved into ojee-ui as .listrow / .chartcard / .vtag /
+   .btn--icon, because LOQ had grown its own copy of each. */
+.ag-grid .listrow .dot { align-self: center; }
