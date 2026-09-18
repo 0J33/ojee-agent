@@ -53,10 +53,33 @@
 
 @media (max-width: 720px) {
   /* Four columns of metadata do not fit a phone. The name, the state and the
-     action are what you came for. */
-  .ag-svc, .ag-wf { grid-template-columns: 8px minmax(0, 1fr) auto; }
+     action are what you came for.
+
+     Narrowing the grid is only half of it: every one of these rows emits five
+     children, so hiding ONE of them still leaves four in three columns and the
+     fourth — the button — drops onto an implicit row of its own, half-width and
+     under the name. Each row here now accounts for all five. */
+  .ag-svc { grid-template-columns: 8px minmax(0, 1fr) auto; }
   .ag-svc > :nth-child(3), .ag-svc > :nth-child(4) { display: none; }
-  .ag-wf > :nth-child(4) { display: none; }
+
+  /* A workflow's last run is the reason to look at the list at all, so it
+     keeps its line rather than being dropped; the button spans both. */
+  .ag-wf {
+    grid-template-columns: 8px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "dot name act"
+      "dot last act";
+    row-gap: 2px;
+    padding-block: 7px;
+  }
+  .ag-wf > :nth-child(1) { grid-area: dot; align-self: center; }
+  .ag-wf > :nth-child(2) { grid-area: name; }
+  .ag-wf > :nth-child(3) { grid-area: last; }
+  .ag-wf > :nth-child(4) { display: none; }          /* tags */
+  .ag-wf > :nth-child(5) { grid-area: act; align-self: center; }
+
+  /* The run's status is already the dot's colour, and its mode is not worth a
+     column on a phone. Name and how long ago are what is left. */
   .ag-exec { grid-template-columns: 8px minmax(0, 1fr) auto; }
-  .ag-exec > :nth-child(4) { display: none; }
+  .ag-exec > :nth-child(3), .ag-exec > :nth-child(4) { display: none; }
 }
