@@ -95,12 +95,18 @@ app.get('/api/config', (_req, res) => res.json({
 
 /* ── the stack's own containers ───────────────────────────────────────── */
 
+/** Docker's prefix for a container it is replacing and has not removed yet. */
+const RENAMED = /^[0-9a-f]{8,}_/;
+
 async function stackServices() {
   const out = await execP('docker ps -a --format "{{.Names}}|{{.State}}|{{.Status}}"');
   const seen = out.split('\n').filter(Boolean).map((l) => {
     const [name, state, status] = l.split('|');
     return { name, running: state === 'running', status };
-  });
+  // A redeploy leaves the old container behind under a hashed name until the
+  // new one is up. Matching it would report the service as stopped because it
+  // is being deployed.
+  }).filter((c) => !RENAMED.test(c.name));
   return STACK.map((def) => {
     const hit = seen.find((c) => def.match.test(c.name));
     return {
