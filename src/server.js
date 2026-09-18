@@ -175,12 +175,20 @@ app.get('/api/n8n/workflows', auth, async (_req, res) => {
 });
 
 app.get('/api/n8n/executions', auth, async (_req, res) => {
-  const r = await n8n('/executions?limit=25&includeData=false');
+  const [r, wf] = await Promise.all([
+    n8n('/executions?limit=25&includeData=false'),
+    // includeData=false leaves out workflowData, so an execution knows only
+    // its workflow's ID — and "nK8qxpVEXAksjVHT · waiting" tells you nothing
+    // about which automation that is. Asking for the data instead would pull
+    // every node of every run across the wire to read one name.
+    n8n('/workflows?limit=100'),
+  ]);
   if (!r.ok) return res.status(502).json({ error: n8nWhy(r.reason, r.detail), reason: r.reason });
+  const names = new Map((wf.ok ? wf.data.data || [] : []).map((w) => [String(w.id), w.name]));
   const executions = (r.data.data || []).map((e) => ({
     id: e.id,
     workflowId: e.workflowId,
-    workflowName: e.workflowData?.name || null,
+    workflowName: e.workflowData?.name || names.get(String(e.workflowId)) || null,
     status: e.status || (e.finished ? 'success' : 'running'),
     startedAt: e.startedAt,
     stoppedAt: e.stoppedAt,
@@ -280,7 +288,9 @@ app.get('/api/summary', auth, async (_req, res) => {
     ex.ok && execs.length
       ? {
         k: 'Last run',
-        v: `${execs[0].workflowData?.name || execs[0].workflowId} · ${execs[0].status || 'running'}`,
+        v: `${execs[0].workflowData?.name
+          || workflows.find((w) => String(w.id) === String(execs[0].workflowId))?.name
+          || execs[0].workflowId} · ${execs[0].status || 'running'}`,
       }
       : null,
     failed.length ? { k: 'Failed runs', v: `${failed.length} of the last ${execs.length}` } : null,
