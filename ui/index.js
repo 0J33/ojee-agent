@@ -58,6 +58,7 @@ const state = {
   odysseus: null,
   busy: null,
   error: null,
+  execWindow: null,
 };
 
 /** Never throws: a section that cannot load says so, in place. */
@@ -192,10 +193,19 @@ function viewWorkflows() {
         : el('p', { class: 'meta' }, 'n8n has no workflows.')),
 
     el('section', { class: 'panel stack' },
-      el('h3', { class: 'h3' }, 'Recent runs'),
+      el('div', { class: 'ag-panel-head' },
+        el('h3', { class: 'h3' }, 'Recent runs'),
+        // Say the window, so an empty list reads as "nothing lately" rather
+        // than "this is broken".
+        state.execWindow
+          ? el('span', { class: 'meta' }, `last ${state.execWindow} days`)
+          : null),
       execs.length
         ? el('div', { class: 'ag-list' }, execs.map(execRow))
-        : el('p', { class: 'meta' }, 'Nothing has run recently.')));
+        : el('p', { class: 'meta' },
+          state.execWindow
+            ? `Nothing has run in the last ${state.execWindow} days.`
+            : 'Nothing has run recently.')));
 }
 
 function viewOdysseus() {
@@ -289,6 +299,7 @@ async function refresh() {
   state.services = svc?.services || [];
   state.workflows = wf?.error ? { error: wf.error } : (wf?.workflows || []);
   state.executions = ex?.error ? [] : (ex?.executions || []);
+  state.execWindow = ex?.windowDays || null;
   state.odysseus = ody?.error ? { configured: true, up: false, error: ody.error } : ody;
   render();
 }

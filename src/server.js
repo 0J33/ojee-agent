@@ -34,6 +34,16 @@ const CODE_AGENT_URL = (process.env.CODE_AGENT_URL || '').replace(/\/+$/, '');
 const CODE_AGENT_TOKEN = process.env.CODE_AGENT_TOKEN || '';
 
 /**
+ * How far back "recent runs" goes.
+ *
+ * n8n keeps executions until its own pruning removes them, so the list
+ * otherwise reaches back to whenever that was and a run from March sits next
+ * to one from this morning looking equally current. Nothing is deleted here —
+ * this is a view, and n8n remains the record.
+ */
+const EXEC_WINDOW_DAYS = Number(process.env.N8N_EXEC_DAYS || 30);
+
+/**
  * The containers this module is responsible for.
  *
  * Deliberately a list, not "every container on the host": fleet shows all of
@@ -191,7 +201,13 @@ app.get('/api/n8n/executions', auth, async (_req, res) => {
   ]);
   if (!r.ok) return res.status(502).json({ error: n8nWhy(r.reason, r.detail), reason: r.reason });
   const names = new Map((wf.ok ? wf.data.data || [] : []).map((w) => [String(w.id), w.name]));
-  const executions = (r.data.data || []).map((e) => ({
+  const cutoff = Date.now() - EXEC_WINDOW_DAYS * 86400_000;
+  const executions = (r.data.data || []).filter((e) => {
+    const t = Date.parse(e.startedAt);
+    // A run with no parseable timestamp is kept: dropping it would hide
+    // something that may well be current.
+    return !Number.isFinite(t) || t >= cutoff;
+  }).map((e) => ({
     id: e.id,
     workflowId: e.workflowId,
     workflowName: e.workflowData?.name || names.get(String(e.workflowId)) || null,
@@ -200,7 +216,7 @@ app.get('/api/n8n/executions', auth, async (_req, res) => {
     stoppedAt: e.stoppedAt,
     mode: e.mode,
   }));
-  return res.json({ executions });
+  return res.json({ executions, windowDays: EXEC_WINDOW_DAYS });
 });
 
 app.post('/api/n8n/workflows/:id/:action', auth, async (req, res) => {
@@ -284,7 +300,11 @@ app.get('/api/summary', auth, async (_req, res) => {
 
   const workflows = wf.ok ? (wf.data.data || []) : [];
   const active = workflows.filter((w) => w.active).length;
-  const execs = ex.ok ? (ex.data.data || []) : [];
+  const cutoff = Date.now() - EXEC_WINDOW_DAYS * 86400_000;
+  const execs = (ex.ok ? (ex.data.data || []) : []).filter((e) => {
+    const t = Date.parse(e.startedAt);
+    return !Number.isFinite(t) || t >= cutoff;
+  });
   const failed = execs.filter((e) => e.status === 'error' || e.status === 'failed');
 
   const facts = [
