@@ -1,544 +1,62 @@
-/* ------------------------------------------------------------------
-   EVERY selector here is scoped to .ag-grid, this module's own root.
+/* ============================================================
+   ojee-agent — module styles.
 
-   The stylesheet is injected once and never removed, so anything defined
-   at global scope keeps applying after you navigate AWAY from the module.
-   It redefined nine names the design system already owns — btn, gauge,
-   grid, hudbar, panel, panel-head, skeleton, toast, toast-stack — plus
-   html/body itself, so visiting Agent silently restyled the rest of the
-   console: the HUD strip collapsed to 28px and rendered as overlapping
-   text, body picked up overflow:hidden, and Settings grew a table that
-   scrolled.
+   Same surface language as the rest of the console, stated once:
 
-   Scoping is mechanical and total on purpose. A module cannot be trusted
-   to remember which class names are shared, and that list grows every
-   time the design system does.
-   ------------------------------------------------------------------ */
+     a CONTAINER is `.panel`   (the design system's surface)
+     a ROW is `.ag-row`        (transparent, separated by a hairline)
+     a STATUS is `.dot`        (the design system's, not a second one)
 
-/* The legacy alias layer that used to live here is gone. It mapped 40 names
-   from the retired agent.ojee.net palette (--text, --border, --bg-elev-2,
-   --sp-4, --r-md …) onto ojee-ui's tokens so this stylesheet could keep
-   speaking the old vocabulary. It worked, but it meant agent was the one
-   module whose CSS you could not read against the design system without a
-   translation table — and a token this sheet invented (--accent-dark) sat
-   among them looking equally official. The selectors now name ojee-ui's
-   tokens directly.
+   Nothing inside a panel paints its own background, so a row tint
+   means something — it is the only background in play.
 
-   .toast-stack was in the same selector because toasts render into
-   document.body, outside the module root. */
-.ag-grid, .ag-grid .toast-stack {
-  --accent-dark: var(--chart-4);
-}
+   Every selector is prefixed. A module's stylesheet loads into the
+   console's document alongside every other module's, so a bare
+   `.card` or a `*` rule would quietly restyle someone else's page.
+   ============================================================ */
 
-/* ─── Base reset ───────────────────────────────────────────────────────── */
-/* box-sizing and the tap highlight only.
-   This used to also set `margin: 0; padding: 0` on every descendant. A
-   universal selector inside .ag-grid scores higher than any single-class
-   design-system rule, so every shared component agent borrowed — .panel,
-   .btn, .stat — arrived with its padding stripped and had to be re-padded
-   locally. That is the mechanism by which this module kept diverging: not a
-   decision, a reset. Anything that genuinely needs zeroing says so itself. */
-.ag-grid * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-.ag-grid h1, .ag-grid h2, .ag-grid h3, .ag-grid h4, .ag-grid p,
-.ag-grid ul, .ag-grid ol, .ag-grid figure { margin: 0; }
-.ag-grid ul, .ag-grid ol { padding: 0; }
-.ag-grid *::before, .ag-grid *::after { box-sizing: border-box; }
+.ag-verdict {
+  display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap;
+  padding: var(--s-3);
+  background: var(--panel); border: 1px solid var(--line-2);
+}
+.ag-verdict strong { font-family: var(--mono); font-size: 0.82rem; color: var(--ink); }
 
-/* `:not(.btn)` matters. An element selector inside .ag-grid scores (0,1,1)
-   and beats .btn / .btn--ghost / .btn--danger at (0,1,0), so these resets
-   were stripping the border, background and colour off every design-system
-   button in the module — ghost buttons rendered as bare text and the danger
-   button was not red. Bare <button>s still get the reset; .btn is left to
-   the design system that owns it. */
-.ag-grid input, .ag-grid textarea, .ag-grid select,
-.ag-grid button:not(.btn) { font-family: inherit; font-size: inherit; color: inherit; outline: none; }
-.ag-grid button:not(.btn) { cursor: pointer; background: none; border: none; }
-.ag-grid .btn { font-family: var(--mono); cursor: pointer; }
-.ag-grid a { color: var(--accent); text-decoration: none; }
-.ag-grid .muted { color: var(--dim); }
-.ag-grid .faint { color: var(--dim); }
-.ag-grid .mono { font-family: var(--mono); }
+.ag-panel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); }
+.ag-list { display: grid; }
 
-/* ─── Login ────────────────────────────────────────────────────────────── */
-.ag-grid .login-wrap {
-  display: flex; align-items: center; justify-content: center;
-  min-height: 100vh; padding: var(--s-4);
-  padding-top: calc(var(--s-4) + env(safe-area-inset-top));
-  padding-bottom: calc(var(--s-4) + env(safe-area-inset-bottom));
+.ag-row {
+  display: grid; align-items: center; gap: var(--s-2);
+  width: 100%; padding: 9px 0; min-height: 40px;
+  border-bottom: 1px solid var(--line-2);
+  color: var(--ink-2); font-family: var(--mono); font-size: 0.72rem;
 }
-.ag-grid .login-box {
-  display: flex; flex-direction: column; align-items: center; gap: var(--s-3);
-  padding: var(--s-5) var(--s-4);
-  background: var(--chrome-surface);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid var(--line-strong);
-  border-radius: 0;
-  width: 100%; max-width: 360px;
-}
-.ag-grid .login-logo { width: 48px; height: 48px; }
-.ag-grid .login-title {
-  font-size: 1.1rem; font-weight: 700; letter-spacing: 6px;
-  background: linear-gradient(180deg, var(--ink) 30%, var(--dim));
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-}
-.ag-grid .login-input {
-  width: 100%; padding: 12px 14px;
-  background: var(--bg-1);
-  border: 1px solid var(--line-strong);
-  border-radius: 0;
-  font-size: 16px; min-height: 44px;
-  transition: border-color 120ms;
-}
-.ag-grid .login-input:focus { border-color: var(--accent); }
-.ag-grid .login-btn {
-  width: 100%; padding: 12px; min-height: 44px;
-  background: var(--accent); color: #001619;
-  border: none; border-radius: 0;
-  font-size: 0.85rem; font-weight: 700; letter-spacing: 1.5px;
-  transition: background 120ms;
-}
-.ag-grid .login-btn:hover { background: var(--accent); }
-.ag-grid .login-err { color: var(--err); font-size: 0.78rem; text-align: center; }
+.ag-row:last-child { border-bottom: 0; }
+.ag-row-name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-row .meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-row.is-bad { background: var(--err-wash); box-shadow: inset 2px 0 0 var(--err); padding-inline: var(--s-2); }
 
-/* ─── App shell ────────────────────────────────────────────────────────── */
-.ag-grid .dash {
-  height: 100dvh;
-  display: flex; flex-direction: column;
-  padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
-  overflow: hidden;
-}
-.ag-grid .header {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: var(--s-2) var(--s-3);
-  border-bottom: 1px solid var(--line);
-  flex-shrink: 0;
-  background: rgba(10, 10, 14, 0.7);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  z-index: 5;
-}
-.ag-grid .brand-wrap { display: flex; align-items: center; gap: var(--s-2); min-width: 0; }
-.ag-grid .brand-icon { width: 24px; height: 24px; flex-shrink: 0; }
-.ag-grid .brand {
-  font-family: var(--mono);
-  font-size: 0.95rem; font-weight: 900; letter-spacing: 3px;
-  color: var(--ink);
-}
-.ag-grid .header-right { display: flex; align-items: center; gap: var(--s-2); flex-shrink: 0; }
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
+/* Column shapes per list; the row itself is always .ag-row. */
+.ag-svc  { grid-template-columns: 8px minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 1fr) auto; }
+.ag-exec { grid-template-columns: 8px minmax(0, 1.4fr) minmax(0, 0.6fr) minmax(0, 0.6fr) auto; }
+.ag-wf   { grid-template-columns: 8px minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 0.6fr) auto; }
+.ag-kv   { grid-template-columns: 8px minmax(0, 1fr) minmax(0, 1.4fr); }
 
-/* ─── Grid ─────────────────────────────────────────────────────────────── */
-.ag-grid .grid {
-  display: grid;
-  grid-template-columns: 1.05fr 0.95fr 0.95fr 1.4fr;
-  gap: var(--s-2);
-  flex: 1;
-  padding: var(--s-2);
-  overflow: hidden;
-  min-height: 0;
+.ag-problem {
+  display: grid; gap: var(--s-2); justify-items: start;
+  padding: var(--s-3);
+  border: 1px dashed var(--line-strong);
+  color: var(--ink-2);
 }
+.ag-problem strong { color: var(--warn); font-family: var(--mono); font-size: 0.76rem; }
+.ag-problem p { margin: 0; }
 
-/* ─── Gauges ───────────────────────────────────────────────────────────── */
-.ag-grid .gauge-grid {
-  display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-2);
+@media (max-width: 720px) {
+  /* Four columns of metadata do not fit a phone. The name, the state and the
+     action are what you came for. */
+  .ag-svc, .ag-wf { grid-template-columns: 8px minmax(0, 1fr) auto; }
+  .ag-svc > :nth-child(3), .ag-svc > :nth-child(4) { display: none; }
+  .ag-wf > :nth-child(4) { display: none; }
+  .ag-exec { grid-template-columns: 8px minmax(0, 1fr) auto; }
+  .ag-exec > :nth-child(4) { display: none; }
 }
-.ag-grid .gauge {
-  display: flex; flex-direction: column; align-items: center; gap: var(--s-1);
-  padding: var(--s-2) var(--s-2);
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: 0;
-  position: relative;
-  overflow: hidden;
-}
-.ag-grid .gauge > svg { width: 64px; height: 64px; }
-.ag-grid .gauge .gauge-track { stroke: var(--panel); }
-.ag-grid .gauge .gauge-fill { stroke: var(--accent); transition: stroke-dasharray 600ms ease, stroke 200ms; }
-.ag-grid .gauge.warn .gauge-fill { stroke: var(--warn); }
-.ag-grid .gauge.danger .gauge-fill { stroke: var(--err); }
-.ag-grid .gauge .gauge-text {
-  font-family: var(--mono);
-  font-size: 15px; font-weight: 600;
-  fill: var(--ink);
-}
-.ag-grid .gauge .gauge-text.with-temp { font-size: 13px; }
-.ag-grid .gauge .gauge-label {
-  font-size: 0.65rem; font-weight: 500; letter-spacing: 0.5px;
-  color: var(--dim);
-  text-transform: uppercase;
-}
-.ag-grid .gauge .gauge-sub {
-  font-size: 0.65rem; color: var(--dim);
-  font-family: var(--mono);
-}
-/* Temperature text rendered INSIDE the gauge SVG (below the percent) so it
-   reads as a native part of the gauge instead of a tacked-on badge. */
-.ag-grid .gauge-temp-text { font-family: var(--mono); font-size: 11px; font-weight: 500; fill: var(--dim); }
-.ag-grid .gauge-temp-text.warm { fill: var(--warn); }
-.ag-grid .gauge-temp-text.hot { fill: var(--err); }
-
-/* ─── System banner (uptime + os) ─────────────────────────────────────── */
-.ag-grid .sys-banner {
-  display: flex; align-items: center; gap: var(--s-3);
-  padding: var(--s-2) var(--s-2);
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: 0;
-  flex-wrap: wrap;
-}
-.ag-grid .sys-banner-item {
-  display: inline-flex; align-items: center; gap: 8px;
-  font-size: 0.72rem;
-}
-.ag-grid .sys-banner-item svg { color: var(--dim); flex-shrink: 0; }
-.ag-grid .sys-banner-item .k { color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; font-size: 0.62rem; }
-.ag-grid .sys-banner-item .v { color: var(--ink); font-family: var(--mono); font-size: 0.74rem; font-weight: 500; }
-.ag-grid .sparkline-fill { fill: var(--accent-03); stroke: none; }
-.ag-grid .sparkline-line { stroke: var(--accent); stroke-width: 1.5; fill: none; stroke-linejoin: round; stroke-linecap: round; }
-
-/* ─── Stat rows (compact) ─────────────────────────────────────────────── */
-.ag-grid .stat-list { display: flex; flex-direction: column; gap: 2px; }
-.ag-grid .stat-row {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 6px 0;
-  font-size: 0.78rem;
-}
-.ag-grid .stat-row + .stat-row { border-top: 1px solid var(--line); }
-.ag-grid .stat-label { color: var(--dim); font-weight: 500; }
-.ag-grid .stat-val { color: var(--ink); font-family: var(--mono); font-size: 0.74rem; text-align: right; }
-.ag-grid .stat-val.warn { color: var(--warn); }
-.ag-grid .stat-val.danger { color: var(--err); }
-.ag-grid .svc-action { color: var(--dim); padding: 4px; opacity: 0; transition: opacity 120ms, color 120ms; }
-.ag-grid .svc-action:hover { color: var(--accent); }
-
-/* ─── Action result toast ─────────────────────────────────────────────── */
-.ag-grid .toast-stack {
-  position: fixed; bottom: calc(var(--s-3) + env(safe-area-inset-bottom)); right: var(--s-3);
-  display: flex; flex-direction: column; gap: var(--s-2);
-  z-index: 1000;
-  pointer-events: none;
-  max-width: min(360px, calc(100vw - var(--s-5)));
-}
-.ag-grid .toast {
-  pointer-events: auto;
-  background: var(--chrome-surface);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid var(--line-strong);
-  border-radius: 0;
-  padding: var(--s-2) var(--s-3);
-  font-size: 0.8rem;
-  color: var(--ink);
-  display: flex; align-items: center; gap: var(--s-2);
-  animation: toastIn 200ms ease-out;
-}
-.ag-grid .toast.success { border-left: 3px solid var(--ok); }
-.ag-grid .toast.warn { border-left: 3px solid var(--warn); }
-.ag-grid .toast.danger { border-left: 3px solid var(--err); }
-.ag-grid .toast.info { border-left: 3px solid var(--accent); }
-@keyframes toastIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-/* ─── Pull progress ────────────────────────────────────────────────────── */
-.ag-grid .pull-box {
-  font-family: var(--mono);
-  font-size: 0.7rem; color: var(--dim);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 0;
-  padding: var(--s-2);
-  max-height: 140px;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-  line-height: 1.5;
-}
-.ag-grid .chip-model { background: var(--accent-03);            color: var(--accent); border: 1px solid var(--accent); }
-.ag-grid .chip-tool { background: rgba(120, 140, 180, 0.08);    color: #bcd;          border: 1px solid rgba(140, 170, 210, 0.22); }
-.ag-grid .chip-status { background: rgba(255, 180, 60, 0.08);     color: #f0c070;       border: 1px solid rgba(255, 180, 60, 0.25); }
-
-/* ─── Typing indicators ───────────────────────────────────────────────── */
-.ag-grid .typing-dots { display: inline-flex; gap: 4px; align-items: center; }
-.ag-grid .typing-dots span {
-  display: inline-block; width: 6px; height: 6px;
-  background: var(--accent); border-radius: 0;
-  opacity: 0.3; animation: typing-dot 1.3s infinite;
-}
-.ag-grid .typing-dots span:nth-child(2) { animation-delay: 0.18s; }
-.ag-grid .typing-dots span:nth-child(3) { animation-delay: 0.36s; }
-@keyframes typing-dot {
-  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
-  30% { opacity: 1; transform: translateY(-3px); }
-}
-.ag-grid .typing-cursor {
-  display: inline-block; margin-left: 1px;
-  color: var(--accent); animation: cursor-blink 1s step-end infinite;
-}
-@keyframes cursor-blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
-
-/* ─── Scrollbars ───────────────────────────────────────────────────────── */
-.ag-grid ::-webkit-scrollbar { width: 8px; height: 8px; }
-.ag-grid ::-webkit-scrollbar-track { background: transparent; }
-.ag-grid ::-webkit-scrollbar-thumb { background: var(--panel); border-radius: 0; border: 2px solid transparent; background-clip: padding-box; }
-.ag-grid ::-webkit-scrollbar-thumb:hover { background: var(--dim); background-clip: padding-box; border: 2px solid transparent; }
-@keyframes skeleton {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-/* ─── Bottom-tab nav (mobile only) ────────────────────────────────────── */
-.ag-grid .bottom-tabs {
-  display: none;
-  position: fixed; bottom: 0; left: 0; right: 0;
-  background: var(--chrome-surface);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border-top: 1px solid var(--line-strong);
-  padding: 6px var(--s-2) calc(6px + env(safe-area-inset-bottom));
-  z-index: 50;
-  justify-content: space-around;
-}
-.ag-grid .bottom-tab {
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 2px;
-  flex: 1; min-height: var(--hit);
-  font-size: 0.62rem; font-weight: 500;
-  color: var(--dim);
-  padding: 4px;
-  border-radius: 0;
-  transition: color 120ms, background 120ms;
-}
-.ag-grid .bottom-tab.active { color: var(--accent); }
-.ag-grid .bottom-tab svg { width: 20px; height: 20px; }
-
-/* ─── Tablet ───────────────────────────────────────────────────────────── */
-@media (max-width: 1100px) and (min-width: 701px) {
-  .ag-grid .grid { grid-template-columns: 1fr 1fr; gap: var(--s-2); }
-  .ag-grid .dash { overflow: auto; height: auto; min-height: 100dvh; }
-  .ag-grid > [data-panel] { max-height: 65vh; }
-}
-
-/* ─── Mobile ───────────────────────────────────────────────────────────── */
-@media (max-width: 700px) {
-  
-  .ag-grid .dash { overflow: auto; height: auto; min-height: 100dvh; }
-  
-  .ag-grid .header {
-    position: sticky; top: 0; z-index: 10;
-    padding: var(--s-2) var(--s-3);
-  }
-  .ag-grid .brand { font-size: 0.9rem; letter-spacing: 3px; }
-  .ag-grid .grid {
-    grid-template-columns: 1fr;
-    gap: var(--s-2);
-    padding: var(--s-2);
-    padding-bottom: calc(76px + env(safe-area-inset-bottom)); /* room for bottom-tabs */
-    overflow: visible;
-  }
-  /* This used to be `.ag-grid .panel { display: none }` + `.mobile-active`,
-     from when `.panel` meant one of the four view panels. `.panel` is the
-     design system's own component now — the stat tiles and service rows are
-     panels — so that rule hid every readout on the phone while leaving the
-     page height it occupied. The renderer builds only the active view, and
-     the `> [data-panel]` rules below scope the same intent to direct
-     children, so nothing has to be hidden by class here at all. */
-  .ag-grid > [data-panel] { max-height: none; overflow-y: visible; }
-  
-  
-  .ag-grid .panel-head { font-size: 0.72rem; }
-  .ag-grid .stat-row { font-size: 0.85rem; }
-  .ag-grid .stat-val { font-size: 0.78rem; }
-  .ag-grid .btn { min-height: 40px; font-size: 0.82rem; padding: 10px 12px; }
-  .ag-grid .btn--sm { min-height: 34px; font-size: 0.76rem; padding: 8px 10px; }
-  .ag-grid .svc-card { padding: var(--s-2); }
-  .ag-grid .svc-name { font-size: 0.9rem; }
-  .ag-grid .svc-meta { font-size: 0.78rem; }
-  .ag-grid .gauge { padding: var(--s-2); }
-  .ag-grid .gauge > svg { width: 72px; height: 72px; }
-  .ag-grid .bottom-tabs { display: flex; }
-  .ag-grid .toast-stack { left: var(--s-2); right: var(--s-2); bottom: calc(80px + env(safe-area-inset-bottom)); }
-}
-
-@media (max-width: 380px) {
-  .ag-grid .header-right { gap: var(--s-2); }
-  .ag-grid .gauge-grid { grid-template-columns: 1fr; }
-  .ag-grid .gauge > svg { width: 80px; height: 80px; }
-}
-
-@media (max-width: 900px) and (orientation: landscape) {
-  .ag-grid .grid { grid-template-columns: 1fr 1fr; }
-}
-
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   ojee-ui compliance layer — strict design-system enforcement.
-   Appended last so it wins over the rules above. Structure is unchanged;
-   this enforces the cyan-on-near-black, all-mono, zero-radius look.
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-/* all-mono body on the 18px dot-grid surface */
-
-/* zero-radius mandate — SVG (gauges, sparklines, icons) left circular */
-.ag-grid *:not(svg):not(svg *) { border-radius: 0 !important; }
-.ag-grid *:not(svg)::before, .ag-grid *:not(svg)::after { border-radius: 0 !important; }
-
-.ag-grid ::selection { background: var(--accent); color: #000; }
-.ag-grid a { color: var(--dim); }
-.ag-grid a:hover { color: var(--accent); }
-.ag-grid .login-btn { text-transform: uppercase; letter-spacing: 2px; font-family: var(--mono); }
-.ag-grid .login-btn:hover { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-
-/* inputs → accent focus + faint cyan tint */
-.ag-grid .login-input:focus {
-  border-color: var(--accent);
-  background: var(--accent-03);
-}
-
-/* brand → Major Mono logo with accent dot (nav-logo pattern) */
-.ag-grid .brand {
-  font-family: var(--pixel);
-  text-transform: lowercase;
-  letter-spacing: 0.04em;
-  font-weight: 400;
-  color: var(--ink);
-}
-.ag-grid .brand-dot { color: var(--accent); }
-.ag-grid .login-title {
-  font-family: var(--pixel);
-  text-transform: lowercase;
-  letter-spacing: 0.04em;
-  font-weight: 400;
-  background: none;
-  -webkit-text-fill-color: var(--ink);
-  color: var(--ink);
-}
-.ag-grid .login-title .brand-dot { -webkit-text-fill-color: var(--accent); color: var(--accent); }
-
-/* status chips → on-palette outlined squares */
-.ag-grid .chip-tool { background: var(--bg-2); color: var(--info); border-color: var(--line); }
-.ag-grid .chip-status { background: var(--bg-2); color: var(--warn); border-color: var(--line); }
-
-/* cyan scrollbar */
-.ag-grid ::-webkit-scrollbar { width: 10px; height: 10px; }
-.ag-grid ::-webkit-scrollbar-track { background: var(--bg); }
-.ag-grid ::-webkit-scrollbar-thumb { background: var(--accent); border: none; }
-.ag-grid ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
-
-/* gauges → match design-system .gauge exactly: dark track, butt caps,
-   accent fill with glow, threshold warn/err, mono value + hud label */
-.ag-grid .gauge .gauge-track { stroke: var(--bg-2); }
-.ag-grid .gauge .gauge-fill {
-  stroke: var(--accent);
-  stroke-linecap: butt;
-  filter: drop-shadow(0 0 4px rgba(0, 255, 255, 0.5));
-}
-.ag-grid .gauge.warn .gauge-fill { stroke: var(--warn); filter: drop-shadow(0 0 4px rgba(255, 215, 0, 0.4)); }
-.ag-grid .gauge.danger .gauge-fill { stroke: var(--err); filter: drop-shadow(0 0 4px rgba(255, 0, 0, 0.4)); }
-.ag-grid .gauge .gauge-text { fill: var(--ink); font-family: var(--mono); }
-.ag-grid .gauge .gauge-label { font-family: var(--hud); letter-spacing: 0.15em; }
-
-/* mobile header → de-cramp: tighter gaps, drop secondary text */
-@media (max-width: 700px) {
-  .ag-grid .header { padding: 10px 14px; gap: 8px; }
-  .ag-grid .brand { font-size: 0.92rem; letter-spacing: 0.02em; }
-  .ag-grid .brand-sub { display: none; }
-  .ag-grid .header-right { gap: 8px; }
-}
-
-/* ─── Drafting-sheet HUD chrome (ojee-ui drafting language) ───────────────
-   Top status strip + title-block footer + refined access gate, mirroring
-   the ojee.net home "drawing sheet". */
-.ag-grid .hudbar {
-  display: flex; align-items: center; gap: 22px;
-  height: 28px; padding: 0 var(--s-3);
-  border-bottom: 1px solid var(--line);
-  background: rgba(8, 8, 14, 0.92);
-  font-family: var(--hud); font-size: 0.58rem;
-  letter-spacing: 0.18em; text-transform: uppercase; color: var(--dim);
-  flex-shrink: 0; overflow-x: auto; white-space: nowrap; scrollbar-width: none;
-}
-.ag-grid .hudbar::-webkit-scrollbar { display: none; }
-.ag-grid .hudbar .seg { display: inline-flex; align-items: center; gap: 7px; flex: none; }
-.ag-grid .hudbar .seg b { color: var(--dim); font-weight: 400; }
-.ag-grid .hudbar .seg.live { color: var(--accent); }
-.ag-grid .hudbar .seg.live::before {
-  content: ''; width: 6px; height: 6px; flex: none;
-  background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 2s infinite;
-}
-.ag-grid .hudbar .seg.right { margin-left: auto; }
-
-.ag-grid .dash-titleblock {
-  display: grid; grid-template-columns: repeat(4, 1fr);
-  border-top: 1px solid var(--line); flex-shrink: 0;
-  background: rgba(8, 8, 14, 0.7);
-}
-.ag-grid .dash-titleblock .tb {
-  display: flex; flex-direction: column; gap: 3px;
-  padding: 6px var(--s-3); border-right: 1px solid var(--line); min-width: 0;
-}
-.ag-grid .dash-titleblock .tb:last-child { border-right: 0; }
-.ag-grid .dash-titleblock .tb .k {
-  font-family: var(--hud); font-size: 0.5rem;
-  letter-spacing: 0.16em; text-transform: uppercase; color: var(--dim);
-}
-.ag-grid .dash-titleblock .tb .v { font-size: 0.72rem; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ag-grid .dash-titleblock .tb .v.accent { color: var(--accent); }
-@media (max-width: 820px) { .ag-grid .dash-titleblock { display: none; } }
-
-.ag-grid .login-hud {
-  display: flex; align-items: center; gap: 14px; width: 100%;
-  padding-bottom: var(--s-2); margin-bottom: var(--s-1);
-  border-bottom: 1px solid var(--line);
-  font-family: var(--hud); font-size: 0.55rem;
-  letter-spacing: 0.16em; text-transform: uppercase; color: var(--dim);
-}
-.ag-grid .login-hud .live { color: var(--accent); display: inline-flex; align-items: center; gap: 6px; }
-.ag-grid .login-hud .live::before { content: ''; width: 5px; height: 5px; background: var(--accent); box-shadow: 0 0 6px var(--accent); }
-.ag-grid .login-hud .right { margin-left: auto; }
-.ag-grid .login-stamp {
-  display: inline-block; padding: 3px 9px; border: 1px solid var(--accent);
-  font-family: var(--hud); font-size: 0.5rem; letter-spacing: 0.2em; text-transform: uppercase;
-  color: var(--accent); transform: rotate(-4deg); margin-top: var(--s-1);
-}
-
-/* ─── module layout ───────────────────────────────────────────────────────
-   The shell owns the page; this owns the panel grid inside #view. On desktop
-   all four panels are visible at once, which is the point of a dashboard; the
-   shell's nav then just scrolls/marks. Below the breakpoint only the active
-   panel shows, because four stacked panels on a phone is a scroll marathon.
-   ──────────────────────────────────────────────────────────────────────── */
-.ag-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-  gap: 2px;
-  align-items: start;
-}
-@media (max-width: 860px) {
-  .ag-grid { grid-template-columns: 1fr; }
-  .ag-grid > [data-panel] { display: none; }
-  .ag-grid > [data-panel].mobile-active { display: flex; }
-}
-
-/* ---------- readout tiles ----------
-   The shape every other module uses: label, a big tabular number, a thin bar,
-   a sub-line. This panel used to draw circular ring gauges, which appear
-   nowhere else in the console — that single choice is most of why it read as
-   a different product inside the same frame. */
-.ag-grid .ag-tiles {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 2px;
-}
-/* Layout-only leftovers. Everything else that used to live here —
-   the list row, the chart card, the temperature tag and the square icon
-   button — moved into ojee-ui as .listrow / .chartcard / .vtag /
-   .btn--icon, because LOQ had grown its own copy of each. */
-.ag-grid .listrow .dot { align-self: center; }

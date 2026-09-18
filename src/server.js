@@ -1,249 +1,328 @@
 /**
- * ojee-agent — host stats, container control and a Claude Code agent surface.
+ * ojee-agent — the AI and automation module.
+ *
+ * What it is now: n8n's workflows, the Odysseus stack, and the services those
+ * two depend on. What it used to be: a host dashboard with CPU graphs, a list
+ * of every container on the box, and a whitelist of restart commands.
+ *
+ * That half is gone, and its absence is the point. Monitoring lives in
+ * ojee-fleet, which reads this machine directly rather than asking a service
+ * on it over HTTP for numbers already sitting in /proc. A module that both
+ * watched the host AND ran the automations was two modules wearing one name,
+ * and neither half could be understood without ignoring the other.
  *
  * Runs standalone or as an ojee-console module. Authentication is NOT here:
  * mounted, the console has already run three gates (tailnet, TOTP, device
- * trust) and asserts the caller in a signed X-Console-User header; standalone,
- * the tailnet is the boundary. A second password prompt in front of that adds
- * nothing but a thing to forget.
- *
- * SECURITY: this process mounts docker.sock and /:/host:ro. It is effectively
- * root for the actions whitelisted in ACTIONS. Do not expose it beyond a
- * tailnet, and read the README before deploying it anywhere else.
+ * trust); standalone, the tailnet is the boundary.
  */
 const express = require('express');
 const fetch = require('node-fetch');
-const si = require('systeminformation');
-const { exec, spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
+const { exec } = require('child_process');
 
 const PORT = process.env.PORT || 8080;
-const DASHBOARD_BASE_URL = (process.env.DASHBOARD_BASE_URL || 'https://agent.example.com').replace(/\/+$/, '');
-const DASHBOARD_HOST = (() => { try { return new URL(DASHBOARD_BASE_URL).host; } catch { return 'this server'; } })();
 const TIMEZONE = process.env.TIMEZONE || 'UTC';
+
+/* Where the pieces live. Each is optional: a deployment without Odysseus
+   should show a module without an Odysseus section, not a broken one. */
+const N8N_URL = (process.env.N8N_URL || 'http://n8n:5678').replace(/\/+$/, '');
+const N8N_API_KEY = process.env.N8N_API_KEY || '';
 const N8N_DOMAIN = process.env.N8N_DOMAIN || '';
-const OPENWEBUI_DOMAIN = process.env.OPENWEBUI_DOMAIN || '';
-const COUCHDB_DOMAIN = process.env.COUCHDB_DOMAIN || '';
+const ODYSSEUS_URL = (process.env.ODYSSEUS_URL || '').replace(/\/+$/, '');
 const ODYSSEUS_DOMAIN = process.env.ODYSSEUS_DOMAIN || '';
-const LOQ_SFTP_URL = process.env.LOQ_SFTP_URL || '';
+const COUCHDB_DOMAIN = process.env.COUCHDB_DOMAIN || '';
+const CODE_AGENT_URL = (process.env.CODE_AGENT_URL || '').replace(/\/+$/, '');
+const CODE_AGENT_TOKEN = process.env.CODE_AGENT_TOKEN || '';
+
+/**
+ * The containers this module is responsible for.
+ *
+ * Deliberately a list, not "every container on the host": fleet shows all of
+ * them, and a module that also showed all of them would be a second, slightly
+ * different answer to the same question — the kind of overlap where the two
+ * eventually disagree and you have to work out which one is lying.
+ */
+const STACK = [
+  { match: /^n8n$/, id: 'n8n', label: 'n8n', role: 'workflow engine' },
+  { match: /^odysseus[-_]?odysseus/, id: 'odysseus', label: 'Odysseus', role: 'agent' },
+  { match: /chromadb/, id: 'chromadb', label: 'ChromaDB', role: 'vector store' },
+  { match: /searxng/, id: 'searxng', label: 'SearXNG', role: 'search' },
+  { match: /ntfy/, id: 'ntfy', label: 'ntfy', role: 'notifications' },
+  { match: /^couchdb$/, id: 'couchdb', label: 'CouchDB', role: 'sync' },
+];
 
 const app = express();
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '1mb' }));
+app.disable('x-powered-by');
 
-// ─── Auth ─────────────────────────────────────────────────────────────────
-// Public-ish endpoint so the SPA can discover its configured domains
-// without having them hardcoded.  No auth — these are display URLs the
-// user already needs to type into a browser anyway.
-app.get('/api/config', (req, res) => {
-  res.json({
-    dashboardBaseUrl: DASHBOARD_BASE_URL,
-    n8nDomain: N8N_DOMAIN,
-    couchdbDomain: COUCHDB_DOMAIN,
-    odysseusDomain: ODYSSEUS_DOMAIN,
-    loqSftpUrl: LOQ_SFTP_URL,
-    timezone: TIMEZONE,
-  });
-});
-
-// The console authenticates upstream and signs the identity it asserts.
-// Standalone, the tailnet is the boundary. Either way there is nothing for
-// this middleware to check, so it only records who the caller is.
-const auth = (req, res, next) => {
+const auth = (req, _res, next) => {
   req.user = req.get('x-console-user') || 'standalone';
   next();
 };
 
-// ─── Stats ────────────────────────────────────────────────────────────────
-let lastNet = null, lastNetTime = 0;
-let lastDiskIO = null, lastDiskIOTime = 0;
-
-const readNvidiaSmi = () => new Promise((resolve) => {
-  exec('nvidia-smi --query-gpu=name,utilization.gpu,utilization.memory,memory.total,memory.used,temperature.gpu --format=csv,noheader,nounits', { timeout: 3000 }, (err, stdout) => {
-    if (err || !stdout.trim()) return resolve(null);
-    const [name, util, memUtil, memTotal, memUsed, temp] = stdout.trim().split('\n')[0].split(',').map(s => s.trim());
-    resolve({
-      model: name,
-      vendor: 'NVIDIA',
-      vram_mb: parseInt(memTotal, 10) || 0,
-      vram_used_mb: parseInt(memUsed, 10) || 0,
-      util: parseInt(util, 10),
-      mem_util: parseInt(memUtil, 10),
-      temp: parseInt(temp, 10)
-    });
-  });
+const execP = (cmd, timeout = 6000) => new Promise((resolve) => {
+  exec(cmd, { timeout }, (err, stdout) => resolve(stdout || ''));
 });
 
-// Parse /proc/diskstats (mounted via /host) to compute real host disk I/O.
-// Columns: major minor name reads_completed reads_merged sectors_read read_ms
-//   writes_completed writes_merged sectors_written write_ms ...
-// Sector size is almost always 512 bytes. Sum over real block devices (sdX, nvmeXnY).
-const readHostDiskIO = () => {
-  try {
-    const raw = fs.readFileSync('/host/proc/diskstats', 'utf8');
-    let totalReadSectors = 0, totalWriteSectors = 0;
-    for (const line of raw.split('\n')) {
-      const parts = line.trim().split(/\s+/);
-      if (parts.length < 11) continue;
-      const name = parts[2];
-      if (!/^(sd[a-z]+|nvme\d+n\d+|vd[a-z]+|mmcblk\d+)$/.test(name)) continue;
-      totalReadSectors += parseInt(parts[5], 10) || 0;
-      totalWriteSectors += parseInt(parts[9], 10) || 0;
-    }
-    return { r_bytes: totalReadSectors * 512, w_bytes: totalWriteSectors * 512 };
-  } catch { return null; }
-};
-app.get('/api/stats', auth, async (req, res) => {
-  try {
-    const [cpu, mem, load, os, disk, temp, net, gpuNvidia] = await Promise.all([
-      si.cpu(), si.mem(), si.currentLoad(), si.osInfo(),
-      si.fsSize(), si.cpuTemperature(), si.networkStats(),
-      readNvidiaSmi()
-    ]);
-    const diskIOSnap = readHostDiskIO();
-    const now = Date.now();
-    const primary = net.find(n => n.iface === 'wlo1') || net[0] || {};
-    let rxPerS = 0, txPerS = 0;
-    if (lastNet && lastNetTime) {
-      const dt = (now - lastNetTime) / 1000;
-      rxPerS = Math.max(0, (primary.rx_bytes - lastNet.rx_bytes) / dt);
-      txPerS = Math.max(0, (primary.tx_bytes - lastNet.tx_bytes) / dt);
-    }
-    lastNet = primary; lastNetTime = now;
+/* ── module contract ──────────────────────────────────────────────────── */
 
-    // Read host filesystem stats via /host mount (container's si.fsSize() only
-    // sees overlay mounts, which misses /home on separate partitions).
-    const hostFs = (p) => {
-      try {
-        const s = fs.statfsSync(p);
-        const size = s.blocks * s.bsize;
-        const free = s.bavail * s.bsize;
-        return { size, used: size - free, use: size ? ((size - free) / size) * 100 : 0 };
-      } catch { return null; }
+const VIEWS = [
+  { id: 'overview', label: 'Overview', icon: 'i-grid' },
+  { id: 'workflows', label: 'Workflows', icon: 'i-auto' },
+  { id: 'odysseus', label: 'Odysseus', icon: 'i-shield' },
+  { id: 'services', label: 'Services', icon: 'i-gauge' },
+];
+
+app.get('/module.json', (_req, res) => res.json({
+  id: process.env.MODULE_ID || 'agent',
+  name: process.env.MODULE_NAME || 'Agent',
+  version: '2.0.0',
+  icon: 'i-cpu',
+  views: VIEWS,
+  ui: '/ui/index.js',
+  health: '/api/health',
+  capabilities: ['summary'],
+}));
+
+app.get('/api/config', (_req, res) => res.json({
+  timezone: TIMEZONE,
+  links: [
+    N8N_DOMAIN ? { label: 'n8n', href: `https://${N8N_DOMAIN}` } : null,
+    ODYSSEUS_DOMAIN ? { label: 'Odysseus', href: `https://${ODYSSEUS_DOMAIN}` } : null,
+    COUCHDB_DOMAIN ? { label: 'CouchDB', href: `https://${COUCHDB_DOMAIN}` } : null,
+  ].filter(Boolean),
+  has: { n8n: !!N8N_API_KEY, odysseus: !!ODYSSEUS_URL, code: !!CODE_AGENT_URL },
+}));
+
+/* ── the stack's own containers ───────────────────────────────────────── */
+
+async function stackServices() {
+  const out = await execP('docker ps -a --format "{{.Names}}|{{.State}}|{{.Status}}"');
+  const seen = out.split('\n').filter(Boolean).map((l) => {
+    const [name, state, status] = l.split('|');
+    return { name, running: state === 'running', status };
+  });
+  return STACK.map((def) => {
+    const hit = seen.find((c) => def.match.test(c.name));
+    return {
+      id: def.id,
+      name: def.label,
+      role: def.role,
+      container: hit?.name || null,
+      // Absent and stopped are different states and the difference matters:
+      // one is a deployment that never included this piece, the other is a
+      // piece that died.
+      present: !!hit,
+      ok: !!hit?.running,
+      detail: hit?.status || 'not deployed',
     };
-    const rootDisk = hostFs('/host') || disk.find(d => d.mount === '/') || disk[0] || {};
-    const homeDisk = hostFs('/host/home');
-    // Delta for disk I/O per second
-    let readPerS = null, writePerS = null;
-    if (diskIOSnap) {
-      if (lastDiskIO && lastDiskIOTime) {
-        const dt = (now - lastDiskIOTime) / 1000;
-        readPerS = Math.max(0, Math.round((diskIOSnap.r_bytes - lastDiskIO.r_bytes) / dt));
-        writePerS = Math.max(0, Math.round((diskIOSnap.w_bytes - lastDiskIO.w_bytes) / dt));
-      }
-      lastDiskIO = diskIOSnap; lastDiskIOTime = now;
-    }
-    const gpuController = gpuNvidia;
-    res.json({
-      hostname: os.hostname,
-      os: `${os.distro} ${os.release}`,
-      uptime: si.time().uptime,
-      cpu: {
-        model: `${cpu.manufacturer} ${cpu.brand}`.trim(),
-        physical: cpu.physicalCores,
-        cores: cpu.cores,
-        avg: load.currentLoad,
-        load: [load.avgLoad || 0, 0, 0]
-      },
-      gpu: gpuController,
-      memory: {
-        total: mem.total,
-        used: mem.active,
-        percent: Math.round((mem.active / mem.total) * 100)
-      },
-      swap: { total: mem.swaptotal, used: mem.swapused },
-      disk: {
-        total: rootDisk.size,
-        used: rootDisk.used,
-        percent: Math.round(rootDisk.use || 0),
-        read_per_s: readPerS,
-        write_per_s: writePerS
-      },
-      home: homeDisk && homeDisk.size !== rootDisk.size ? {
-        total: homeDisk.size,
-        used: homeDisk.used,
-        percent: Math.round(homeDisk.use || 0)
-      } : null,
-      temps: [
-        temp.main != null ? { label: 'CPU Package', current: Math.round(temp.main) } : null
-      ].filter(Boolean),
-      network: {
-        sent_per_s: Math.round(txPerS),
-        recv_per_s: Math.round(rxPerS)
-      }
+  });
+}
+
+app.get('/api/services', auth, async (_req, res) => res.json({ services: await stackServices() }));
+
+app.post('/api/services/:id/restart', auth, async (req, res) => {
+  const svc = (await stackServices()).find((s) => s.id === req.params.id);
+  if (!svc) return res.status(404).json({ error: 'unknown service' });
+  if (!svc.container) return res.status(409).json({ error: `${svc.name} is not deployed here` });
+  // The container NAME comes from docker itself, never from the request — the
+  // request only picks which of our own services to act on.
+  const out = await execP(`docker restart ${JSON.stringify(svc.container)}`, 30_000);
+  return res.json({ ok: true, restarted: svc.container, out: out.trim().slice(0, 200) });
+});
+
+/* ── n8n ──────────────────────────────────────────────────────────────── */
+
+/**
+ * n8n's public API, wrapped so its failure modes come back as states rather
+ * than exceptions. The one that matters: an API key that n8n no longer
+ * accepts answers 401 to everything, and "no workflows" and "you are not
+ * allowed to ask" must not look the same on screen.
+ */
+async function n8n(pathname, opts = {}) {
+  if (!N8N_API_KEY) return { ok: false, reason: 'no-key' };
+  try {
+    const r = await fetch(`${N8N_URL}/api/v1${pathname}`, {
+      ...opts,
+      headers: { 'X-N8N-API-KEY': N8N_API_KEY, 'content-type': 'application/json', ...(opts.headers || {}) },
+      timeout: 8000,
     });
+    if (r.status === 401 || r.status === 403) return { ok: false, reason: 'bad-key' };
+    if (!r.ok) return { ok: false, reason: `http-${r.status}` };
+    return { ok: true, data: await r.json() };
   } catch (e) {
-    res.status(500).json({ error: String(e) });
+    return { ok: false, reason: 'unreachable', detail: e.message };
+  }
+}
+
+const N8N_REASONS = {
+  'no-key': 'No n8n API key is configured (set N8N_API_KEY).',
+  'bad-key': 'n8n rejected the API key — issue a new one in n8n under Settings → API.',
+  unreachable: 'n8n is not answering.',
+};
+const n8nWhy = (reason, detail) => N8N_REASONS[reason] || `n8n returned ${reason}${detail ? ` (${detail})` : ''}`;
+
+app.get('/api/n8n/workflows', auth, async (_req, res) => {
+  const r = await n8n('/workflows?limit=100');
+  if (!r.ok) return res.status(502).json({ error: n8nWhy(r.reason, r.detail), reason: r.reason });
+  const workflows = (r.data.data || []).map((w) => ({
+    id: w.id,
+    name: w.name,
+    active: !!w.active,
+    updatedAt: w.updatedAt,
+    tags: (w.tags || []).map((t) => t.name).filter(Boolean),
+  }));
+  return res.json({ workflows });
+});
+
+app.get('/api/n8n/executions', auth, async (_req, res) => {
+  const r = await n8n('/executions?limit=25&includeData=false');
+  if (!r.ok) return res.status(502).json({ error: n8nWhy(r.reason, r.detail), reason: r.reason });
+  const executions = (r.data.data || []).map((e) => ({
+    id: e.id,
+    workflowId: e.workflowId,
+    workflowName: e.workflowData?.name || null,
+    status: e.status || (e.finished ? 'success' : 'running'),
+    startedAt: e.startedAt,
+    stoppedAt: e.stoppedAt,
+    mode: e.mode,
+  }));
+  return res.json({ executions });
+});
+
+app.post('/api/n8n/workflows/:id/:action', auth, async (req, res) => {
+  const { id, action } = req.params;
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return res.status(400).json({ error: 'bad workflow id' });
+  if (action !== 'activate' && action !== 'deactivate') {
+    return res.status(400).json({ error: 'action must be activate or deactivate' });
+  }
+  const r = await n8n(`/workflows/${id}/${action}`, { method: 'POST' });
+  if (!r.ok) return res.status(502).json({ error: n8nWhy(r.reason, r.detail), reason: r.reason });
+  return res.json({ ok: true, id, active: action === 'activate' });
+});
+
+/* ── odysseus ─────────────────────────────────────────────────────────── */
+
+async function odysseus() {
+  if (!ODYSSEUS_URL) return { configured: false };
+  const probe = async (p) => {
+    try {
+      const r = await fetch(`${ODYSSEUS_URL}${p}`, { timeout: 6000, redirect: 'manual' });
+      // A redirect to a login page is a service that is up and guarding
+      // itself, not a service that is down.
+      if (r.status >= 300 && r.status < 400) return { ok: true, guarded: true, status: r.status };
+      if (!r.ok) return { ok: false, status: r.status };
+      const text = await r.text();
+      try { return { ok: true, data: JSON.parse(text) }; } catch { return { ok: true, data: null }; }
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  };
+  const [health, version] = await Promise.all([probe('/api/health'), probe('/api/version')]);
+  return {
+    configured: true,
+    up: !!health.ok,
+    status: health.data?.status || (health.ok ? 'up' : 'down'),
+    version: version.data?.version || version.data || null,
+    error: health.ok ? null : (health.error || `HTTP ${health.status}`),
+  };
+}
+
+app.get('/api/odysseus', auth, async (_req, res) => res.json(await odysseus()));
+
+/* ── the code agent ───────────────────────────────────────────────────── */
+
+app.get('/api/code', auth, async (_req, res) => {
+  if (!CODE_AGENT_URL) return res.json({ configured: false });
+  try {
+    const r = await fetch(`${CODE_AGENT_URL}/health`, {
+      timeout: 6000,
+      headers: CODE_AGENT_TOKEN ? { authorization: `Bearer ${CODE_AGENT_TOKEN}` } : {},
+    });
+    return res.json({ configured: true, up: r.ok, status: r.status });
+  } catch (e) {
+    return res.json({ configured: true, up: false, error: e.message });
   }
 });
 
-// ─── Services (docker + systemd) ──────────────────────────────────────────
-const execP = (cmd) => new Promise((resolve) => {
-  exec(cmd, { timeout: 5000 }, (err, stdout) => resolve(stdout || ''));
-});
+/* ── health and summary ───────────────────────────────────────────────── */
 
-app.get('/api/services', auth, async (req, res) => {
-  const compose = await execP('docker ps --format "{{.Names}}|{{.State}}|{{.Status}}"');
-  const svc = {};
-  compose.split('\n').filter(Boolean).forEach(l => {
-    const [name, state, status] = l.split('|');
-    svc[name] = { desc: name, active: state === 'running', status };
-  });
-  res.json(svc);
-});
-
-// ─── Actions (whitelisted, container-safe via docker.sock) ───────────────
-const ACTIONS = {
-  'restart-n8n': 'docker restart n8n',
-  'restart-dashboard': 'docker restart dashboard',
-  'restart-couchdb': 'docker restart couchdb',
-  'restart-odysseus': 'docker restart odysseus',
-  'compose-up': 'docker compose --project-directory /host-stack up -d',
-  'compose-down': 'docker compose --project-directory /host-stack down',
-};
-
-app.post('/api/action', auth, (req, res) => {
-  const cmd = ACTIONS[req.body.action];
-  if (!cmd) return res.status(400).json({ error: 'unknown action' });
-  exec(cmd, { timeout: 15000 }, (err, stdout, stderr) => {
-    res.json({ ok: !err, stdout, stderr: stderr || (err ? err.message : '') });
-  });
-});
-
-// ─── Module contract ──────────────────────────────────────────────────────
-const pkg = require('../package.json');
-
-app.get('/module.json', (req, res) => res.json({
-  id: 'agent',
-  name: 'Agent',
-  version: pkg.version,
-  views: [
-    { id: 'dashboard', label: 'Stats', icon: 'i-server' },
-    { id: 'services', label: 'Services', icon: 'i-grid' },
-    { id: 'actions', label: 'Actions', icon: 'i-cog' },
-  ],
-  ui: '/ui/index.js',
-  health: '/api/health',
-  capabilities: ['sse'],
-}));
-
-app.get('/api/health', async (req, res) => {
-  // Reports degraded rather than failing when docker is unreachable: stats
-  // still work, and the console shows the reason instead of hiding the module.
-  const docker = await execP('docker ps --format "{{.Names}}"');
-  const ok = docker.trim().length > 0;
+app.get('/api/health', async (_req, res) => {
+  const services = await stackServices();
+  const deployed = services.filter((s) => s.present);
+  const down = deployed.filter((s) => !s.ok);
   res.json({
-    ok,
-    reason: ok ? null : 'docker.sock unreachable — container controls will not work',
-    containers: docker.trim() ? docker.trim().split('\n').length : 0,
+    ok: true,
+    reason: down.length ? `${down.map((s) => s.name).join(', ')} stopped` : null,
+    services: deployed.length,
+    running: deployed.length - down.length,
   });
 });
 
-// ─── Static ───────────────────────────────────────────────────────────────
-app.use('/ui', express.static(path.join(__dirname, '..', 'ui'), {
+app.get('/api/summary', auth, async (_req, res) => {
+  const [services, wf, ex, ody] = await Promise.all([
+    stackServices(),
+    n8n('/workflows?limit=100'),
+    n8n('/executions?limit=25&includeData=false'),
+    odysseus(),
+  ]);
+  const deployed = services.filter((s) => s.present);
+  const stopped = deployed.filter((s) => !s.ok);
+
+  const workflows = wf.ok ? (wf.data.data || []) : [];
+  const active = workflows.filter((w) => w.active).length;
+  const execs = ex.ok ? (ex.data.data || []) : [];
+  const failed = execs.filter((e) => e.status === 'error' || e.status === 'failed');
+
+  const facts = [
+    wf.ok
+      ? { k: 'Workflows', v: `${active} active of ${workflows.length}` }
+      : { k: 'n8n', v: wf.reason === 'bad-key' ? 'key rejected' : wf.reason === 'no-key' ? 'no API key' : 'not answering' },
+    ex.ok && execs.length
+      ? {
+        k: 'Last run',
+        v: `${execs[0].workflowData?.name || execs[0].workflowId} · ${execs[0].status || 'running'}`,
+      }
+      : null,
+    failed.length ? { k: 'Failed runs', v: `${failed.length} of the last ${execs.length}` } : null,
+    ody.configured ? { k: 'Odysseus', v: ody.up ? (ody.status || 'up') : (ody.error || 'down') } : null,
+    stopped.length
+      ? { k: 'Stopped', v: stopped.map((s) => s.name).join(', ') }
+      : { k: 'Stack', v: `all ${deployed.length} up` },
+  ].filter(Boolean).slice(0, 4);
+
+  const alerts = [
+    ...stopped.map((s) => ({ text: `${s.name} is not running`, severity: 'err', view: 'services' })),
+    ...(wf.ok ? [] : [{ text: n8nWhy(wf.reason, wf.detail), severity: 'warn', view: 'workflows' }]),
+    ...(ody.configured && !ody.up ? [{ text: `Odysseus is not answering`, severity: 'warn', view: 'odysseus' }] : []),
+    ...(failed.length ? [{ text: `${failed.length} workflow run${failed.length === 1 ? '' : 's'} failed`, severity: 'warn', view: 'workflows' }] : []),
+  ];
+
+  res.json({
+    status: stopped.length ? 'err' : alerts.length ? 'warn' : 'ok',
+    headline: stopped.length
+      ? `${stopped.length} of ${deployed.length} services stopped`
+      : wf.ok
+        ? `${active} workflow${active === 1 ? '' : 's'} active${failed.length ? ` · ${failed.length} failed run${failed.length === 1 ? '' : 's'}` : ''}`
+        : 'automation stack up · n8n unreachable',
+    facts,
+    alerts: alerts.slice(0, 5),
+  });
+});
+
+/* ── static ───────────────────────────────────────────────────────────── */
+
+app.use('/ui', express.static(`${__dirname}/../ui`, {
   setHeaders: (res) => res.setHeader('cache-control', 'no-cache'),
 }));
-// Standalone shell — never requested when mounted in a console.
-app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));
+app.use(express.static(`${__dirname}/../public`, {
+  setHeaders: (res) => res.setHeader('cache-control', 'no-cache'),
+}));
 
-app.listen(PORT, '0.0.0.0', () => console.log(`dashboard listening on :${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+  // eslint-disable-next-line no-console
+  console.log(`ojee-agent (AI + automation) on :${PORT}`);
+  // eslint-disable-next-line no-console
+  console.log(`  n8n ${N8N_API_KEY ? N8N_URL : 'no API key'} · odysseus ${ODYSSEUS_URL || 'not configured'}`);
+});
+
+module.exports = app;

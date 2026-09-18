@@ -1,80 +1,99 @@
 # ojee-agent
 
-Host stats, container control, and a full Claude Code agent surface — in the browser, over a
-tailnet. Runs standalone or as an [ojee-console](https://github.com/0J33/ojee-console) module.
+The **AI and automation** module: n8n's workflows, the Odysseus stack, and the services those two
+run on.
 
-Extracted from the `agent.ojee.net` stack (now [ojee-home](https://github.com/0J33/ojee-home))
-when that repo was split so the home hub and the agent dashboard could be their own things.
-
----
-
-## What it does
-
-**Live host stats** — CPU (per-core load, temperature), GPU via `nvidia-smi`, RAM, swap, disk
-usage and real I/O read from `/proc/diskstats`, network throughput, uptime. Sparklines over a
-rolling 60-sample window.
-
-**Services** — every running container, with restart controls.
-
-**Actions** — a *whitelisted* command set (`ACTIONS` in `src/server.js`): restart individual
-containers, `compose up`, `compose down`. Whitelisted rather than free-form on purpose; see
-[Security](#security).
-
-**Claude Code agent** — the substantial part. A directory picker to choose where a session runs,
-concurrent sessions, streaming responses over SSE with tool calls rendered inline, a history
-browser across every project with tool-collapsing, rename, delete, and resume-from-history. It
-talks to a `code-agent` service on another machine over the tailnet; the dashboard proxies with a
-server-side token so the browser never holds it.
+Runs standalone or as an [ojee-console](https://github.com/0J33/ojee-console) module.
 
 ---
 
-## Standalone or mounted
+## What changed, and why
+
+This used to be a host dashboard — CPU graphs, memory bars, every container on the box, and a
+whitelist of restart commands for things it had nothing to do with. All of that is gone.
+
+Monitoring lives in [ojee-fleet](https://github.com/0J33/ojee-fleet), which reads the machine
+directly rather than asking a service *on* that machine, over HTTP, for numbers already sitting in
+`/proc`. A module that both watched the host **and** ran the automations was two modules wearing
+one name, and neither half could be understood without ignoring the other.
+
+What is left is one thing: the automation stack.
+
+---
+
+## What it shows
+
+**Overview** — whether the stack is up, how many workflows are active, what ran recently and what
+failed.
+
+**Workflows** — every n8n workflow, whether it is active, when it last ran and how that went, with
+activate/deactivate. Recent executions underneath.
+
+**Odysseus** — its health, its version, and the four containers it runs on.
+
+**Services** — the containers *this module is responsible for*: n8n, Odysseus, ChromaDB, SearXNG,
+ntfy, CouchDB. Deliberately a list rather than "every container on the host" — fleet shows all of
+them, and a second slightly-different answer to the same question is the kind of overlap where the
+two eventually disagree and you have to work out which one is lying.
+
+---
+
+## Failure modes, as states
+
+The failure that actually happens here is an n8n API key that n8n no longer accepts. It answers
+401 to everything, and **"no workflows" and "you are not allowed to ask" must not look the same on
+screen**. So the module distinguishes:
+
+| | |
+|---|---|
+| `no-key` | No API key is configured — set `N8N_API_KEY` |
+| `bad-key` | n8n rejected it — issue a new one under Settings → API |
+| `unreachable` | n8n is not answering at all |
+
+Each comes back as a sentence that says what to do, not "failed to load".
+
+Similarly, a container that is **absent** and one that is **stopped** are different states: one is
+a deployment that never included that piece, the other is a piece that died.
+
+And a redirect from Odysseus is a service that is up and guarding itself, not one that is down.
+
+---
+
+## Setup
 
 ```bash
 npm install
 npm start                     # http://localhost:8080
 ```
 
-Standalone it serves its own shell from `public/`. Mounted, the console proxies `/agent/*` and
-supplies the chrome; the same `ui/index.js` runs either way.
-
 | Variable | Meaning |
 |---|---|
-| `PORT` | default 8080 |
-| `CODE_AGENT_URL` / `CODE_AGENT_TOKEN` | the Claude Code service. Leave empty and the Code panel reports itself unavailable rather than erroring. |
-| `N8N_DOMAIN`, `COUCHDB_DOMAIN`, `ODYSSEUS_DOMAIN` | quick links only |
-| `LOQ_SFTP_URL` | an `sftp://` one-click for another machine |
-| `TIMEZONE` | IANA name |
+| `N8N_URL` | default `http://n8n:5678` |
+| `N8N_API_KEY` | n8n → Settings → API. Without it the workflow views say so. |
+| `ODYSSEUS_URL` | where Odysseus answers; omit and the section is absent |
+| `CODE_AGENT_URL` / `CODE_AGENT_TOKEN` | optional code-agent reachability probe |
+| `N8N_DOMAIN` / `ODYSSEUS_DOMAIN` / `COUCHDB_DOMAIN` | display links only |
+
+**Security:** this process talks to the Docker socket to restart its own stack's containers. The
+container *name* always comes from `docker ps`, never from the request — a request only picks
+which of this module's own services to act on. Do not expose it beyond a tailnet.
 
 ---
 
-## Security
+## API
 
-**This process mounts `docker.sock` and `/:/host:ro`.** That makes it effectively root for the
-whitelisted actions: anyone who reaches it can restart your stack and read any file on the host.
-
-It carries **no authentication of its own**, deliberately. Mounted, the console has already run
-three gates — tailnet membership, TOTP, device trust — and asserts the caller in a signed
-`X-Console-User` header. Standalone, the tailnet is the boundary. A password prompt in front of
-that would add a thing to forget, not a layer of security.
-
-The consequence is simple and worth stating plainly: **do not expose this outside a tailnet.**
-
----
-
-## Notes from the extraction
-
-- The UI is a **port**, not a rewrite. All 19 API routes and every code-agent feature survive.
-  Removed only what the console now owns: the password login and its JWT, the header/HUD/tab
-  chrome, and hash routing.
-- Its stylesheet used to declare `--bg`, `--accent`, `--warn` and `--info` at `:root`. Those are
-  ojee-ui token names, so at `:root` they silently overrode the design system for the whole page
-  — including the shell's own chrome — and froze the module on one palette. They are now scoped
-  to the module root and *derived* from ojee-ui tokens, so switching the console to the light
-  theme carries this module with it.
-- Radii are flattened to zero to match the system, with one exception: the loading skeleton for
-  the circular gauge stays round, because a square placeholder for a round thing visibly jumps
-  when the real gauge arrives.
+| | |
+|---|---|
+| `GET /module.json` | the console's manifest |
+| `GET /api/health` | is this service alive, and is its stack running |
+| `GET /api/summary` | status, headline, facts, alerts — the console's front page |
+| `GET /api/services` | this module's containers, with present/running distinguished |
+| `POST /api/services/:id/restart` | restart one of them |
+| `GET /api/n8n/workflows` | workflows, or a sentence explaining the refusal |
+| `GET /api/n8n/executions` | the last 25 runs |
+| `POST /api/n8n/workflows/:id/(activate\|deactivate)` | toggle one |
+| `GET /api/odysseus` | health and version |
+| `GET /api/code` | whether the code agent is reachable |
 
 ---
 
