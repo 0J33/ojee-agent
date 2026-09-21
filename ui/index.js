@@ -1,7 +1,8 @@
 /* ============================================================
    ojee-agent — the AI and automation module.
 
-   Four views over the automation stack: what is running, n8n's
+   Five views over the AI and automation stack: what is running,
+   the Claude Code sessions on the host (claude.js), n8n's
    workflows and their recent runs, Odysseus, and the stack's own
    containers.
 
@@ -12,6 +13,8 @@
    reads the machine directly rather than asking a service on it
    over HTTP for numbers already sitting in /proc.
    ============================================================ */
+
+import { mountClaude, routeClaude, unmountClaude } from './claude.js';
 
 const el = (tag, attrs = {}, ...kids) => {
   const n = document.createElement(tag);
@@ -48,6 +51,9 @@ const dot = (status) => el('span', {
 let ctx = null;
 let root = null;
 let timer = null;
+// The Claude view owns the page while it is open: its own data, its own
+// event stream, a live terminal. This module's render() stays out of it.
+let claudeOpen = false;
 
 const state = {
   view: 'overview',
@@ -311,7 +317,7 @@ function go(view) {
 }
 
 function render() {
-  if (!root) return;
+  if (!root || state.view === 'claude') return;
   root.replaceChildren();
   if (!state.services.length && state.workflows === null) {
     root.append(el('div', { class: 'stack-lg' },
@@ -342,19 +348,32 @@ export default {
       document.head.appendChild(link);
     }
 
-    render();
-    await refresh();
+    if (state.view === 'claude') {
+      claudeOpen = true;
+      await mountClaude(root, ctx);
+    } else {
+      render();
+      await refresh();
+    }
     // n8n's own state changes on its schedule, not ours; a minute is often
     // enough to see a run land without polling a workflow engine to death.
-    timer = setInterval(() => { if (!document.hidden) refresh(); }, 60_000);
+    timer = setInterval(() => { if (!document.hidden && state.view !== 'claude') refresh(); }, 60_000);
   },
 
   async setView(view) {
     state.view = view || 'overview';
+    if (state.view === 'claude') {
+      if (claudeOpen) routeClaude();
+      else { claudeOpen = true; await mountClaude(root, ctx); }
+      return;
+    }
+    if (claudeOpen) { unmountClaude(); claudeOpen = false; }
     render();
+    if (!state.services.length && state.workflows === null) await refresh();
   },
 
   async unmount() {
+    if (claudeOpen) { unmountClaude(); claudeOpen = false; }
     if (timer) clearInterval(timer);
     timer = null; root = null; ctx = null;
     state.services = []; state.workflows = null; state.executions = null;

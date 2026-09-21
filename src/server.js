@@ -1,9 +1,10 @@
 /**
  * ojee-agent — the AI and automation module.
  *
- * What it is now: n8n's workflows, the Odysseus stack, and the services those
- * two depend on. What it used to be: a host dashboard with CPU graphs, a list
- * of every container on the box, and a whitelist of restart commands.
+ * What it is now: unattended Claude Code sessions (through the host runner in
+ * claude-runner/), n8n's workflows, the Odysseus stack, and the services
+ * those depend on. What it used to be: a host dashboard with CPU graphs, a
+ * list of every container on the box, and a whitelist of restart commands.
  *
  * That half is gone, and its absence is the point. Monitoring lives in
  * ojee-fleet, which reads this machine directly rather than asking a service
@@ -15,6 +16,8 @@
  * mounted, the console has already run three gates (tailnet, TOTP, device
  * trust); standalone, the tailnet is the boundary.
  */
+const http = require('http');
+const path = require('path');
 const express = require('express');
 const fetch = require('node-fetch');
 const { exec } = require('child_process');
@@ -30,8 +33,12 @@ const N8N_DOMAIN = process.env.N8N_DOMAIN || '';
 const ODYSSEUS_URL = (process.env.ODYSSEUS_URL || '').replace(/\/+$/, '');
 const ODYSSEUS_DOMAIN = process.env.ODYSSEUS_DOMAIN || '';
 const COUCHDB_DOMAIN = process.env.COUCHDB_DOMAIN || '';
-const CODE_AGENT_URL = (process.env.CODE_AGENT_URL || '').replace(/\/+$/, '');
-const CODE_AGENT_TOKEN = process.env.CODE_AGENT_TOKEN || '';
+/* The Claude runner: a host service (claude-runner/ in this repo), because
+   sessions have to start in any folder on the machine and share the user's
+   own ~/.claude — neither of which a container can do. The CODE_AGENT_*
+   names are the ones the old code-agent used; they still work. */
+const CLAUDE_RUNNER_URL = (process.env.CLAUDE_RUNNER_URL || process.env.CODE_AGENT_URL || '').replace(/\/+$/, '');
+const CLAUDE_RUNNER_TOKEN = process.env.CLAUDE_RUNNER_TOKEN || process.env.CODE_AGENT_TOKEN || '';
 
 /**
  * How far back "recent runs" goes.
@@ -77,6 +84,7 @@ const execP = (cmd, timeout = 6000) => new Promise((resolve) => {
 
 const VIEWS = [
   { id: 'overview', label: 'Overview', icon: 'i-grid' },
+  { id: 'claude', label: 'Claude', icon: 'i-log' },
   { id: 'workflows', label: 'Workflows', icon: 'i-auto' },
   { id: 'odysseus', label: 'Odysseus', icon: 'i-shield' },
   { id: 'services', label: 'Services', icon: 'i-gauge' },
@@ -85,12 +93,12 @@ const VIEWS = [
 app.get('/module.json', (_req, res) => res.json({
   id: process.env.MODULE_ID || 'agent',
   name: process.env.MODULE_NAME || 'Agent',
-  version: '2.0.0',
+  version: '2.1.0',
   icon: 'i-cpu',
   views: VIEWS,
   ui: '/ui/index.js',
   health: '/api/health',
-  capabilities: ['summary'],
+  capabilities: ['summary', 'sse'],
 }));
 
 app.get('/api/config', (_req, res) => res.json({
@@ -100,7 +108,7 @@ app.get('/api/config', (_req, res) => res.json({
     ODYSSEUS_DOMAIN ? { label: 'Odysseus', href: `https://${ODYSSEUS_DOMAIN}` } : null,
     COUCHDB_DOMAIN ? { label: 'CouchDB', href: `https://${COUCHDB_DOMAIN}` } : null,
   ].filter(Boolean),
-  has: { n8n: !!N8N_API_KEY, odysseus: !!ODYSSEUS_URL, code: !!CODE_AGENT_URL },
+  has: { n8n: !!N8N_API_KEY, odysseus: !!ODYSSEUS_URL, claude: !!CLAUDE_RUNNER_URL },
 }));
 
 /* ── the stack's own containers ───────────────────────────────────────── */
@@ -259,20 +267,101 @@ async function odysseus() {
 
 app.get('/api/odysseus', auth, async (_req, res) => res.json(await odysseus()));
 
-/* ── the code agent ───────────────────────────────────────────────────── */
+/* ── the Claude runner ────────────────────────────────────────────────── */
 
-app.get('/api/code', auth, async (_req, res) => {
-  if (!CODE_AGENT_URL) return res.json({ configured: false });
-  try {
-    const r = await fetch(`${CODE_AGENT_URL}/health`, {
-      timeout: 6000,
-      headers: CODE_AGENT_TOKEN ? { authorization: `Bearer ${CODE_AGENT_TOKEN}` } : {},
-    });
-    return res.json({ configured: true, up: r.ok, status: r.status });
-  } catch (e) {
-    return res.json({ configured: true, up: false, error: e.message });
+/**
+ * Everything under /api/claude/* goes to the runner, with the runner's token
+ * added here — the browser never holds it. Hand-rolled on node:http for the
+ * same two reasons the console's own proxy is: an event stream must not be
+ * buffered, and a terminal is a WebSocket upgrade, which express never sees.
+ */
+function runnerRequest(req, res) {
+  if (!CLAUDE_RUNNER_URL) {
+    return res.status(503).json({ error: 'The Claude runner is not configured here (set CLAUDE_RUNNER_URL and CLAUDE_RUNNER_TOKEN).', reason: 'not-configured' });
   }
-});
+  const target = new URL(`/api${req.url}`, CLAUDE_RUNNER_URL);
+  const headers = {
+    accept: req.get('accept') || 'application/json',
+    authorization: `Bearer ${CLAUDE_RUNNER_TOKEN}`,
+  };
+  let body = null;
+  // Never a body on GET/HEAD/DELETE. express.json() leaves req.body as {} on
+  // those, and sending it made the runner read a body on the event stream's
+  // GET — after which Node reports the request closed and the stream was
+  // dropped after its first event.
+  if (!['GET', 'HEAD', 'DELETE'].includes(req.method)) {
+    body = Buffer.from(JSON.stringify(req.body ?? {}));
+    headers['content-type'] = 'application/json';
+    headers['content-length'] = body.length;
+  }
+  const up = http.request({
+    hostname: target.hostname, port: target.port, path: target.pathname + target.search, method: req.method, headers,
+  }, (r) => {
+    res.status(r.statusCode || 502);
+    for (const k of ['content-type', 'cache-control']) if (r.headers[k]) res.setHeader(k, r.headers[k]);
+    if (String(r.headers['content-type'] || '').includes('text/event-stream')) {
+      res.setHeader('x-accel-buffering', 'no');
+      res.flushHeaders();
+      res.socket?.setNoDelay(true);
+    }
+    r.pipe(res);
+  });
+  up.on('error', (e) => {
+    if (res.headersSent) return res.destroy();
+    res.status(502).json({ error: `The Claude runner is not answering (${e.code || e.message}). On the host: systemctl --user status ojee-claude`, reason: 'unreachable' });
+  });
+  // A closed tab must not leave the runner streaming into a dead socket.
+  res.on('close', () => { if (!up.destroyed) up.destroy(); });
+  up.end(body);
+}
+
+app.use('/api/claude', auth, runnerRequest);
+
+/** WebSocket upgrades for the terminal, forwarded with the runner's token. */
+function runnerUpgrade(req, socket, head) {
+  const m = /^\/api\/claude(\/(?:sessions|accounts)\/[^/?]+\/terminal)(\?.*)?$/.exec(req.url || '');
+  if (!m) return false;
+  if (!CLAUDE_RUNNER_URL) { socket.end('HTTP/1.1 503 Service Unavailable\r\n\r\n'); return true; }
+  const target = new URL(`/api${m[1]}${m[2] || ''}`, CLAUDE_RUNNER_URL);
+  const headers = { ...req.headers, host: target.host, authorization: `Bearer ${CLAUDE_RUNNER_TOKEN}` };
+  // The console's identity headers are for this module, not for the runner.
+  for (const k of Object.keys(headers)) if (k.startsWith('x-console-') || k === 'cookie') delete headers[k];
+  const up = http.request({ hostname: target.hostname, port: target.port, path: target.pathname + target.search, method: 'GET', headers });
+  up.on('upgrade', (res, upSocket, upHead) => {
+    const lines = [`HTTP/1.1 ${res.statusCode} ${res.statusMessage}`];
+    for (let i = 0; i < res.rawHeaders.length; i += 2) lines.push(`${res.rawHeaders[i]}: ${res.rawHeaders[i + 1]}`);
+    socket.write(`${lines.join('\r\n')}\r\n\r\n`);
+    if (upHead?.length) socket.write(upHead);
+    if (head?.length) upSocket.write(head);
+    upSocket.pipe(socket).pipe(upSocket);
+    const close = () => { socket.destroy(); upSocket.destroy(); };
+    socket.on('error', close);
+    upSocket.on('error', close);
+    socket.on('close', close);
+    upSocket.on('close', close);
+  });
+  up.on('response', (res) => {
+    socket.end(`HTTP/1.1 ${res.statusCode} ${res.statusMessage}\r\n\r\n`);
+  });
+  up.on('error', () => socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n'));
+  up.end();
+  return true;
+}
+
+/** The runner's one-line state for the front page. Never throws. */
+async function claudeSummary() {
+  if (!CLAUDE_RUNNER_URL) return { configured: false };
+  try {
+    const r = await fetch(`${CLAUDE_RUNNER_URL}/api/summary`, {
+      timeout: 3000,
+      headers: { authorization: `Bearer ${CLAUDE_RUNNER_TOKEN}` },
+    });
+    if (!r.ok) return { configured: true, up: false, error: `HTTP ${r.status}` };
+    return { configured: true, up: true, ...(await r.json()) };
+  } catch (e) {
+    return { configured: true, up: false, error: e.message };
+  }
+}
 
 /* ── health and summary ───────────────────────────────────────────────── */
 
@@ -289,11 +378,12 @@ app.get('/api/health', async (_req, res) => {
 });
 
 app.get('/api/summary', auth, async (_req, res) => {
-  const [services, wf, ex, ody] = await Promise.all([
+  const [services, wf, ex, ody, cc] = await Promise.all([
     stackServices(),
     n8n('/workflows?limit=100'),
     n8n('/executions?limit=25&includeData=false'),
     odysseus(),
+    claudeSummary(),
   ]);
   const deployed = services.filter((s) => s.present);
   const stopped = deployed.filter((s) => !s.ok);
@@ -307,7 +397,16 @@ app.get('/api/summary', auth, async (_req, res) => {
   });
   const failed = execs.filter((e) => e.status === 'error' || e.status === 'failed');
 
+  const ccNeeds = cc.up ? (cc.waiting || 0) + (cc.blocked || 0) + (cc.errors || 0) : 0;
   const facts = [
+    cc.configured
+      ? {
+        k: 'Claude',
+        v: !cc.up ? 'runner not answering'
+          : [`${cc.running} running`, ccNeeds ? `${ccNeeds} need${ccNeeds === 1 ? 's' : ''} you` : null, cc.paused ? `${cc.paused} paused` : null]
+            .filter(Boolean).join(' · '),
+      }
+      : null,
     wf.ok
       ? { k: 'Workflows', v: `${active} active of ${workflows.length}` }
       : { k: 'n8n', v: wf.reason === 'bad-key' ? 'key rejected' : wf.reason === 'no-key' ? 'no API key' : 'not answering' },
@@ -327,6 +426,12 @@ app.get('/api/summary', auth, async (_req, res) => {
   ].filter(Boolean).slice(0, 4);
 
   const alerts = [
+    ...(cc.up ? (cc.attention || []).map((x) => ({
+      text: `${x.title} ${x.state === 'waiting' ? 'needs your input' : x.state === 'blocked' ? 'is blocked' : 'hit an error'}`,
+      severity: x.state === 'error' ? 'err' : 'warn',
+      view: 'claude',
+    })) : []),
+    ...(cc.configured && !cc.up ? [{ text: 'The Claude runner is not answering', severity: 'warn', view: 'claude' }] : []),
     ...stopped.map((s) => ({ text: `${s.name} is not running`, severity: 'err', view: 'services' })),
     ...(wf.ok ? [] : [{ text: n8nWhy(wf.reason, wf.detail), severity: 'warn', view: 'workflows' }]),
     ...(ody.configured && !ody.up ? [{ text: `Odysseus is not answering`, severity: 'warn', view: 'odysseus' }] : []),
@@ -347,6 +452,12 @@ app.get('/api/summary', auth, async (_req, res) => {
 
 /* ── static ───────────────────────────────────────────────────────────── */
 
+// xterm.js for the Claude terminal, from node_modules — no build step, no
+// CDN. Same layout as ojee-remote's, so the two terminals load identically.
+for (const parts of [['@xterm', 'xterm', 'lib'], ['@xterm', 'xterm', 'css'], ['@xterm', 'addon-fit', 'lib']]) {
+  app.use('/vendor', express.static(path.join(__dirname, '..', 'node_modules', ...parts), { maxAge: '1h' }));
+}
+
 app.use('/ui', express.static(`${__dirname}/../ui`, {
   setHeaders: (res) => res.setHeader('cache-control', 'no-cache'),
 }));
@@ -354,11 +465,15 @@ app.use(express.static(`${__dirname}/../public`, {
   setHeaders: (res) => res.setHeader('cache-control', 'no-cache'),
 }));
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = http.createServer(app);
+server.on('upgrade', (req, socket, head) => {
+  if (!runnerUpgrade(req, socket, head)) socket.destroy();
+});
+server.listen(PORT, '0.0.0.0', () => {
   // eslint-disable-next-line no-console
   console.log(`ojee-agent (AI + automation) on :${PORT}`);
   // eslint-disable-next-line no-console
-  console.log(`  n8n ${N8N_API_KEY ? N8N_URL : 'no API key'} · odysseus ${ODYSSEUS_URL || 'not configured'}`);
+  console.log(`  n8n ${N8N_API_KEY ? N8N_URL : 'no API key'} · odysseus ${ODYSSEUS_URL || 'not configured'} · claude runner ${CLAUDE_RUNNER_URL || 'not configured'}`);
 });
 
 module.exports = app;

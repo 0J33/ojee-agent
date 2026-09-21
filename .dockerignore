@@ -1,0 +1,4 @@
+# The Claude runner runs on the host, not in this image.
+claude-runner
+node_modules
+.git

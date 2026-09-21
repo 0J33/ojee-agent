@@ -1,7 +1,7 @@
 {
   "name": "ojee-agent",
-  "version": "2.0.0",
-  "description": "The AI and automation module: n8n workflows, the Odysseus stack and the services they run on. Runs standalone or as an ojee-console module.",
+  "version": "2.1.0",
+  "description": "The AI and automation module: unattended Claude Code sessions, n8n workflows, the Odysseus stack and the services they run on. Runs standalone or as an ojee-console module.",
   "license": "MIT",
   "author": "ojee <https://ojee.net>",
   "repository": {
@@ -13,9 +13,12 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "test": "cd claude-runner && npm test"
   },
   "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "express": "^4.21.2",
     "node-fetch": "^2.7.0"
   }

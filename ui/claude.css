@@ -1,0 +1,228 @@
+/* ============================================================
+   ojee-agent — the Claude view's styles.
+
+   Same rules as agent.css, restated because this is where they
+   were broken three times before: every selector here is an
+   `ag-cl-` class this view invented. No `*`, no tag selectors,
+   no bare design-system class names. Containers, controls,
+   toggles, alerts and dots are ojee-ui's own (.panel, .btn,
+   .segctl, .togrow, .alert, .dot); this file only lays them out.
+
+   ojee-ui has no border radius. Nothing here adds one.
+   ============================================================ */
+
+.ag-cl-tabs { max-width: 520px; }
+
+.ag-cl-verdict .ag-cl-verdict-new { margin-left: auto; }
+.ag-cl-verdict .ag-cl-verdict-new .ic { width: 15px; height: 15px; }
+
+.ag-cl-list { display: grid; }
+
+/* A row is a button when it opens something; it keeps the list's hairline
+   rhythm rather than looking like a control. */
+.ag-cl-row {
+  display: grid; align-items: center; gap: var(--s-2);
+  width: 100%; min-height: 44px; padding: 9px 0;
+  background: transparent; border: 0; border-bottom: 1px solid var(--line-2);
+  color: var(--ink-2); font-family: var(--mono); font-size: 0.72rem; text-align: left;
+}
+.ag-cl-row:last-child { border-bottom: 0; }
+button.ag-cl-row { cursor: pointer; transition: var(--t); }
+button.ag-cl-row:hover { background: var(--accent-03); }
+.ag-cl-row.is-bad { background: var(--err-wash); box-shadow: inset 2px 0 0 var(--err); padding-inline: var(--s-2); }
+
+.ag-cl-srow { grid-template-columns: 8px minmax(0, 1fr) auto auto; }
+.ag-cl-need { grid-template-columns: 8px minmax(0, 1fr) auto; }
+.ag-cl-hrow { grid-template-columns: minmax(0, 1fr) auto; }
+.ag-cl-arow { grid-template-columns: 8px minmax(0, 1fr) auto; padding-block: 12px; }
+.ag-cl-ping { grid-template-columns: auto minmax(0, 1fr) auto; }
+.ag-cl-kv { grid-template-columns: minmax(0, 12rem) minmax(0, 1fr); }
+.ag-cl-kv > :last-child { color: var(--ink); overflow-wrap: anywhere; }
+
+.ag-cl-srow-main { display: grid; gap: 3px; min-width: 0; }
+.ag-cl-srow-title { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-cl-srow-sub {
+  font-size: 0.66rem; color: var(--dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ag-cl-srow-when { white-space: nowrap; }
+.ag-cl-need-q {
+  color: var(--ink-2); font-size: 0.7rem; line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  white-space: pre-wrap;
+}
+
+/* The state word. Colour repeats the dot; the word is what carries it. */
+.ag-cl-state {
+  font-family: var(--hud); font-size: 0.6rem; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--dim); white-space: nowrap;
+}
+.ag-cl-state--running, .ag-cl-state--starting { color: var(--accent); }
+.ag-cl-state--waiting, .ag-cl-state--blocked, .ag-cl-state--paused { color: var(--warn); }
+.ag-cl-state--error { color: var(--err); }
+.ag-cl-state--done, .ag-cl-state--idle { color: var(--ok); }
+
+.ag-cl-ended > summary { cursor: pointer; padding: var(--s-2) 0; }
+
+/* ── a session ──────────────────────────────────────────────── */
+
+.ag-cl-detail { gap: var(--s-2); }
+
+.ag-cl-head {
+  display: flex; align-items: flex-start; gap: var(--s-2); flex-wrap: wrap;
+  padding: var(--s-2) var(--s-3);
+  background: var(--panel); border: 1px solid var(--line-2);
+}
+.ag-cl-head-main { display: grid; gap: 6px; min-width: 0; flex: 1 1 260px; }
+.ag-cl-title {
+  justify-self: start; max-width: 100%;
+  padding: 0; background: transparent; border: 0; cursor: text;
+  font-family: var(--mono); font-size: 0.9rem; font-weight: 700; color: var(--ink); text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ag-cl-title:hover { color: var(--accent); }
+.ag-cl-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ag-cl-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+  padding: 3px 8px; border: 1px solid var(--line-2);
+  font-family: var(--mono); font-size: 0.64rem; color: var(--ink-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ag-cl-chip--path { color: var(--dim); max-width: 40ch; }
+.ag-cl-chip--btn { background: var(--panel); cursor: pointer; }
+.ag-cl-chip--btn:hover { border-color: var(--line-hover); color: var(--ink); }
+.ag-cl-head-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ag-cl-head-actions .ic, .ag-cl-term-bar .ic, .ag-cl-browser-bar .ic, .ag-cl-login-panel .ic { width: 15px; height: 15px; }
+
+.ag-cl-callouts { display: grid; gap: 2px; }
+.ag-cl-callouts:empty { display: none; }
+.ag-cl-q > span { display: grid; gap: 6px; }
+.ag-cl-hint { font-size: 0.66rem; }
+.ag-cl-pre { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
+
+.ag-cl-panes { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
+.ag-cl-pane-tabs { flex: 0 1 320px; }
+.ag-cl-pane-tabs .ic { width: 15px; height: 15px; }
+.ag-cl-term-bar { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.ag-cl-term-state { margin-right: var(--s-2); }
+
+/* The terminal fills the viewport rather than growing the page — the same
+   bound ojee-remote's Shell uses, so it never takes the scrollbar with it. */
+.ag-cl-body { display: flex; flex-direction: column; gap: 2px; min-height: 0; }
+.ag-cl-term {
+  height: calc(100dvh - 540px); min-height: 300px;
+  padding: var(--s-2) 6px 6px var(--s-2);
+  background: var(--bg-0); border: 1px solid var(--line-2);
+}
+.ag-cl-term .xterm { height: 100%; }
+.ag-cl-term .xterm-viewport { overflow-y: auto; }
+.ag-cl-keys {
+  display: flex; gap: 2px; padding: 6px 8px; overflow-x: auto;
+  background: var(--panel); border: 1px solid var(--line-2); scrollbar-width: none;
+}
+.ag-cl-keys::-webkit-scrollbar { display: none; }
+.ag-cl-keys .btn { flex: 0 0 auto; }
+.ag-cl-noterm { background: var(--panel); border: 1px solid var(--line-2); min-height: 240px; }
+
+.ag-cl-transcript {
+  display: grid; gap: 2px; align-content: start;
+  height: calc(100dvh - 540px); min-height: 300px; overflow-y: auto;
+  padding: var(--s-2); background: var(--panel); border: 1px solid var(--line-2);
+}
+.ag-cl-msg { display: grid; gap: 4px; padding: 8px 10px; font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2); }
+.ag-cl-msg--user { background: var(--tint-1); border-left: 2px solid var(--accent); color: var(--ink); }
+.ag-cl-msg--assistant { color: var(--ink); }
+.ag-cl-msg-who {
+  display: flex; gap: 8px; align-items: baseline;
+  font-family: var(--hud); font-size: 0.58rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim);
+}
+.ag-cl-msg--tool, .ag-cl-msg--result { grid-template-columns: auto minmax(0, 1fr); padding-block: 3px; color: var(--dim); }
+.ag-cl-msg--result { display: block; padding-left: 22px; }
+.ag-cl-msg--result > summary { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-cl-msg--result.is-bad > summary { color: var(--err); }
+.ag-cl-tool { color: var(--accent); }
+.ag-cl-tool-arg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-cl-msg--error { background: var(--err-wash); border-left: 2px solid var(--err); }
+.ag-cl-msg--note, .ag-cl-msg--command { padding-block: 2px; }
+.ag-cl-trunc { padding: 6px 10px; }
+
+.ag-cl-compose { display: grid; gap: 6px; }
+.ag-cl-input { min-height: 60px; }
+.ag-cl-compose-bar { display: flex; align-items: center; gap: var(--s-2); }
+.ag-cl-compose-note { flex: 1 1 auto; min-width: 0; }
+
+/* ── new session ────────────────────────────────────────────── */
+
+.ag-cl-cwdrow { display: flex; gap: 6px; align-items: stretch; }
+.ag-cl-cwdrow > .input { flex: 1 1 auto; min-width: 0; }
+.ag-cl-cwdrow > .btn { flex: none; white-space: nowrap; }
+
+.ag-cl-browser { display: grid; gap: var(--s-2); }
+.ag-cl-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; font-family: var(--mono); font-size: 0.72rem; }
+.ag-cl-crumb {
+  padding: 4px 6px; min-height: 30px; background: transparent; border: 1px solid transparent;
+  color: var(--ink-2); font: inherit; cursor: pointer;
+}
+.ag-cl-crumb:hover { border-color: var(--line-2); color: var(--ink); }
+.ag-cl-crumb[aria-current] { color: var(--ink); font-weight: 700; }
+.ag-cl-crumb-sep { color: var(--dim); }
+.ag-cl-browser-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ag-cl-hidden { margin-left: auto; font-size: 0.7rem; }
+.ag-cl-err { color: var(--err); }
+
+.ag-cl-dirs {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 2px;
+  max-height: 320px; overflow-y: auto;
+}
+.ag-cl-dir {
+  display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 10px;
+  background: var(--panel); border: 1px solid var(--line-2);
+  color: var(--ink-2); font-family: var(--mono); font-size: 0.72rem; text-align: left; cursor: pointer;
+  transition: var(--t);
+}
+.ag-cl-dir:hover { border-color: var(--line-hover); color: var(--ink); background: var(--accent-03); }
+.ag-cl-dir .ic { width: 16px; height: 16px; flex: none; color: var(--dim); }
+.ag-cl-dir > span:first-of-type { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-cl-git { font-family: var(--hud); font-size: 0.55rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); flex: none; }
+.ag-cl-recent { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+.ag-cl-prompt { min-height: 150px; }
+.ag-cl-opts { gap: var(--s-3); }
+.ag-cl-narrow { max-width: 280px; }
+.ag-cl-start { display: flex; align-items: center; justify-content: flex-end; gap: var(--s-3); flex-wrap: wrap; }
+
+/* ── accounts ───────────────────────────────────────────────── */
+
+.ag-cl-active {
+  margin-left: 8px; padding: 2px 6px; border: 1px solid var(--accent);
+  font-family: var(--hud); font-size: 0.55rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent);
+}
+.ag-cl-arow-status { font-size: 0.7rem; color: var(--ink-2); }
+.ag-cl-arow-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.ag-cl-arow-actions .ic { width: 15px; height: 15px; }
+
+.ag-cl-login:empty { display: none; }
+.ag-cl-login-link { justify-self: start; }
+.ag-cl-login-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.ag-cl-login-term:empty { display: none; }
+.ag-cl-login-term .ag-cl-term { height: 380px; min-height: 0; }
+
+.ag-cl-toggles { display: grid; gap: 2px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); }
+.ag-cl-tog { display: grid; gap: 4px; min-width: 0; }
+.ag-cl-tog-detail { font-family: var(--mono); font-size: 0.66rem; color: var(--dim); line-height: 1.45; text-transform: none; letter-spacing: 0; font-weight: 400; }
+
+@media (max-width: 720px) {
+  .ag-cl-tabs { max-width: none; }
+  /* Title, state and when are what a phone needs; the path and model sit
+     under the title already. */
+  .ag-cl-srow { grid-template-columns: 8px minmax(0, 1fr) auto; }
+  .ag-cl-srow > .ag-cl-srow-when { display: none; }
+  .ag-cl-arow { grid-template-columns: 8px minmax(0, 1fr); }
+  .ag-cl-arow > .ag-cl-arow-actions { grid-column: 2; justify-content: flex-start; }
+  .ag-cl-verdict .ag-cl-verdict-new { margin-left: 0; }
+  .ag-cl-head-actions { width: 100%; }
+  .ag-cl-term-bar { margin-left: 0; width: 100%; }
+  .ag-cl-term-state { margin-right: auto; }
+  .ag-cl-term, .ag-cl-transcript { height: calc(100dvh - 360px); min-height: 260px; }
+  .ag-cl-kv { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}
