@@ -345,10 +345,15 @@ a:hover { color: var(--accent); }
    ============================================================ */
 .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 
+/* Icons are Material Symbols Outlined, weight 400 — filled paths, not
+   strokes, so this fills rather than strokes. The outlined variant draws a
+   thin outline as a filled shape, which lands almost exactly where the
+   hand-drawn 1.5px square-cap set did; that similarity is why this pack was
+   chosen over a stroke-based one, which came out heavier and rounder.
+   Anything still drawn by hand must set fill/stroke on the element itself. */
 .ic {
   width: 16px; height: 16px; flex: none;
-  fill: none; stroke: currentColor;
-  stroke-width: 1.5; stroke-linecap: square; stroke-linejoin: miter;
+  fill: currentColor; stroke: none;
 }
 .ic--lg { width: 22px; height: 22px; }
 .ic--xl { width: 30px; height: 30px; }
@@ -1359,9 +1364,16 @@ body.app .nav    { position: sticky; top: calc(var(--hud-h) + env(safe-area-inse
    Hover-only, so never the sole carrier of information — pair with
    an aria-label or visible text. Disabled on touch layouts below.
    ============================================================ */
+/* The hover label draws on ::before, not ::after.
+   An element gets one of each, and ::after is already spoken for on the
+   controls that most want a label: .iconbtn and .btn--sm both use it to grow
+   an invisible 44px touch target. Putting the tooltip there too meant the two
+   rules fought over the same box — the label inherited `top: 50%` and
+   `width: var(--hit)` from the hit area and came out as a 44px sliver pinned
+   across the middle of the button with its text overflowing. */
 [data-tip] { position: relative; }
-[data-tip]:hover::after,
-[data-tip]:focus-visible::after {
+[data-tip]:hover::before,
+[data-tip]:focus-visible::before {
   content: attr(data-tip);
   position: absolute;
   bottom: calc(100% + 8px);
@@ -1375,6 +1387,8 @@ body.app .nav    { position: sticky; top: calc(var(--hud-h) + env(safe-area-inse
   background: var(--bg-0);
   color: var(--accent);
   border: 1px solid var(--accent);
+  /* A label is a label, never a click target. */
+  pointer-events: none;
   z-index: 10;
 }
 
@@ -1627,7 +1641,7 @@ body.app .nav    { position: sticky; top: calc(var(--hud-h) + env(safe-area-inse
   .toast { max-width: none; min-width: 0; }
 
   /* tooltips are hover-only — disable on touch layouts */
-  [data-tip]:hover::after { display: none; }
+  [data-tip]:hover::before { display: none; }
 }
 
 /* Segmented controls stack their glyph labels tighter on narrow phones. */
