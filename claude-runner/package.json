@@ -1,0 +1,20 @@
+{
+  "name": "ojee-claude-runner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Host half of the agent module's Claude view: unattended Claude Code sessions in tmux, with model fallback, account switching and Discord pings.",
+  "license": "MIT",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "node-pty": "^1.1.0",
+    "ws": "^8.21.3"
+  }
+}

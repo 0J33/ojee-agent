@@ -1,0 +1,29 @@
+# The tmux server that hosts every Claude Code session.
+#
+# Its own unit so that restarting or redeploying the runner never touches a
+# running session: the sessions are this unit's children, not the runner's.
+# The limits below are for ALL sessions together — this box also runs the
+# console, Caddy, n8n and the home hub, and a runaway build must not take
+# those down with it.
+#
+# Installed by claude-runner/deploy/install.sh (@ROOT@, @TMUX@ filled in).
+
+[Unit]
+Description=ojee-claude tmux server (hosts Claude Code sessions)
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=LANG=C.UTF-8
+ExecStart=@TMUX@ -L ojee-claude -f @ROOT@/deploy/tmux.conf -D
+ExecStop=@TMUX@ -L ojee-claude kill-server
+Restart=on-failure
+RestartSec=5
+MemoryHigh=8G
+MemoryMax=10G
+CPUWeight=50
+TasksMax=4096
+
+[Install]
+WantedBy=default.target

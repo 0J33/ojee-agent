@@ -1,0 +1,25 @@
+# The Claude runner: the API the agent module talks to, the hook socket, and
+# the loop that watches sessions, switches models and accounts, and pings.
+#
+# Restarting it is safe — sessions live in ojee-claude-tmux.service and the
+# runner re-attaches to them on start.
+#
+# Installed by claude-runner/deploy/install.sh (@ROOT@, @NODE@ filled in).
+
+[Unit]
+Description=ojee-claude runner (Claude Code sessions for the agent module)
+After=network-online.target tailscaled.service ojee-claude-tmux.service
+Wants=network-online.target ojee-claude-tmux.service
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/ojee-claude/env
+Environment=TMUX_MODE=systemd
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=@NODE@ @ROOT@/src/server.js
+# The tailnet address may not exist yet at boot; keep trying.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
