@@ -32,6 +32,9 @@ async function start({ tmux, accounts, config }, acct) {
     cols: 120,
     rows: 34,
   });
+  // Sessions keep a dead pane so a crash can be read; a login window has
+  // nothing worth keeping once its minute is up.
+  await tmux.run(['set-option', '-t', `=${n}`, 'remain-on-exit', 'off']).catch(() => {});
   return n;
 }
 
