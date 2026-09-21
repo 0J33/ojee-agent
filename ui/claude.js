@@ -915,15 +915,26 @@ function paintLogin(update) {
   const a = S.data.accounts.find((x) => x.id === S.login.id);
   const st = S.login.state || {};
   const code = el('input', { class: 'input', placeholder: 'Paste the code from the sign-in page', spellcheck: 'false', autocomplete: 'off' });
-  const status = st.error ? `Could not read the login: ${st.error}`
-    : !S.login.state ? 'Starting the login…'
-      : st.finished ? 'Logged in.'
-        : !st.running ? 'The login window has closed.'
-          : st.url ? (st.wantsCode ? 'Open the sign-in page, approve, then paste the code it shows.' : 'Open the sign-in page and approve.')
-            : 'Waiting for the sign-in link…';
+  const status = !S.login.state ? 'Starting the login…'
+    : st.finished ? 'Logged in.'
+      : st.failed ? `Login failed: ${st.error}. Start again and paste the whole code — it ends with a # part — from the page that link opens, not an older one.`
+        : st.error ? `Could not read the login: ${st.error}`
+          : !st.running ? 'The login window has closed.'
+            : st.url ? (st.wantsCode ? 'Open the sign-in page, approve, then paste the whole code it shows (including the part after #).' : 'Open the sign-in page and approve.')
+              : 'Waiting for the sign-in link…';
   const panel = el('section', { class: 'panel stack ag-cl-login-panel' },
     el('div', { class: 'ag-panel-head' }, el('h3', { class: 'h3' }, `Log in: ${a?.label || S.login.id}`),
-      el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: async () => { await post(`/accounts/${S.login.id}/login`, {}).catch(() => {}); } }, 'Restart')),
+      el('button', {
+        class: `btn btn--sm ${st.failed || (S.login.state && !st.running && !st.finished) ? '' : 'btn--ghost'}`,
+        type: 'button',
+        onclick: async () => {
+          await post(`/accounts/${S.login.id}/login`, {}).catch(() => {});
+          clearTimeout(S.login.timer);
+          S.login.state = null;
+          paintLogin();
+          pollLogin();
+        },
+      }, st.failed || (S.login.state && !st.running && !st.finished) ? 'Try again' : 'Restart')),
     el('p', { class: 'meta' }, status),
     st.url ? el('a', { class: 'btn btn--sm ag-cl-login-link', href: st.url, target: '_blank', rel: 'noreferrer noopener' }, svg('external'), 'Open the sign-in page') : null,
     st.running && !st.finished ? el('div', { class: 'ag-cl-cwdrow' }, code,

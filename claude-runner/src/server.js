@@ -469,12 +469,30 @@ function createRunner(overrides = {}) {
     const a = needAcct(req);
     if (a.dir) accounts.prepare(a);
     const name = await logins.start({ tmux, accounts, config }, a);
+    loginSeen.delete(a.id);
     watchLogin(a);
     res.json({ ok: true, tmux: name });
   }));
 
+  /**
+   * Whoever notices a finished login first — this poll or the watcher —
+   * re-reads the account. The watcher lives in memory and does not survive a
+   * runner restart; the page polling this does.
+   */
+  const loginSeen = new Set();
+  async function loginFinished(a) {
+    if (loginSeen.has(a.id)) return;
+    loginSeen.add(a.id);
+    const auth = await accounts.status(a);
+    if (auth.loggedIn) sessions.accountRestored();
+    sessions.emit('accounts');
+  }
+
   app.get('/api/accounts/:id/login', auth, wrap(async (req, res) => {
-    res.json(await logins.state({ tmux }, needAcct(req)));
+    const a = needAcct(req);
+    const st = await logins.state({ tmux }, a);
+    if (st.finished) await loginFinished(a);
+    res.json(st);
   }));
 
   app.post('/api/accounts/:id/login/code', auth, wrap(async (req, res) => {
@@ -497,9 +515,8 @@ function createRunner(overrides = {}) {
       if (st.finished || !st.running || Date.now() - started > 15 * 60_000) {
         clearInterval(t);
         loginWatch.delete(a.id);
-        const auth = await accounts.status(a);
-        if (auth.loggedIn) sessions.accountRestored();
-        sessions.emit('accounts');
+        if (st.finished) await loginFinished(a);
+        else { await accounts.status(a); sessions.emit('accounts'); }
       }
     }, 2000);
     loginWatch.set(a.id, t);

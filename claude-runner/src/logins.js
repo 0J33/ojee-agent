@@ -37,15 +37,22 @@ async function start({ tmux, accounts, config }, acct) {
 
 async function state({ tmux }, acct) {
   const n = name(acct);
-  if (!(await tmux.has(n))) return { running: false };
+  const pane = (await tmux.list()).find((p) => p.name === n);
+  if (!pane) return { running: false };
   const screen = await tmux.capture(n, { join: true, history: 200 });
   const url = (screen.match(/https:\/\/(?:claude\.ai|claude\.com|console\.anthropic\.com|platform\.claude\.com)\/\S+/g) || []).pop() || null;
+  const failed = /Login failed:?\s*(.*)/i.exec(screen) || (/Login exited with code [1-9]/.test(screen) ? [null, 'the login exited with an error'] : null);
+  const finished = !failed && /Login finished|Login successful|logged in as/i.test(screen);
+  // The claude process is gone once it prints its verdict; the pane lingers
+  // for a minute so the text can be read.
+  const done = pane.dead || /Login finished|Login exited with code/.test(screen);
   return {
-    running: true,
-    url,
-    wantsCode: /paste (?:the )?code|code here|authorization code/i.test(screen),
-    finished: /Login finished|Login successful|logged in as/i.test(screen),
-    failed: /Login exited with code|error|failed/i.test(screen) && !/Login finished/i.test(screen),
+    running: !done,
+    url: done ? null : url,
+    wantsCode: !done && /paste (?:the )?code|code here|authorization code/i.test(screen),
+    finished,
+    failed: !!failed,
+    error: failed ? (failed[1] || '').trim().slice(0, 200) || 'login failed' : null,
     screen: screen.trim().split('\n').slice(-14).join('\n'),
   };
 }
