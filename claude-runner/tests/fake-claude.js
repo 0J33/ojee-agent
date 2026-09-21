@@ -104,6 +104,16 @@ async function turn(prompt) {
     console.log('[question dialog]');
     return;
   }
+  if (/upsell/i.test(prompt)) {
+    // What 2.1.267 printed after a turn, in the same shape.
+    const reply = 'Here you go.';
+    write({ type: 'assistant', message: { model: opts.model, role: 'assistant', content: [{ type: 'text', text: reply }] } });
+    console.log(reply);
+    fire('Stop', { last_assistant_message: reply });
+    console.log('  Try the new fullscreen renderer?\n  ❯ 1. Yes, try it\n    2. Not now\n  Enter to confirm · Esc to cancel');
+    menu = true;
+    return;
+  }
   const reply = /finish/i.test(prompt) ? `All done.\n\nDONE: ${prompt}`
     : /block/i.test(prompt) ? 'I cannot get further.\n\nBLOCKED: needs the production password'
       : /question/i.test(prompt) ? 'I found two configs.\n\nShould I use the staging one?'
@@ -113,9 +123,22 @@ async function turn(prompt) {
   fire('Stop', { last_assistant_message: reply });
 }
 
+// While the menu is up, a line is an answer to it: Down then Enter is "Not now".
+let menu = false;
+function answerMenu(line) {
+  menu = false;
+  const choice = line.includes('\x1b[B') ? 'not now' : 'yes, try it';
+  write({ type: 'system', subtype: 'informational', content: `menu: ${choice}` });
+  process.stdout.write('\x1b[2J\x1b[H');
+  console.log(`(menu answered: ${choice})`);
+}
+
 let chain = Promise.resolve();
 if (opts.prompt) chain = chain.then(() => turn(opts.prompt));
 const rl = readline.createInterface({ input: process.stdin });
-rl.on('line', (line) => { if (line.trim()) chain = chain.then(() => turn(line.trim())); });
+rl.on('line', (line) => {
+  if (menu) { answerMenu(line); return; }
+  if (line.trim()) chain = chain.then(() => turn(line.trim()));
+});
 process.on('SIGTERM', () => { fire('SessionEnd', { reason: 'other' }); process.exit(143); });
 setInterval(() => {}, 1 << 30);

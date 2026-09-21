@@ -129,6 +129,12 @@ test('runner end to end', { skip: !haveTmux && 'no tmux' }, async (t) => {
     assert.equal(stateOf(id), 'waiting');
   });
 
+  await t.test('a notice menu after a turn is declined, not left for the next Enter', async () => {
+    await api('POST', `/api/sessions/${id}/message`, { text: 'show the upsell' });
+    await waitFor(() => /menu: not now/.test(fs.readFileSync(sessions.get(id).transcript, 'utf8')), 'menu declined', 10_000);
+    assert.doesNotMatch(fs.readFileSync(sessions.get(id).transcript, 'utf8'), /menu: yes/);
+  });
+
   await t.test('BLOCKED is recognised', async () => {
     await api('POST', `/api/sessions/${id}/message`, { text: 'block now' });
     await waitFor(() => stateOf(id) === 'blocked', 'blocked');

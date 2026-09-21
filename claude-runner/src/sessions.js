@@ -11,9 +11,10 @@
  *                (AskUserQuestion), and a notification. That is the timeline.
  *   transcript   the session's own JSONL: which model actually answered, and
  *                every failed request with a machine-readable reason.
- *   tmux         whether the process is still alive, and — only while it
- *                boots — the screen, to answer a trust prompt nobody is there
- *                to answer.
+ *   tmux         whether the process is still alive, and the screen for
+ *                exactly two things: prompts at startup nobody is there to
+ *                answer (folder trust), and notice menus between turns that
+ *                would otherwise take the next message's Enter.
  *
  * Switching a session's model or account never uses `/model` (tested: it
  * also saves that model as the user's default for every new session).
@@ -41,6 +42,17 @@ const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const continueText = (why) => `${why} Continue the task from where you left off.`;
+
+/**
+ * Claude Code shows the occasional notice as a menu after a turn — seen on
+ * 2.1.267: "Try the new fullscreen renderer? 1. Yes, try it  2. Not now".
+ * Unattended, it sits there, and the next message's Enter would pick "Yes".
+ * These are recognised by their footer (a question from AskUserQuestion says
+ * "Enter to select" instead) and answered with their own decline option.
+ * A menu with no decline option is left alone and reported as needing you.
+ */
+const MENU = /Enter to confirm/i;
+const DECLINE = /^\s*(?:❯\s*)?(?:\d+\.\s*)?(Not now|No thanks|No, thanks|Maybe later|Skip|Don['’]t show (?:this )?again|Dismiss|Remind me later)\b/i;
 
 /** A reply whose last line asks something is a question for the user. */
 function asksSomething(text) {
@@ -423,6 +435,8 @@ class Sessions extends EventEmitter {
           await this.choose(s, screen, /Yes,? I trust/i);
         } else if (/Bypass Permissions/i.test(screen) && /Yes,? I accept/i.test(screen)) {
           await this.choose(s, screen, /Yes,? I accept/i);
+        } else if (MENU.test(screen) && (await this.handleMenu(s, screen)) === 'dismissed') {
+          // a notice at startup, declined
         } else if (/Select login method|Please run \/login|Not logged in/i.test(screen)) {
           this.stopBootWatch(s);
           await this.onError(s, { kind: 'auth', text: 'Not logged in', at: Date.now() }, 'boot');
@@ -459,6 +473,20 @@ class Sessions extends EventEmitter {
     return true;
   }
 
+  /**
+   * Answer a notice menu with its decline option. Returns 'dismissed',
+   * 'unknown' (a menu we will not guess at), or null (no menu).
+   */
+  async handleMenu(s, screen = null) {
+    const text = screen ?? await this.tmux.capture(s.tmux);
+    if (!MENU.test(text)) return null;
+    if (text.split('\n').some((l) => DECLINE.test(l))) {
+      const ok = await this.choose(s, text, DECLINE);
+      if (ok) { await delay(400); return 'dismissed'; }
+    }
+    return 'unknown';
+  }
+
   /* ── talking to a session ───────────────────────────────────────────── */
 
   /**
@@ -486,6 +514,8 @@ class Sessions extends EventEmitter {
       // A message is a person saying "try now". Let it through.
       s.pausedUntil = null;
     }
+    // A notice menu would take the Enter meant for this message.
+    await this.handleMenu(s);
     // A pending question dialog would swallow the text; dismiss it first,
     // so the message becomes the answer.
     if (s.question) { await this.tmux.keys(s.tmux, 'Escape'); await delay(400); }
@@ -881,6 +911,19 @@ class Sessions extends EventEmitter {
     return this.relaunch(s, { account: pick.account, model: pick.model, prompt: continueText(note) });
   }
 
+  /**
+   * An account is usable again (logged back in, or its limits cleared): the
+   * sessions paused waiting for one should not sit out the rest of an hour.
+   */
+  accountRestored() {
+    let n = 0;
+    for (const s of this.all()) {
+      if (s.state === 'paused') { s.pausedUntil = Date.now(); n += 1; }
+    }
+    if (n) this.store.save();
+    return n;
+  }
+
   /* ── the periodic pass ──────────────────────────────────────────────── */
 
   async tick() {
@@ -917,6 +960,24 @@ class Sessions extends EventEmitter {
       if (s.state === 'paused' && s.pausedUntil && now >= s.pausedUntil && !this.busyOps.has(s.id)) {
         await this.resumePaused(s).catch((e) => this.log('resume', e.message));
         continue;
+      }
+
+      // Between turns, a notice menu may be sitting on the screen.
+      if (alive && ['idle', 'done', 'blocked', 'waiting', 'error'].includes(s.state) && !this.busyOps.has(s.id)) {
+        const screen = await this.tmux.capture(s.tmux);
+        const menu = await this.handleMenu(s, screen);
+        if (menu === 'dismissed') this.log('menu', `${s.id.slice(0, 8)}: declined a notice`);
+        else if (menu === 'unknown' && !s.question) {
+          const lines = screen.split('\n').filter((l) => l.trim());
+          const at = lines.findIndex((l) => MENU.test(l));
+          s.question = { text: lines.slice(Math.max(0, at - 6), at + 1).join('\n').trim(), at: Date.now(), screen: true };
+          this.setState(s, 'waiting', 'A prompt is open in the terminal');
+          this.notifier.send('needsInput', { session: s, text: s.question.text });
+        } else if (!menu && s.question?.screen) {
+          // Answered in the terminal.
+          s.question = null;
+          this.setState(s, 'idle', null);
+        }
       }
 
       const stallMs = (this.settings.stallMinutes || 20) * MINUTE;

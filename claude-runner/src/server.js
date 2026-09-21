@@ -428,6 +428,7 @@ function createRunner(overrides = {}) {
     const a = needAcct(req);
     a.limits = {};
     store.save();
+    sessions.accountRestored();
     sessions.emit('accounts');
     res.json(accounts.describe(a));
   }));
@@ -496,7 +497,8 @@ function createRunner(overrides = {}) {
       if (st.finished || !st.running || Date.now() - started > 15 * 60_000) {
         clearInterval(t);
         loginWatch.delete(a.id);
-        await accounts.status(a);
+        const auth = await accounts.status(a);
+        if (auth.loggedIn) sessions.accountRestored();
         sessions.emit('accounts');
       }
     }, 2000);
