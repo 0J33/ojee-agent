@@ -101,7 +101,14 @@ const STATE = {
 };
 // A plain .dot is the design system's dim one: nothing running, nothing wrong.
 const dot = (state) => el('span', { class: STATE[state]?.dot ? `dot dot--${STATE[state].dot}` : 'dot' });
-const stateTag = (state) => el('span', { class: `ag-cl-state ag-cl-state--${state}` }, STATE[state]?.label || state);
+/** The state word, plus how much is still running in the background. */
+const stateTag = (state, bg = null) => {
+  const n = bg ? (bg.subagents || 0) + (bg.shells || 0) : 0;
+  return el('span', { class: `ag-cl-state ag-cl-state--${state}`, title: n ? bgText(bg) : null },
+    STATE[state]?.label || state, n ? ` · ${n} bg` : '');
+};
+const bgText = (bg) => [bg.subagents ? `${bg.subagents} subagent${bg.subagents === 1 ? '' : 's'}` : null,
+  bg.shells ? `${bg.shells} command${bg.shells === 1 ? '' : 's'}` : null].filter(Boolean).join(', ') + ' in the background';
 
 const modelLabel = (id) => S.data?.models?.find((m) => m.id === id)?.label || id || '—';
 const acctLabel = (id) => S.data?.accounts?.find((a) => a.id === id)?.label || id || '—';
@@ -249,7 +256,7 @@ function sessionRow(s) {
       el('span', { class: 'ag-cl-srow-title' }, s.title || s.id.slice(0, 8)),
       el('span', { class: 'ag-cl-srow-sub' },
         shortPath(s.cwd), ' · ', modelLabel(s.model?.current), fell ? ' (fallback)' : '', ' · ', acctLabel(s.account))),
-    stateTag(s.state),
+    stateTag(s.state, s.background),
     el('span', { class: 'meta ag-cl-srow-when' }, ago(s.lastActivityAt)));
 }
 
@@ -351,7 +358,7 @@ function detailHead(s) {
     el('div', { class: 'ag-cl-head-main' },
       el('button', { class: 'ag-cl-title', type: 'button', title: 'Rename', onclick: () => rename(s) }, s.title),
       el('div', { class: 'ag-cl-chips' },
-        stateTag(s.state),
+        stateTag(s.state, s.background),
         el('span', { class: 'ag-cl-chip', title: 'Model' }, modelLabel(s.model?.current), fell ? ' · fallback' : '', actual ? ` (answered by ${modelLabel(actual)})` : ''),
         el('span', { class: 'ag-cl-chip', title: 'Account' }, acctLabel(s.account)),
         el('span', { class: 'ag-cl-chip ag-cl-chip--path', title: s.cwd }, shortPath(s.cwd)))),
@@ -386,6 +393,12 @@ function detailCallouts(s) {
     out.push(el('div', { class: 'alert alert--info' }, el('b', {}, 'Queued'), el('span', {}, s.detail || 'Waiting for a free slot.')));
   } else if (s.state === 'starting' && s.detail) {
     out.push(el('div', { class: 'alert alert--info' }, el('b', {}, 'Starting'), el('span', {}, s.detail)));
+  }
+  if (s.background) {
+    out.push(el('div', { class: 'alert alert--info ag-cl-bg' }, el('b', {}, 'Background'),
+      el('span', {}, bgText(s.background),
+        el('span', { class: 'ag-cl-bg-list' }, s.background.items.map((t) => el('span', { class: 'ag-cl-bg-item' },
+          el('span', { class: 'ag-cl-bg-type' }, t.type === 'subagent' ? 'subagent' : 'command'), t.description || t.id))))));
   }
   return out;
 }
@@ -465,7 +478,7 @@ function maxBar(s) {
       others.map((x) => el('button', {
         class: `ag-cl-switch-item${x.id === s.id ? ' is-current' : ''}`,
         type: 'button',
-        title: `${x.title} — ${STATE[x.state]?.label || x.state}`,
+        title: `${x.title} — ${STATE[x.state]?.label || x.state}${x.background ? ` (${bgText(x.background)})` : ''}`,
         'aria-current': x.id === s.id ? 'true' : null,
         onclick: () => { if (x.id !== s.id) go(x.id); },
       }, dot(x.state), el('span', {}, x.title)))),

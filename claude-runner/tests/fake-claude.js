@@ -104,6 +104,21 @@ async function turn(prompt) {
     console.log('[question dialog]');
     return;
   }
+  if (/background/i.test(prompt)) {
+    // What 2.1.278 reported: the main turn ends while a subagent runs, the
+    // subagent's end arrives, then a notification turn wraps up.
+    const reply = 'Started a subagent in the background.';
+    write({ type: 'assistant', message: { model: opts.model, role: 'assistant', content: [{ type: 'text', text: reply }] } });
+    fire('SubagentStart', { agent_id: 'agent-bg-1', agent_type: 'general-purpose' });
+    fire('Stop', { last_assistant_message: reply, background_tasks: [{ id: 'agent-bg-1', type: 'subagent', status: 'running', description: 'dig through the logs' }] });
+    await sleep(2000);
+    fire('SubagentStop', { agent_id: 'agent-bg-1', background_tasks: [] });
+    fire('UserPromptSubmit', { prompt: '<task-notification>agent-bg-1 completed</task-notification>' });
+    const fin = 'The subagent finished.\n\nDONE: background work';
+    write({ type: 'assistant', message: { model: opts.model, role: 'assistant', content: [{ type: 'text', text: fin }] } });
+    fire('Stop', { last_assistant_message: fin, background_tasks: [] });
+    return;
+  }
   if (/upsell/i.test(prompt)) {
     // What 2.1.267 printed after a turn, in the same shape.
     const reply = 'Here you go.';

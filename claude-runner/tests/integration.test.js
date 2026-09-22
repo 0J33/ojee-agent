@@ -135,6 +135,17 @@ test('runner end to end', { skip: !haveTmux && 'no tmux' }, async (t) => {
     assert.doesNotMatch(fs.readFileSync(sessions.get(id).transcript, 'utf8'), /menu: yes/);
   });
 
+  await t.test('a turn that ends with subagents still running is working, not idle', async () => {
+    await api('POST', `/api/sessions/${id}/message`, { text: 'do some background work' });
+    await waitFor(() => sessions.get(id).background?.length === 1 && stateOf(id) === 'running', 'running with a background subagent');
+    const v = (await api('GET', `/api/sessions/${id}`)).body;
+    assert.equal(v.state, 'running');
+    assert.equal(v.background.subagents, 1);
+    assert.match(v.detail, /1 subagent/);
+    await waitFor(() => stateOf(id) === 'done', 'done once the subagent finished');
+    assert.equal(sessions.get(id).background.length, 0);
+  });
+
   await t.test('BLOCKED is recognised', async () => {
     await api('POST', `/api/sessions/${id}/message`, { text: 'block now' });
     await waitFor(() => stateOf(id) === 'blocked', 'blocked');

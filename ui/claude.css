@@ -64,6 +64,13 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 
 .ag-cl-ended > summary { cursor: pointer; padding: var(--s-2) 0; }
 
+.ag-cl-bg > span { display: grid; gap: 6px; }
+.ag-cl-bg-list { display: grid; gap: 2px; }
+.ag-cl-bg-item { display: flex; gap: 8px; align-items: baseline; min-width: 0; font-size: 0.7rem; color: var(--ink-2); }
+.ag-cl-bg-type {
+  flex: none; font-family: var(--hud); font-size: 0.55rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent);
+}
+
 /* ── a session ──────────────────────────────────────────────── */
 
 .ag-cl-detail { gap: var(--s-2); }

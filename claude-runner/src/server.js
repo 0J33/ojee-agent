@@ -71,6 +71,8 @@ function claudeSettings() {
       UserPromptSubmit: hook,
       Stop: hook,
       Notification: hook,
+      SubagentStart: hook,
+      SubagentStop: hook,
       PreToolUse: [
         { matcher: 'AskUserQuestion|ExitPlanMode', hooks: [cmd('hook.js')] },
         { matcher: 'Bash', hooks: [cmd('guard.js')] },

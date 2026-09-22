@@ -70,6 +70,37 @@ function marker(text, word) {
   return null;
 }
 
+/**
+ * Background work Claude Code reports on Stop and SubagentStop (tested):
+ * `background_tasks: [{ id, type: 'subagent'|'shell', status, description }]`.
+ * Only what is still running counts.
+ */
+function setBackground(s, list) {
+  if (!Array.isArray(list)) return;
+  s.background = list
+    .filter((t) => t && (!t.status || t.status === 'running'))
+    .map((t) => ({ id: String(t.id || ''), type: t.type === 'subagent' ? 'subagent' : 'shell', description: clip(t.description || t.command || '', 120) }));
+}
+
+function bgSummary(s) {
+  const list = s.background || [];
+  if (!list.length) return null;
+  return {
+    subagents: list.filter((t) => t.type === 'subagent').length,
+    shells: list.filter((t) => t.type !== 'subagent').length,
+    items: list.slice(0, 8),
+  };
+}
+
+function bgDetail(s) {
+  const b = bgSummary(s);
+  if (!b) return null;
+  const parts = [];
+  if (b.subagents) parts.push(`${b.subagents} subagent${b.subagents === 1 ? '' : 's'}`);
+  if (b.shells) parts.push(`${b.shells} command${b.shells === 1 ? '' : 's'}`);
+  return `Working in the background: ${parts.join(', ')}`;
+}
+
 /** Children of a pid, from /proc. */
 function childrenOf(pid) {
   try {
@@ -143,6 +174,7 @@ class Sessions extends EventEmitter {
       notifyDone: s.notifyDone ?? null,
       queuedAt: s.state === 'queued' ? s.queuedAt : null,
       tmux: s.tmux,
+      background: bgSummary(s),
     };
   }
 
@@ -635,6 +667,7 @@ class Sessions extends EventEmitter {
       }
       case 'UserPromptSubmit': {
         s.question = null;
+        s.bgOnly = false;
         s.lastPromptAt = Date.now();
         this.setState(s, 'running', null);
         break;
@@ -664,8 +697,30 @@ class Sessions extends EventEmitter {
         break;
       }
       case 'Stop': {
+        setBackground(s, evt.background_tasks);
         this.readTranscript(s);
         this.onStop(s, evt.last_assistant_message);
+        break;
+      }
+      case 'SubagentStart': {
+        const id = String(evt.agent_id || '');
+        s.background = s.background || [];
+        if (id && !s.background.some((t) => t.id === id)) s.background.push({ id, type: 'subagent', description: evt.agent_type || 'subagent' });
+        // A subagent launched from an idle session (it does happen: a
+        // notification turn starts one and ends) means it is working again.
+        if (['idle', 'done'].includes(s.state)) { s.bgOnly = true; this.setState(s, 'running', bgDetail(s)); }
+        else if (s.bgOnly) this.setState(s, 'running', bgDetail(s));
+        break;
+      }
+      case 'SubagentStop': {
+        setBackground(s, evt.background_tasks);
+        if (s.bgOnly && s.state === 'running') {
+          // Claude Code normally wakes the main thread when background work
+          // ends, and its Stop decides what happens next; if it does not,
+          // the session is simply between turns again.
+          if (s.background?.length) this.setState(s, 'running', bgDetail(s));
+          else { s.bgOnly = false; this.setState(s, 'idle', null); }
+        }
         break;
       }
       case 'SessionEnd': {
@@ -693,6 +748,13 @@ class Sessions extends EventEmitter {
     if (blocked) {
       this.setState(s, 'blocked', clip(blocked, 300));
       this.notifier.send('blocked', { session: s, text: blocked });
+    } else if (s.background?.length && !asksSomething(msg)) {
+      // The main turn ended, but subagents or background commands are still
+      // at it: that is working, not idle. Their completion wakes the main
+      // thread, and that turn's Stop decides done or idle.
+      s.bgOnly = true;
+      this.setState(s, 'running', bgDetail(s));
+      return;
     } else if (done) {
       this.setState(s, 'done', clip(done, 300));
       const want = s.notifyDone ?? this.settings.notify?.done;
@@ -986,7 +1048,9 @@ class Sessions extends EventEmitter {
         }
       }
 
-      const stallMs = (this.settings.stallMinutes || 20) * MINUTE;
+      // Background commands (a long test run) write nothing to the transcript
+      // while they work; give them more rope before calling it quiet.
+      const stallMs = (this.settings.stallMinutes || 20) * MINUTE * (s.background?.length ? 3 : 1);
       if (s.state === 'running' && alive && now - (s.lastActivityAt || now) > stallMs && !s.stallNotified) {
         s.stallNotified = true;
         const screen = await this.tmux.capture(s.tmux);
