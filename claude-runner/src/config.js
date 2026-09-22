@@ -61,6 +61,8 @@ const config = {
   ACCOUNTS_DIR: path.join(DATA_DIR, 'accounts'),
   // The account every install already has: whatever `claude` uses by default.
   DEFAULT_CLAUDE_DIR: env.DEFAULT_CLAUDE_DIR || path.join(HOME, '.claude'),
+  // Temp dir handed to every session (TMPDIR). Off the small root disk on HP.
+  SESSION_TMPDIR: env.SESSION_TMPDIR || path.join(HOME, '.tmp'),
 
   DISCORD_WEBHOOK: env.CLAUDE_DISCORD_WEBHOOK || '',
   CONSOLE_URL: (env.CONSOLE_URL || '').replace(/\/+$/, ''),

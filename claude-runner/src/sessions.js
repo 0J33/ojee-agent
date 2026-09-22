@@ -331,6 +331,9 @@ class Sessions extends EventEmitter {
       OJEE_CLAUDE_GUARD: this.settings.guard ? '1' : '0',
       OJEE_CLAUDE_STACK_DIR: this.config.STACK_DIR,
       COLORTERM: 'truecolor',
+      // Scratchpads and os.tmpdir() go to the big /home disk: the root disk
+      // on HP is 116G and filled up twice with leaked test-Mongo data.
+      TMPDIR: this.config.SESSION_TMPDIR,
     };
     const args = [
       this.config.CLAUDE_BIN,
