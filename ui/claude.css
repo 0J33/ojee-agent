@@ -202,11 +202,19 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-switch-item.is-current { border-color: var(--accent); color: var(--ink); background: var(--accent-03); }
 
 .ag-cl-transcript {
-  display: grid; gap: 2px; align-content: start;
-  height: var(--ag-cl-termh, calc(100dvh - 420px)); min-height: 240px; overflow-y: auto;
+  /* One column no wider than the box. An automatic column grew to the
+     widest line that will not wrap (a tool call, a result's first line)
+     and dragged every message out past the right edge with it. */
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; align-content: start;
+  height: var(--ag-cl-termh, calc(100dvh - 420px)); min-height: 240px;
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
   padding: var(--s-2); background: var(--panel); border: 1px solid var(--line-2);
 }
-.ag-cl-msg { display: grid; gap: 4px; padding: 8px 10px; font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2); }
+.ag-cl-msg {
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-width: 0;
+  padding: 8px 10px; font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
 .ag-cl-msg--user { background: var(--tint-1); border-left: 2px solid var(--accent); color: var(--ink); }
 .ag-cl-msg--assistant { color: var(--ink); }
 .ag-cl-msg-who {
@@ -222,6 +230,29 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-msg--error { background: var(--err-wash); border-left: 2px solid var(--err); }
 .ag-cl-msg--note, .ag-cl-msg--command { padding-block: 2px; }
 .ag-cl-trunc { padding: 6px 10px; }
+
+/* A reply, drawn from its Markdown (md() in claude.js). */
+.ag-cl-md { display: grid; gap: 8px; min-width: 0; line-height: 1.6; }
+.ag-cl-md-p { margin: 0; }
+.ag-cl-md-h { color: var(--ink); font-weight: 700; margin-top: 4px; }
+.ag-cl-md-h1 { font-size: 0.86rem; }
+.ag-cl-md-h2 { font-size: 0.8rem; }
+.ag-cl-md-b { color: var(--ink); font-weight: 700; }
+.ag-cl-md-c { padding: 0 4px; background: var(--tint-1); border: 1px solid var(--line-2); font-size: 0.68rem; }
+.ag-cl-md-a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.ag-cl-md-li { position: relative; padding-left: calc(var(--d, 0) * 14px + 18px); margin-top: -4px; }
+.ag-cl-md-mark { position: absolute; left: calc(var(--d, 0) * 14px); color: var(--dim); }
+.ag-cl-md-quote { padding-left: 10px; border-left: 2px solid var(--line-strong); color: var(--dim); }
+.ag-cl-md-hr { height: 1px; background: var(--line-2); }
+/* Code and tables keep their shape and scroll sideways inside the reply. */
+.ag-cl-md-code {
+  margin: 0; padding: 8px 10px; overflow-x: auto; white-space: pre; overflow-wrap: normal;
+  background: var(--bg-0); border: 1px solid var(--line-2); font-size: 0.68rem; line-height: 1.5;
+}
+.ag-cl-md-tablewrap { overflow-x: auto; }
+.ag-cl-md-table { border-collapse: collapse; font-size: 0.68rem; }
+.ag-cl-md-th, .ag-cl-md-td { padding: 4px 8px; border: 1px solid var(--line-2); text-align: left; vertical-align: top; overflow-wrap: normal; min-width: 6ch; }
+.ag-cl-md-th { color: var(--ink); background: var(--tint-1); }
 
 .ag-cl-compose { display: grid; gap: 6px; }
 .ag-cl-compose[hidden] { display: none; }
@@ -292,8 +323,25 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 @media (max-width: 560px) {
   /* Four labelled buttons do not fit beside the view switch on a phone; the
      icons do, and each keeps its name as a title and aria-label. */
-  .ag-cl-term-bar .ag-cl-lbl { display: none; }
-  .ag-cl-term-bar .btn { padding-inline: 10px; }
+  .ag-cl-term-bar .ag-cl-lbl, .ag-cl-head-actions .ag-cl-lbl { display: none; }
+  .ag-cl-term-bar .btn, .ag-cl-head-actions .btn { padding-inline: 10px; }
+
+  /* A session on a phone: what sits above the terminal or transcript is
+     what it has to share the screen with, so only what earns it stays.
+     The back arrow does what the tab row did; the state chip already
+     counts the background work the Background callout spelled out. */
+  .ag-cl-detail > .ag-cl-tabs,
+  .ag-cl-callouts > .ag-cl-bgnote { display: none; }
+  .ag-cl-head { padding: var(--s-2); }
+  /* The view switch at its own width, so the transcript's two buttons fit
+     beside it; the terminal's four still wrap to a row of their own. */
+  .ag-cl-panes .ag-cl-pane-tabs { flex: 0 1 auto; }
+  .ag-cl-detail .ag-cl-panes .ag-cl-term-bar { width: auto; margin-left: auto; }
+  .ag-cl-panes .ag-cl-term-state { margin-right: auto; }
+
+  .ag-cl-transcript { padding: 4px; }
+  .ag-cl-msg { padding: 8px; }
+  .ag-cl-msg--tool, .ag-cl-msg--result { padding-block: 3px; }
 }
 
 @media (max-width: 720px) {

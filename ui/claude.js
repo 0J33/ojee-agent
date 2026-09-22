@@ -365,12 +365,14 @@ function detailHead(s) {
         el('span', { class: 'ag-cl-chip', title: 'Account' }, acctLabel(s.account)),
         el('span', { class: 'ag-cl-chip ag-cl-chip--path', title: s.cwd }, shortPath(s.cwd)))),
     el('div', { class: 'ag-cl-head-actions' },
-      s.state === 'running' ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Interrupt the current turn (Esc)', onclick: () => act(`int:${s.id}`, () => post(`/sessions/${s.id}/interrupt`)) }, svg('pause'), 'Stop turn') : null,
+      // Labels in .ag-cl-lbl: a phone shows the icons (each keeps its name as
+      // a title and aria-label) so the actions take one short row, not two.
+      s.state === 'running' ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Interrupt the current turn (Esc)', 'aria-label': 'Stop turn', onclick: () => act(`int:${s.id}`, () => post(`/sessions/${s.id}/interrupt`)) }, svg('pause'), lbl('Stop turn')) : null,
       !alive || s.state === 'paused'
         ? el('button', { class: 'btn btn--sm', type: 'button', disabled: busy('resume'), onclick: () => act(`resume:${s.id}`, () => post(`/sessions/${s.id}/resume`, {}).then(upsert), 'Resuming') }, svg('play'), s.state === 'paused' ? 'Resume now' : 'Resume')
         : null,
-      el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => changeSession(s) }, svg('swap'), 'Change'),
-      alive ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', disabled: busy('end'), onclick: () => endSession(s) }, svg('stop'), 'End') : null,
+      el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Change model or account', 'aria-label': 'Change', onclick: () => changeSession(s) }, svg('swap'), lbl('Change')),
+      alive ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'End the session (the conversation is kept)', 'aria-label': 'End', disabled: busy('end'), onclick: () => endSession(s) }, svg('stop'), lbl('End')) : null,
       el('button', { class: 'btn btn--ghost btn--sm btn--icon ag-cl-sq', type: 'button', title: 'Delete', 'aria-label': 'Delete', onclick: () => deleteSession(s) }, svg('trash'))));
 }
 
@@ -397,7 +399,7 @@ function detailCallouts(s) {
     out.push(el('div', { class: 'alert alert--info' }, el('b', {}, 'Starting'), el('span', {}, s.detail)));
   }
   if (s.background) {
-    out.push(el('div', { class: 'alert alert--info' }, el('b', {}, 'Background'), el('span', {}, bgText(s.background))));
+    out.push(el('div', { class: 'alert alert--info ag-cl-bgnote' }, el('b', {}, 'Background'), el('span', {}, bgText(s.background))));
   }
   return out;
 }
@@ -760,11 +762,90 @@ function mountPane(s) {
   pull();
 }
 
+/**
+ * Claude's replies are Markdown. Enough of it is drawn to read on a phone —
+ * paragraphs, headings, lists, quotes, code, tables, bold, links — and the
+ * rest stays as written. Built from DOM nodes, never innerHTML: the text is
+ * whatever the model wrote. Line breaks are kept as the author made them.
+ */
+const INLINE = /`([^`\n]+)`|\*\*([^*\n]+?)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"`])/g;
+function inline(text) {
+  const out = [];
+  let last = 0;
+  for (const m of text.matchAll(INLINE)) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m[1] != null) out.push(el('code', { class: 'ag-cl-md-c' }, m[1]));
+    else if (m[2] != null) out.push(el('strong', { class: 'ag-cl-md-b' }, ...inline(m[2])));
+    else {
+      const href = m[4] || m[5];
+      out.push(el('a', { class: 'ag-cl-md-a', href, target: '_blank', rel: 'noreferrer noopener' }, m[3] || m[5]));
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+const cells = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+
+function md(src) {
+  const out = el('div', { class: 'ag-cl-md' });
+  const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
+  let para = [];
+  const flush = () => {
+    if (!para.length) return;
+    const p = el('p', { class: 'ag-cl-md-p' });
+    para.forEach((l, i) => { if (i) p.append(el('br')); p.append(...inline(l)); });
+    out.append(p);
+    para = [];
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    let m;
+    if (/^\s*```/.test(line)) {
+      flush();
+      const code = [];
+      while (++i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i]);
+      out.append(el('pre', { class: 'ag-cl-md-code' }, code.join('\n')));
+    } else if (/^\s*\|.*\|\s*$/.test(line)) {
+      flush();
+      const rows = [];
+      for (; i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i]); i++) rows.push(lines[i]);
+      i--;
+      const body = rows.filter((r) => !/^\s*\|[\s:|-]+\|\s*$/.test(r)).map(cells);
+      const [head, ...rest] = body;
+      out.append(el('div', { class: 'ag-cl-md-tablewrap' }, el('table', { class: 'ag-cl-md-table' },
+        head ? el('tr', {}, head.map((c) => el('th', { class: 'ag-cl-md-th' }, ...inline(c)))) : null,
+        rest.map((r) => el('tr', {}, r.map((c) => el('td', { class: 'ag-cl-md-td' }, ...inline(c))))))));
+    } else if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) {
+      flush();
+      out.append(el('div', { class: `ag-cl-md-h ag-cl-md-h${Math.min(m[1].length, 3)}` }, ...inline(m[2])));
+    } else if ((m = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(line))) {
+      flush();
+      const depth = Math.min(4, Math.floor(m[1].replace(/\t/g, '  ').length / 2));
+      out.append(el('div', { class: 'ag-cl-md-li', style: `--d:${depth}` },
+        el('span', { class: 'ag-cl-md-mark' }, /\d/.test(m[2]) ? m[2] : '•'), el('span', {}, ...inline(m[3]))));
+    } else if ((m = /^\s*>\s?(.*)$/.exec(line))) {
+      flush();
+      out.append(el('div', { class: 'ag-cl-md-quote' }, ...inline(m[1])));
+    } else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      flush();
+      out.append(el('div', { class: 'ag-cl-md-hr' }));
+    } else if (!line.trim()) {
+      flush();
+    } else {
+      para.push(line);
+    }
+  }
+  flush();
+  return out;
+}
+
 function message(m) {
   const cls = `ag-cl-msg ag-cl-msg--${m.role}${m.error ? ' is-bad' : ''}`;
   const time = m.at ? new Date(m.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
   if (m.role === 'user') return el('div', { class: cls }, el('span', { class: 'ag-cl-msg-who' }, 'You', el('span', { class: 'meta' }, time)), el('div', { class: 'ag-cl-pre' }, m.text));
-  if (m.role === 'assistant') return el('div', { class: cls }, el('span', { class: 'ag-cl-msg-who' }, modelLabel(m.model) || 'Claude', el('span', { class: 'meta' }, time)), el('div', { class: 'ag-cl-pre' }, m.text));
+  if (m.role === 'assistant') return el('div', { class: cls }, el('span', { class: 'ag-cl-msg-who' }, modelLabel(m.model) || 'Claude', el('span', { class: 'meta' }, time)), md(m.text));
   if (m.role === 'tool') return el('div', { class: cls }, el('span', { class: 'ag-cl-tool' }, m.tool), el('span', { class: 'ag-cl-tool-arg' }, m.text));
   if (m.role === 'result') {
     const first = String(m.text || '').split('\n')[0];
