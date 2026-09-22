@@ -31,6 +31,7 @@ const { Sessions } = require('./sessions');
 const { Tail, toMessages, listSessions, findTranscript } = require('./transcript');
 const logins = require('./logins');
 const { bridge } = require('./terminal');
+const { Governor } = require('./governor');
 
 const VERSION = require('../package.json').version;
 const ROOT = path.resolve(__dirname, '..');
@@ -86,6 +87,7 @@ const UNATTENDED = `You are running unattended, in a session started from the oj
 - When the whole task is finished, end your final message with a line that starts with "DONE:" and a one-line summary.
 - If you are blocked and cannot continue, end your final message with a line that starts with "BLOCKED:" and the reason.
 - sudo is not available here. Some commands that could take down other services on this machine are blocked; if one is, find another way or end with BLOCKED.
+- This machine is a small laptop (8 threads, 16 GB) that also runs other services and overheats under sustained load. Run heavy commands (test suites, builds, installs) one at a time, keep their parallelism low (for example vitest or jest with 2 workers), and do not have several subagents run builds or tests at the same time.
 `;
 
 
@@ -121,6 +123,11 @@ function createRunner(overrides = {}) {
     log,
   });
   const sessions = new Sessions({ config, store, tmux, accounts, notifier, files: FILES, log });
+  // Only when the sessions live in their own unit: in dev (self mode) the
+  // tmux server shares the runner's cgroup, and freezing that would freeze us.
+  const governor = config.TMUX_MODE === 'systemd'
+    ? new Governor({ unit: 'ojee-claude-tmux.service', settings: () => store.settings, log })
+    : null;
   for (const a of accounts.list()) { try { accounts.prepare(a); } catch (e) { log('accounts', `${a.id}: ${e.message}`); } }
 
   const app = express();
@@ -159,6 +166,7 @@ function createRunner(overrides = {}) {
     models: config.MODELS,
     notify: { enabled: notifier.enabled, recent: notifier.recent.slice(0, 20) },
     runner: { tmux: runtime.tmux, claude: runtime.claude, host: config.HOST, stackDir: config.STACK_DIR, home: config.HOME, defaultCwd: config.DEFAULT_CWD },
+    governor: governor ? governor.view() : { active: false, reason: 'only when sessions run in ojee-claude-tmux.service' },
   });
   const runtime = { tmux: null, claude: null };
 
@@ -531,6 +539,8 @@ function createRunner(overrides = {}) {
 
   app.get('/api/settings', auth, (_req, res) => res.json(store.settings));
 
+  app.get('/api/governor', auth, (_req, res) => res.json(governor ? governor.view() : { active: false, reason: 'only when sessions run in ojee-claude-tmux.service' }));
+
   app.put('/api/settings', auth, wrap(async (req, res) => {
     const b = req.body || {};
     const patch = {};
@@ -543,12 +553,14 @@ function createRunner(overrides = {}) {
       if (b.fallbackModel && !known.has(b.fallbackModel)) return res.status(400).json({ error: 'Unknown fallback model' });
       patch.fallbackModel = b.fallbackModel || null;
     }
-    for (const k of ['autoSwitchAccounts', 'unattended', 'guard', 'resumeInterrupted']) {
+    for (const k of ['autoSwitchAccounts', 'unattended', 'guard', 'resumeInterrupted', 'governor', 'lightFootprint']) {
       if (b[k] !== undefined) patch[k] = !!b[k];
     }
     if (b.maxRunning !== undefined) patch.maxRunning = Math.max(1, Math.min(10, Number(b.maxRunning) || 3));
     if (b.stallMinutes !== undefined) patch.stallMinutes = Math.max(5, Math.min(240, Number(b.stallMinutes) || 20));
     if (b.modelRetryHours !== undefined) patch.modelRetryHours = Math.max(1, Math.min(168, Number(b.modelRetryHours) || 5));
+    if (b.cpuCapPct !== undefined) patch.cpuCapPct = Math.max(10, Math.min(100, Number(b.cpuCapPct) || 60));
+    if (b.tempTarget !== undefined) patch.tempTarget = Math.max(60, Math.min(95, Number(b.tempTarget) || 80));
     if (b.notify && typeof b.notify === 'object') {
       patch.notify = {};
       for (const k of Object.keys(config.DEFAULT_SETTINGS.notify)) if (b.notify[k] !== undefined) patch.notify[k] = !!b.notify[k];
@@ -630,6 +642,7 @@ function createRunner(overrides = {}) {
     runtime.claude = await version(config.CLAUDE_BIN, ['--version']);
     runtime.tmux = await version(config.TMUX_BIN, ['-V']);
     const up = await tmux.ensureServer(config.TMUX_MODE);
+    if (governor) await governor.start();
     if (!up) log('tmux', config.TMUX_MODE === 'systemd' ? 'server not running — is ojee-claude-tmux.service up?' : 'could not start the tmux server');
     await accounts.refreshAll().catch(() => {});
     await sessions.reconcile();
@@ -656,6 +669,7 @@ function createRunner(overrides = {}) {
   }
 
   async function stop() {
+    governor?.stop();
     clearTimeout(tickTimer);
     clearInterval(authTimer);
     for (const t of loginWatch.values()) clearInterval(t);
@@ -666,7 +680,7 @@ function createRunner(overrides = {}) {
     store.flush();
   }
 
-  return { app, start, stop, store, sessions, accounts, tmux, notifier, config, onUpgrade };
+  return { app, start, stop, store, sessions, accounts, tmux, notifier, config, onUpgrade, governor };
 }
 
 function isLoopback(host) {

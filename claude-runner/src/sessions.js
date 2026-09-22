@@ -305,7 +305,13 @@ class Sessions extends EventEmitter {
       'P=',
       `if [ -f ${q(promptFile)} ]; then P=$(cat ${q(promptFile)}); rm -f ${q(promptFile)}; fi`,
       [
-        'exec env',
+        // Light footprint: low priority, so the docker stack and the desktop
+        // stay responsive, and parallel tools default to two workers — a test
+        // runner or bundler otherwise takes every core, per session.
+        this.settings.lightFootprint !== false ? 'exec nice -n 10 env' : 'exec env',
+        ...(this.settings.lightFootprint !== false
+          ? ['GOMAXPROCS=2', 'UV_THREADPOOL_SIZE=2', 'VITEST_MAX_THREADS=2', 'VITEST_MAX_FORKS=2', 'MAKEFLAGS=-j2', 'CARGO_BUILD_JOBS=2']
+          : []),
         ...Object.entries(env).map(([k, v]) => `${k}=${q(v)}`),
         ...args.map(q),
         s.unattended !== false ? `--append-system-prompt "$(cat ${q(this.files.unattendedFile)})"` : '',

@@ -75,6 +75,9 @@ function pref(key, value) {
 
 /* ── small pieces ───────────────────────────────────────────────────── */
 
+/** A button label that phones hide, leaving the icon (the title still says it). */
+const lbl = (text) => el('span', { class: 'ag-cl-lbl' }, text);
+
 const svg = (name, cls = 'ic') => {
   const t = document.createElement('template');
   t.innerHTML = ctx.icon(`i-${name}`, cls);
@@ -404,6 +407,7 @@ function paintDetail(reason) {
     existing.querySelector('.ag-cl-callouts').replaceChildren(...detailCallouts(s));
     existing.querySelector('.ag-cl-maxbar').replaceChildren(...maxBar(s));
     updateComposer(s);
+    sizeTerminal();
     // A session that came back (resumed, relaunched into a new tmux session)
     // gets its terminal back; one that is gone gets the "not running" card.
     if (S.pane === 'terminal') {
@@ -437,9 +441,11 @@ function paintDetail(reason) {
         el('span', { class: 'meta ag-cl-compose-note' }),
         el('button', { class: 'btn btn--sm ag-cl-send', type: 'button', onclick: () => send(s.id) }, 'Send'))));
   root.replaceChildren(view);
+  watchViewport();
   lockPage();
   updateComposer(s);
   mountPane(s);
+  onViewport();
 }
 
 /**
@@ -474,13 +480,109 @@ function setMax(on) {
   const s = session(S.detail);
   if (view && s) view.querySelector('.ag-cl-panes').replaceChildren(...paneTabs(s));
   lockPage();
+  // Focus inside the overlay can scroll the page underneath it; the normal
+  // view is laid out to fit from the top.
+  if (!on) window.scrollTo(0, 0);
+  sizeTerminal();
   S.term?.focus();
 }
 
-/** While maximized, the page behind must not scroll under the wheel. */
+/** While maximized or typing, the page behind must not scroll. */
 function lockPage() {
-  const on = S.max && !!S.detail && !!root?.querySelector('.ag-cl-detail.is-max');
+  const on = !!S.detail && !!root?.querySelector('.ag-cl-detail.is-max, .ag-cl-detail.is-kb');
   document.documentElement.style.overflow = on ? 'hidden' : '';
+}
+
+/**
+ * How tall whatever is pinned to the bottom of the window is — the console's
+ * phone tab bar, its status bar, a standalone shell's — so the terminal ends
+ * above it rather than underneath. Found by asking what is drawn at the
+ * bottom edge, not by knowing the host's markup.
+ */
+function bottomChrome(view, visible) {
+  const x = Math.round(innerWidth / 2);
+  let n = document.elementFromPoint(x, Math.max(0, Math.round(visible) - 2));
+  while (n && n !== document.body && n !== document.documentElement) {
+    if (view.contains(n)) return 0;
+    const pos = getComputedStyle(n).position;
+    if (pos === 'fixed' || pos === 'sticky') return Math.max(0, visible - n.getBoundingClientRect().top);
+    n = n.parentElement;
+  }
+  return 0;
+}
+
+/**
+ * The terminal (or transcript) fills the screen from where it starts down to
+ * the bottom of what is visible — measured, not a guess per layout, because
+ * the console's chrome differs between phone and desktop and the standalone
+ * shell differs again. Maximized and typing layouts use flex instead.
+ */
+function sizeTerminal() {
+  const view = root?.querySelector('.ag-cl-detail');
+  if (!view) return;
+  if (view.matches('.is-max, .is-kb')) { view.style.removeProperty('--ag-cl-termh'); return; }
+  const pane = view.querySelector('.ag-cl-term, .ag-cl-transcript, .ag-cl-noterm');
+  if (!pane) return;
+  const visible = window.visualViewport?.height || innerHeight;
+  const top = pane.getBoundingClientRect().top + window.scrollY;
+  const box = view.querySelector('.ag-cl-compose');
+  const below = box && !box.hidden ? box.offsetHeight + 8 : 0;
+  const min = innerWidth <= 560 ? 240 : 300;
+  const h = Math.floor(visible - bottomChrome(view, visible) - top - below - 10);
+  view.style.setProperty('--ag-cl-termh', `${Math.max(min, h)}px`);
+  // Whatever still sits below it in the page (the host's padding, a status
+  // bar in the flow) shows up as overflow: take exactly that off, once.
+  const doc = document.documentElement;
+  const over = doc.scrollHeight - doc.clientHeight;
+  if (over > 0) view.style.setProperty('--ag-cl-termh', `${Math.max(min, h - over)}px`);
+}
+
+/**
+ * A phone's keyboard covers the page instead of shrinking it, and Claude's
+ * input line is at the bottom of the terminal — exactly what it covers. The
+ * visual viewport is the part left above the keyboard: while it is much
+ * shorter than the page and focus is in this view, the view switches to a
+ * typing layout sized to it (bars hidden, special keys shown), and the
+ * terminal refits so its bottom line sits on top of the keyboard.
+ */
+function onViewport() {
+  const view = root?.querySelector('.ag-cl-detail');
+  if (!view) return;
+  const vv = window.visualViewport;
+  if (vv) {
+    view.style.setProperty('--ag-cl-vvh', `${Math.round(vv.height)}px`);
+    view.style.setProperty('--ag-cl-vvtop', `${Math.round(vv.offsetTop)}px`);
+  }
+  const keyboard = !!vv && vv.scale < 1.05
+    && document.documentElement.clientHeight - vv.height > 120
+    && view.contains(document.activeElement);
+  const was = view.classList.contains('is-kb');
+  view.classList.toggle('is-kb', keyboard);
+  // The keyboard going away leaves the page wherever the browser scrolled it
+  // to reveal the input; the normal view fits from the top.
+  if (was && !keyboard && !S.max) window.scrollTo(0, 0);
+  lockPage();
+  sizeTerminal();
+}
+
+let viewportWatch = null;
+function watchViewport() {
+  if (viewportWatch) return;
+  const vv = window.visualViewport;
+  let raf = 0;
+  const run = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(onViewport); };
+  vv?.addEventListener('resize', run);
+  vv?.addEventListener('scroll', run);
+  window.addEventListener('resize', run);
+  document.addEventListener('focusin', run);
+  document.addEventListener('focusout', run);
+  viewportWatch = () => {
+    vv?.removeEventListener('resize', run);
+    vv?.removeEventListener('scroll', run);
+    window.removeEventListener('resize', run);
+    document.removeEventListener('focusin', run);
+    document.removeEventListener('focusout', run);
+  };
 }
 
 function setCompose(on) {
@@ -496,6 +598,7 @@ function setCompose(on) {
     view.querySelector('.ag-cl-panes').replaceChildren(...paneTabs(s));
     view.querySelector('.ag-cl-callouts').replaceChildren(...detailCallouts(s));
   }
+  sizeTerminal();
   if (on) box.querySelector('.ag-cl-input')?.focus();
 }
 
@@ -506,16 +609,17 @@ function paneTabs(s) {
       el('button', { type: 'button', 'aria-pressed': String(S.pane === 'transcript'), onclick: () => switchPane('transcript') }, svg('log'), 'Transcript')),
     el('div', { class: 'ag-cl-term-bar' },
       S.pane === 'terminal' ? el('span', { class: 'meta ag-cl-term-state' }, S.termState || (s.alive ? 'connecting…' : 'not running')) : null,
-      S.pane === 'terminal' ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Special keys', onclick: () => S.term?.toggleKeys() }, svg('keyboard'), 'Keys') : null,
-      S.pane === 'terminal' ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => S.term?.reconnect() }, svg('refresh'), 'Reconnect') : null,
+      S.pane === 'terminal' ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Special keys', 'aria-label': 'Special keys', onclick: () => { S.term?.toggleKeys(); sizeTerminal(); } }, svg('keyboard'), lbl('Keys')) : null,
+      S.pane === 'terminal' ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Reconnect', 'aria-label': 'Reconnect', onclick: () => S.term?.reconnect() }, svg('refresh'), lbl('Reconnect')) : null,
       el('button', {
         class: 'btn btn--ghost btn--sm',
         type: 'button',
         'aria-pressed': String(S.compose),
         title: S.compose ? 'Hide the message box' : 'Show a message box under the terminal',
+        'aria-label': S.compose ? 'Hide message box' : 'Message box',
         onclick: () => setCompose(!S.compose),
-      }, svg('edit'), S.compose ? 'Hide message' : 'Message'),
-      S.max ? null : el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Fill the window with this session', onclick: () => setMax(true) }, svg('full'), 'Maximize')),
+      }, svg('edit'), lbl(S.compose ? 'Hide message' : 'Message')),
+      S.max ? null : el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Fill the window with this session', 'aria-label': 'Maximize', onclick: () => setMax(true) }, svg('full'), lbl('Maximize'))),
   ];
 }
 
@@ -546,9 +650,11 @@ function mountPane(s) {
         el('p', {}, s.state === 'paused'
           ? `Paused until ${at(s.pausedUntil)}. It starts again on its own; "Resume now" tries sooner.`
           : 'The conversation is kept. Resume it to get the terminal back, or read the transcript.')));
+      requestAnimationFrame(sizeTerminal);
       return;
     }
     S.termState = 'connecting';
+    requestAnimationFrame(sizeTerminal);
     S.term = startTerminal({
       host: body,
       ctx,
@@ -565,6 +671,7 @@ function mountPane(s) {
   if (S.transcript.id !== s.id) S.transcript = { id: s.id, messages: [], cursor: null, timer: null, truncated: false };
   const list = el('div', { class: 'ag-cl-transcript' });
   body.replaceChildren(list);
+  requestAnimationFrame(sizeTerminal);
   const pull = async () => {
     try {
       const q = S.transcript.cursor != null ? `?cursor=${S.transcript.cursor}` : '';
@@ -1147,10 +1254,45 @@ function paintSettings() {
         toggleRow('guard', 'Guard the machine', '', { detail: 'block sudo, force-push, and stopping or touching the console stack' }),
         toggleRow('resumeInterrupted', 'Resume after reboot', '', { detail: 'sessions a restart interrupted pick up again on their own' }))),
     el('section', { class: 'panel stack' },
+      el('div', { class: 'ag-panel-head' }, el('h3', { class: 'h3' }, 'CPU and heat'),
+        el('span', { class: 'meta ag-cl-gov' }, govLine(S.data.governor))),
+      el('p', { class: 'meta' }, 'Sessions run test suites and builds that take every core. The governor holds their combined CPU under the cap by pausing them in short slices, and lowers the cap while the CPU is hotter than the target. A busy terminal may stutter; nothing is lost.'),
+      el('div', { class: 'ag-cl-toggles' },
+        toggleRow('governor', 'CPU governor', '', { detail: 'cap the sessions\u2019 CPU and back off when hot' }),
+        toggleRow('lightFootprint', 'Light footprint', '', { detail: 'low priority, and test runners and bundlers default to two workers (new launches)' })),
+      el('div', { class: 'grid grid--2 ag-cl-opts' },
+        num('cpuCapPct', 10, 100, 'CPU cap (% of all threads)', 'what all sessions together may use'),
+        num('tempTarget', 60, 95, 'Temperature target (°C)', 'above it the cap comes down; the box\u2019s own watchdog throttles at 88'))),
+    el('section', { class: 'panel stack' },
       el('h3', { class: 'h3' }, 'Runner'),
       el('div', { class: 'ag-cl-list' },
         ...[['Claude Code', runner?.claude || 'not found'], ['tmux', runner?.tmux || 'not found'], ['Listening on', runner?.host], ['Protected stack folder', runner?.stackDir]]
           .map(([k, v]) => el('div', { class: 'ag-cl-row ag-cl-kv' }, el('span', { class: 'meta' }, k), el('span', {}, v || '—')))))));
+}
+
+function govLine(g) {
+  if (!g) return '';
+  if (!g.active) return g.reason ? `off — ${g.reason}` : 'off';
+  return [
+    g.temp != null ? `${g.temp} °C` : null,
+    `sessions ${g.usagePct}% of cap ${g.capPct}%`,
+    g.frozenPct ? `pausing ${g.frozenPct}%` : null,
+    g.hot ? 'backing off (hot)' : null,
+  ].filter(Boolean).join(' · ');
+}
+
+/** While Settings is open, keep the CPU readout live. */
+let govTimer = null;
+function watchGovernor() {
+  clearInterval(govTimer);
+  govTimer = setInterval(async () => {
+    if (S.tab !== 'settings' || S.detail || !root) { clearInterval(govTimer); govTimer = null; return; }
+    try {
+      S.data.governor = await api('/governor');
+      const line = root.querySelector('.ag-cl-gov');
+      if (line) line.textContent = govLine(S.data.governor);
+    } catch { /* runner restarting */ }
+  }, 3000);
 }
 
 /* ── routing and lifecycle ──────────────────────────────────────────── */
@@ -1167,6 +1309,7 @@ export function routeClaude() {
   if (prevDetail !== S.detail || prevTab !== S.tab) window.scrollTo(0, 0);
   paint();
   lockPage();
+  if (S.tab === 'settings' && !S.detail) watchGovernor();
 }
 
 export async function mountClaude(el0, context) {
@@ -1187,7 +1330,11 @@ export async function mountClaude(el0, context) {
 }
 
 export function unmountClaude() {
+  clearInterval(govTimer);
+  govTimer = null;
   document.documentElement.style.overflow = '';
+  viewportWatch?.();
+  viewportWatch = null;
   stopPane();
   stopLogin();
   sse?.stop();

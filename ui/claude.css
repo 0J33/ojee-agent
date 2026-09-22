@@ -103,18 +103,27 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-panes { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
 .ag-cl-pane-tabs { flex: 0 1 320px; }
 .ag-cl-pane-tabs .ic { width: 15px; height: 15px; }
-.ag-cl-term-bar { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.ag-cl-term-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; margin-left: auto; }
 .ag-cl-term-state { margin-right: var(--s-2); }
 
 /* The terminal fills the viewport rather than growing the page — the same
    bound ojee-remote's Shell uses, so it never takes the scrollbar with it. */
 .ag-cl-body { display: flex; flex-direction: column; gap: 2px; min-height: 0; }
 .ag-cl-term {
-  height: calc(100dvh - 540px); min-height: 300px;
-  padding: var(--s-2) 6px 6px var(--s-2);
+  /* --ag-cl-termh is measured by sizeTerminal(); the calc is only the first
+     frame's guess. */
+  height: var(--ag-cl-termh, calc(100dvh - 420px)); min-height: 240px;
   background: var(--bg-0); border: 1px solid var(--line-2);
+  /* xterm keeps its previous size for a frame after the box changes (it
+     refits on the next resize callback). Clipped, that stale size cannot
+     spill into the page and be mistaken for overflow by sizeTerminal(). */
+  overflow: hidden;
 }
-.ag-cl-term .xterm { height: 100%; }
+/* The inset lives on xterm's own element: its fit addon sizes rows from the
+   PARENT's height (which, border-box, includes the parent's padding) minus
+   the .xterm element's padding. Padding on the parent gave one row too many,
+   and the bottom line — Claude's status line — was cut in half. */
+.ag-cl-term .xterm { height: 100%; padding: var(--s-2) 6px 4px var(--s-2); }
 .ag-cl-term .xterm-viewport { overflow-y: auto; }
 .ag-cl-keys {
   display: flex; gap: 2px; padding: 6px 8px; overflow-x: auto;
@@ -122,18 +131,16 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 }
 .ag-cl-keys::-webkit-scrollbar { display: none; }
 .ag-cl-keys .btn { flex: 0 0 auto; }
-.ag-cl-noterm { background: var(--panel); border: 1px solid var(--line-2); min-height: 240px; }
+.ag-cl-noterm { background: var(--panel); border: 1px solid var(--line-2); min-height: 240px; height: var(--ag-cl-termh, auto); }
 
-/* No message box (the default): its room goes to the terminal. */
-.ag-cl-detail:not(.has-compose) .ag-cl-term,
-.ag-cl-detail:not(.has-compose) .ag-cl-transcript { height: calc(100dvh - 420px); }
 
 /* ── maximized ──────────────────────────────────────────────────
    The session lifted over the console: fixed to the window, above the
    nav (50), top bar (60) and tab bar (80), below dialogs (300) and toasts,
    so Rename and Delete still open over it. Not the browser's fullscreen. */
 .ag-cl-maxbar { display: none; }
-.ag-cl-detail.is-max {
+.ag-cl-detail.is-max,
+.ag-cl-detail.is-kb {
   position: fixed; inset: 0; z-index: calc(var(--z-modal, 300) - 10);
   display: flex; flex-direction: column; gap: 2px;
   padding: max(6px, env(safe-area-inset-top)) max(6px, env(safe-area-inset-right))
@@ -143,13 +150,27 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-detail.is-max > .ag-cl-tabs,
 .ag-cl-detail.is-max > .ag-cl-headwrap,
 .ag-cl-detail.is-max > .ag-cl-callouts { display: none; }
+
+/* Typing on a phone: the view is sized to what the keyboard leaves visible
+   (the visual viewport), every bar steps aside, and the special keys show —
+   Esc, arrows and Tab are what a phone keyboard lacks. */
+.ag-cl-detail.is-kb {
+  top: var(--ag-cl-vvtop, 0); bottom: auto; height: var(--ag-cl-vvh, 100dvh);
+  padding-top: 4px; padding-bottom: 4px;
+}
+.ag-cl-detail.is-kb > .ag-cl-tabs,
+.ag-cl-detail.is-kb > .ag-cl-headwrap,
+.ag-cl-detail.is-kb > .ag-cl-callouts,
+.ag-cl-detail.is-kb > .ag-cl-maxbar,
+.ag-cl-detail.is-kb > .ag-cl-panes { display: none; }
+.ag-cl-detail.is-kb .ag-cl-keys[hidden] { display: flex !important; }
 .ag-cl-detail.is-max > .ag-cl-maxbar { display: flex; align-items: center; gap: 6px; flex: none; min-width: 0; }
 .ag-cl-detail.is-max > .ag-cl-panes,
-.ag-cl-detail.is-max > .ag-cl-compose { flex: none; }
-.ag-cl-detail.is-max > .ag-cl-body { flex: 1 1 auto; min-height: 0; }
-.ag-cl-detail.is-max .ag-cl-term,
-.ag-cl-detail.is-max .ag-cl-transcript,
-.ag-cl-detail.is-max .ag-cl-noterm { flex: 1 1 auto; height: auto; min-height: 0; }
+.ag-cl-detail:is(.is-max, .is-kb) > .ag-cl-compose { flex: none; }
+.ag-cl-detail:is(.is-max, .is-kb) > .ag-cl-body { flex: 1 1 auto; min-height: 0; }
+.ag-cl-detail:is(.is-max, .is-kb) .ag-cl-term,
+.ag-cl-detail:is(.is-max, .is-kb) .ag-cl-transcript,
+.ag-cl-detail:is(.is-max, .is-kb) .ag-cl-noterm { flex: 1 1 auto; height: auto; min-height: 0; }
 .ag-cl-restore { flex: none; }
 .ag-cl-restore .ic, .ag-cl-term-bar .ic { width: 15px; height: 15px; }
 
@@ -173,7 +194,7 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 
 .ag-cl-transcript {
   display: grid; gap: 2px; align-content: start;
-  height: calc(100dvh - 540px); min-height: 300px; overflow-y: auto;
+  height: var(--ag-cl-termh, calc(100dvh - 420px)); min-height: 240px; overflow-y: auto;
   padding: var(--s-2); background: var(--panel); border: 1px solid var(--line-2);
 }
 .ag-cl-msg { display: grid; gap: 4px; padding: 8px 10px; font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2); }
@@ -259,6 +280,13 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-tog { display: grid; gap: 4px; min-width: 0; }
 .ag-cl-tog-detail { font-family: var(--mono); font-size: 0.66rem; color: var(--dim); line-height: 1.45; text-transform: none; letter-spacing: 0; font-weight: 400; }
 
+@media (max-width: 560px) {
+  /* Four labelled buttons do not fit beside the view switch on a phone; the
+     icons do, and each keeps its name as a title and aria-label. */
+  .ag-cl-term-bar .ag-cl-lbl { display: none; }
+  .ag-cl-term-bar .btn { padding-inline: 10px; }
+}
+
 @media (max-width: 720px) {
   .ag-cl-tabs { max-width: none; }
   /* Title, state and when are what a phone needs; the path and model sit
@@ -271,9 +299,6 @@ button.ag-cl-row:hover { background: var(--accent-03); }
   .ag-cl-head-actions { width: 100%; }
   .ag-cl-term-bar { margin-left: 0; width: 100%; }
   .ag-cl-term-state { margin-right: auto; }
-  .ag-cl-term, .ag-cl-transcript { height: calc(100dvh - 360px); min-height: 260px; }
-  .ag-cl-detail:not(.has-compose) .ag-cl-term,
-  .ag-cl-detail:not(.has-compose) .ag-cl-transcript { height: calc(100dvh - 280px); }
   .ag-cl-detail.is-max .ag-cl-term-bar { width: auto; margin-left: auto; }
   .ag-cl-detail.is-max .ag-cl-term-state { display: none; }
   .ag-cl-kv { grid-template-columns: minmax(0, 1fr); gap: 2px; }

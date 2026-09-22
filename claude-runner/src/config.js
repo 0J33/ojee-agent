@@ -96,6 +96,13 @@ config.DEFAULT_SETTINGS = {
   unattended: true,
   guard: true,
   resumeInterrupted: true,
+  // CPU and heat (see governor.js). The cap is a share of all threads; the
+  // cap shrinks while the CPU package is hotter than the target.
+  governor: true,
+  cpuCapPct: 60,
+  tempTarget: 80,
+  // Sessions run at low priority and default their tools to two workers.
+  lightFootprint: true,
   notify: {
     needsInput: true,
     blocked: true,
