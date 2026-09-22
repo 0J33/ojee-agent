@@ -475,7 +475,7 @@ function askPanel(repaint) {
       : el('div', { class: 'empty' },
           el('b', {}, 'ask it something'),
           el('p', {}, '"how is loq doing" · "whats the weather in cairo" · '
-            + '"what can you do" · "turn off the aqarmap scrape"')));
+            + '"what can you do" · "is couchdb up"')));
 }
 
 /* ── view ────────────────────────────────────────────────────────────── */
