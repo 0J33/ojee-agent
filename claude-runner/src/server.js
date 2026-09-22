@@ -59,6 +59,11 @@ function claudeSettings() {
     // The one-time "Bypass Permissions mode — accept?" screen would otherwise
     // stop the first unattended launch on a machine.
     skipDangerousModePermissionPrompt: true,
+    // The fullscreen renderer takes mouse input, so clicks in the console's
+    // terminal reach Claude (tmux forwards them once the app asks for the
+    // mouse). Tested: hooks and typed input behave the same in it. It also
+    // retires the "Try the new fullscreen renderer?" offer after turns.
+    tui: 'fullscreen',
     hooks: {
       SessionStart: hook,
       SessionEnd: hook,

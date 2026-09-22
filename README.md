@@ -117,6 +117,8 @@ An ordinary interactive `claude`, with `--dangerously-skip-permissions`, inside 
 private socket (`tmux -L ojee-claude ls`). The browser's terminal is `tmux attach` over a
 WebSocket, so it is the real one: attach from a phone and a laptop at once, close the tab and it
 keeps running, restart the runner and it keeps running (the tmux server is its own unit).
+Sessions run Claude Code's fullscreen renderer (`"tui": "fullscreen"`), so clicks and the wheel
+reach Claude; hold Shift to drag-select text for copying.
 
 The runner knows what a session is doing from three sources, not from scraping the screen:
 
