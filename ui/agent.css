@@ -202,75 +202,76 @@
   .ag-rt-try .btn { width: 100%; }
 }
 
-/* ── router · ask ──────────────────────────────────────────────────────
-   Newest answer first. A chat log that grows downward makes you scroll to
-   see the thing you just asked for, which on a phone is the whole
-   interaction — so the transcript is reversed rather than pinned. */
-.ag-rt-turns { display: grid; gap: var(--s-4); }
-.ag-rt-turn { display: grid; gap: var(--s-2); }
-.ag-rt-turn + .ag-rt-turn { padding-top: var(--s-4); border-top: 1px solid var(--line-2); }
+/* ── router · chat ────────────────────────────────────────────────────
+   A conversation, not a log. The transcript is a bounded scroller ABOVE the
+   composer and reads downward; the first version put newest-first UNDER the
+   input, which is a feed and made you scroll up to find the answer you had
+   just asked for.
 
-.ag-rt-said { display: flex; gap: var(--s-2); align-items: baseline; }
-.ag-rt-you {
-  font-family: var(--mono); font-size: 0.82rem; color: var(--ink);
-  overflow-wrap: anywhere;
+   The MESSAGES are claude.css's .ag-cl-msg, not a second idiom -- that file
+   loads beside this one and already defines what a turn looks like in this
+   console. Only what it has no equivalent for lives here: the scroller's
+   sizing, the thinking clock, the empty state and the composer. */
+.ag-ch { display: flex; flex-direction: column; min-height: 0; }
+
+.ag-ch-log {
+  flex: 1 1 auto; min-height: 200px; max-height: min(50vh, 540px);
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; align-content: start;
+  padding: var(--s-2); background: var(--panel); border: 1px solid var(--line-2);
 }
-.ag-rt-you::before { content: '> '; color: var(--accent); }
+.ag-ch-turn { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; }
+.ag-ch-turn + .ag-ch-turn { margin-top: var(--s-2); }
+.ag-ch-data > summary { list-style: none; }
+.ag-ch-data > summary::-webkit-details-marker { display: none; }
+.ag-ch-data > summary::before { content: '+ '; color: var(--accent); }
+.ag-ch-data[open] > summary::before { content: '- '; }
 
-.ag-rt-body { display: grid; gap: 2px; }
-.ag-rt-json { max-height: 320px; overflow: auto; white-space: pre; }
+/* A clock that actually moves: a cold local model takes ~40s, and silence
+   for that long reads as broken rather than busy. */
+.ag-ch-elapsed { color: var(--accent); font-variant-numeric: tabular-nums; }
+.ag-ch-dots { display: inline-flex; gap: 3px; padding-left: 1px; }
+.ag-ch-dots i { width: 4px; height: 4px; background: var(--accent); opacity: 0.35; animation: ag-ch-pulse 1.1s infinite; }
+.ag-ch-dots i:nth-child(2) { animation-delay: 0.15s; }
+.ag-ch-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes ag-ch-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .ag-ch-dots i { animation: none; opacity: 0.6; } }
+
+/* Centred in the space the conversation will occupy, not stranded under the
+   input where it reads as a system message. */
+.ag-ch-empty {
+  margin: auto; display: flex; flex-direction: column; align-items: center;
+  gap: var(--s-2); text-align: center; padding: var(--s-4) var(--s-3);
+}
+.ag-ch-empty b { color: var(--ink-2); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 2px; }
+.ag-ch-empty p { margin: 0; max-width: 44ch; line-height: 1.7; }
+
+.ag-ch-composer { display: grid; gap: 6px; padding-top: var(--s-3); }
+.ag-ch-row { display: flex; gap: var(--s-2); }
+.ag-ch-row .input { flex: 1; min-width: 0; }
+.ag-ch-send { flex: none; }
+/* Attached to the control it explains, not floating above the page. */
+.ag-ch-blocked { padding-left: 2px; }
+.ag-ch-picks { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.ag-rt-head-side { display: flex; align-items: center; gap: var(--s-2); }
+.ag-rt-json { max-height: 300px; overflow: auto; white-space: pre; }
 .ag-rt-text { font-size: 0.74rem; line-height: 1.6; color: var(--ink-2); margin: 0; }
-
+.ag-rt-body { display: grid; gap: 2px; }
 .ag-rt-hit { display: grid; gap: 2px; padding: 6px 0; border-bottom: 1px solid var(--line-2); }
 .ag-rt-hit:last-child { border-bottom: 0; }
-.ag-rt-hit-title {
-  font-family: var(--mono); font-size: 0.74rem; color: var(--accent);
-  text-decoration: none; overflow-wrap: anywhere;
-}
+.ag-rt-hit-title { font-family: var(--mono); font-size: 0.74rem; color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
 .ag-rt-hit-title:hover { text-decoration: underline; }
-.ag-rt-hit .meta { line-height: 1.5; }
-
-.ag-rt-args { padding: var(--s-3); border: 1px dashed var(--line-strong); }
-.ag-rt-args .field { gap: 4px; }
-/* A primary that spans the panel reads as the page's main action; here it is
-   the tail of one answer. Full width only where full width is the idiom. */
+.ag-rt-args { padding: var(--s-3); border: 1px dashed var(--line-strong); display: grid; gap: var(--s-2); }
 .ag-rt-args .btn { align-self: flex-start; }
 
 @media (max-width: 720px) {
-  /* The key/value rows lose their leading gutter column: on a phone the name
-     and the value are the whole row. */
+  /* Taller on a phone: the transcript IS the screen there. */
+  .ag-ch-log { max-height: min(56vh, 600px); }
   .ag-rt-body .ag-kv { grid-template-columns: minmax(0, 1fr) auto; }
   .ag-rt-body .ag-kv > :nth-child(1) { display: none; }
   .ag-rt-json { max-height: 220px; }
   .ag-rt-args .btn { align-self: stretch; }
-}
-
-
-/* ── router · chat ─────────────────────────────────────────────────────
-   The reply leads; the data it was written from sits under a disclosure.
-   Not decoration: asked to summarise a list the model quietly dropped the
-   one workflow that was off, so the source it was given is always one tap
-   away rather than discarded. */
-.ag-rt-reply {
-  margin: 0; font-size: 0.82rem; line-height: 1.65; color: var(--ink);
-  overflow-wrap: anywhere;
-}
-.ag-rt-detail > summary {
-  cursor: pointer; list-style: none; padding: 4px 0;
-  border-bottom: 1px solid var(--line-2);
-}
-.ag-rt-detail > summary::-webkit-details-marker { display: none; }
-.ag-rt-detail > summary::before { content: '+ '; color: var(--accent); }
-.ag-rt-detail[open] > summary::before { content: '- '; }
-.ag-rt-detail[open] > summary { margin-bottom: var(--s-2); }
-.ag-rt-trace { padding-top: 2px; }
-
-.ag-rt-picks { display: flex; flex-wrap: wrap; gap: 6px; }
-.ag-rt-head-side { display: flex; align-items: center; gap: var(--s-2); }
-
-@media (max-width: 720px) {
-  /* Candidate buttons go full width: a row of half-named workflows is
-     unreadable and untappable at the same time. */
-  .ag-rt-picks { flex-direction: column; align-items: stretch; }
-  .ag-rt-picks .btn { text-align: left; }
+  .ag-ch-picks { flex-direction: column; align-items: stretch; }
+  .ag-ch-picks .btn { text-align: left; }
 }

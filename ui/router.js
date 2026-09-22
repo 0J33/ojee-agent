@@ -90,22 +90,48 @@ const state = {
 
 /** One turn: route, run, and have the model write the reply. */
 async function ask(text, given, repaint) {
-  state.busy = true; state.error = null; repaint?.();
-  const turn = { text, at: Date.now(), pending: true };
-  state.turns.unshift(turn);
+  state.busy = true; state.error = null;
+  // Appended, not prepended: a conversation reads downward. The transcript
+  // scrolls to the bottom after each render, the way every chat does.
+  const turn = { text, startedAt: Date.now(), pending: true };
+  state.turns.push(turn);
+  startTicking();
   repaint?.();
   try {
     const r = await api('/api/router/chat', {
       method: 'POST',
-      body: JSON.stringify({ text: undefined, message: text, session: SESSION, given: given || null }),
+      body: JSON.stringify({ message: text, session: SESSION, given: given || null }),
     });
-    Object.assign(turn, { pending: false, res: r?.error ? null : r, err: r?.error || null });
+    Object.assign(turn, { res: r?.error ? null : r, err: r?.error || null });
   } catch (e) {
-    Object.assign(turn, { pending: false, res: null, err: e.message });
+    Object.assign(turn, { res: null, err: e.message });
   } finally {
+    turn.pending = false;
+    turn.tookMs = Date.now() - turn.startedAt;
     state.busy = false;
+    stopTicking();
     repaint?.();
   }
+}
+
+/* A pending turn shows how long it has been waiting, counting up.
+   The tick mutates that one text node rather than repainting: a repaint at
+   4Hz would rebuild the transcript and fight the scroll position. */
+let tick = null;
+function startTicking() {
+  if (tick) return;
+  tick = setInterval(() => {
+    let any = false;
+    for (const t of state.turns) {
+      if (!t.pending) continue;
+      any = true;
+      if (t.elEl) t.elEl.textContent = secs(Date.now() - t.startedAt);
+    }
+    if (!any) stopTicking();
+  }, 100);
+}
+function stopTicking() {
+  if (tick) { clearInterval(tick); tick = null; }
 }
 
 async function resetChat(repaint) {
@@ -164,27 +190,11 @@ async function toggle(repaint) {
   }
 }
 
-async function tryRoute(text, repaint) {
-  state.busy = true; state.error = null; state.query = text; repaint?.();
-  try {
-    const r = await api('/api/router/route', {
-      method: 'POST',
-      body: JSON.stringify({ text }),
-    });
-    if (r?.error) { state.error = r.error; state.last = null; }
-    else { state.last = r; state.error = null; }
-  } catch (e) {
-    state.error = e.message; state.last = null;
-  } finally {
-    state.busy = false;
-    repaint?.();
-  }
-}
-
 /* ── pieces ──────────────────────────────────────────────────────────── */
 
 const pct = (p) => `${(p * 100).toFixed(1)}%`;
 const gb = (mb) => `${(mb / 1024).toFixed(1)} GB`;
+const secs = (ms) => `${(ms / 1000).toFixed(1)}s`;
 
 /** VRAM as the design system's segmented meter. */
 function gpuMeter(gpu) {
@@ -324,83 +334,63 @@ function renderResult(tool, data) {
  * Rather than making you know a workflow id, the id field becomes a picker of
  * the real workflows — the module already has that list.
  */
-function argsForm(turn, repaint) {
-  const needs = turn.res.needs || [];
-  const vals = {};
-  const fields = needs.map((k) => {
-    if (k === 'id') {
-      loadWorkflows(repaint);
-      const sel = el('select', { class: 'select', 'aria-label': 'Workflow' },
-        el('option', { value: '' }, '— pick a workflow —'),
-        (state.workflows || []).map((w) => el('option', { value: w.id }, `${w.name}${w.active ? '' : '  (off)'}`)));
-      sel.addEventListener('change', () => { vals.id = sel.value; });
-      return el('div', { class: 'field' }, el('label', {}, 'workflow'), sel);
-    }
-    const inp = el('input', { class: 'input', type: 'text', 'aria-label': k });
-    inp.addEventListener('input', () => { vals[k] = inp.value; });
-    return el('div', { class: 'field' }, el('label', {}, k), inp);
-  });
-  return el('div', { class: 'ag-rt-args stack' },
-    el('p', { class: 'meta' }, turn.res.note || 'Needs more to go on.'),
-    ...fields,
-    el('button', {
-      class: 'btn btn--sm', type: 'button', disabled: state.busy,
-      onclick: () => ask(turn.text, { ...turn.args, ...vals }, repaint),
-    }, 'Run it'));
-}
+const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+/* A turn, in the console's own conversation idiom.
+
+   The Claude view already established what a message looks like here:
+   .ag-cl-msg, full width, a left accent bar for you and plain text for the
+   reply, with a .ag-cl-msg-who label above each. Right-aligned bubbles would
+   have been a second idiom for the same thing in the same document -- and
+   this module's stylesheet loads beside every other module's. */
 function turnBlock(turn, repaint) {
   const r = turn.res;
-  const head = el('div', { class: 'ag-rt-said' }, el('span', { class: 'ag-rt-you' }, turn.text));
+  const out = [el('div', { class: 'ag-cl-msg ag-cl-msg--user' },
+    el('span', { class: 'ag-cl-msg-who' }, 'You',
+      el('span', { class: 'meta' }, clock(turn.startedAt))),
+    el('div', { class: 'ag-cl-pre' }, turn.text))];
 
   if (turn.pending) {
-    return el('div', { class: 'ag-rt-turn' }, head,
-      el('span', { class: 'skeleton', style: 'height:38px;display:block' }));
+    const elapsed = el('span', { class: 'ag-ch-elapsed' }, secs(Date.now() - turn.startedAt));
+    turn.elEl = elapsed;
+    out.push(el('div', { class: 'ag-cl-msg ag-cl-msg--assistant' },
+      el('span', { class: 'ag-cl-msg-who' }, 'thinking', elapsed),
+      el('span', { class: 'ag-ch-dots' }, el('i'), el('i'), el('i'))));
+    return el('div', { class: 'ag-ch-turn' }, out);
   }
+
   if (turn.err) {
-    return el('div', { class: 'ag-rt-turn' }, head,
-      el('div', { class: 'alert alert--err' }, el('b', {}, 'Failed'), el('span', {}, turn.err)));
+    out.push(el('div', { class: 'ag-cl-msg ag-cl-msg--error is-bad' },
+      el('span', { class: 'ag-cl-msg-who' }, 'Request failed'),
+      el('div', { class: 'ag-cl-pre' }, turn.err)));
+    return el('div', { class: 'ag-ch-turn' }, out);
   }
-  if (!r) return el('div', { class: 'ag-rt-turn' }, head);
+  if (!r) return el('div', { class: 'ag-ch-turn' }, out);
 
-  const bits = [head];
+  const who = [
+    r.tool && r.action !== 'answered' ? r.tool : (state.chat?.model || 'assistant'),
+    turn.tookMs != null ? secs(turn.tookMs) : null,
+    r.confidence ? pct(r.confidence) : null,
+  ].filter(Boolean);
 
-  // The reply the model wrote. It leads because it is what you asked for.
-  if (r.reply) bits.push(el('p', { class: 'ag-rt-reply' }, r.reply));
+  const body = [el('span', { class: 'ag-cl-msg-who' }, who[0],
+    el('span', { class: 'meta' }, who.slice(1).join(' · ')))];
+  if (r.reply) body.push(el('div', { class: 'ag-cl-pre' }, r.reply));
+  if (r.action === 'needs') body.push(pickOne(turn, r, repaint));
+  out.push(el('div', { class: 'ag-cl-msg ag-cl-msg--assistant' }, body));
 
-  if (r.action === 'needs') {
-    bits.push(pickOne(turn, r, repaint));
+  // The data the reply was written from, kept and collapsed -- the model
+  // dropped a fact the first time it summarised a list.
+  const data = r.result ? renderResult(r.tool, r.result) : null;
+  if (data) {
+    out.push(el('details', { class: 'ag-cl-msg ag-cl-msg--result ag-ch-data' },
+      el('summary', {}, el('span', { class: 'meta' },
+        `${r.tool} result${r.route_ms != null ? ` · routed in ${Math.round(r.route_ms)} ms` : ''}`)),
+      data));
   }
-
-  // The structured result stays, under a disclosure. The model dropped a fact
-  // the first time it was asked to summarise a list, so the data it was given
-  // is never thrown away — prose that loses something is fine beside the
-  // source and dangerous instead of it.
-  if (r.result) {
-    const body = renderResult(r.tool, r.result);
-    if (body) {
-      bits.push(el('details', { class: 'ag-rt-detail' },
-        el('summary', {},
-          el('span', { class: 'meta' },
-            `${r.tool} · ${pct(r.confidence || 0)}${r.route_ms ? ` · routed in ${r.route_ms} ms` : ''}`
-            + `${r.ms ? ` · ${(r.ms / 1000).toFixed(1)}s total` : ''}`)),
-        body));
-    }
-  } else if (r.tool && r.action !== 'needs') {
-    bits.push(el('div', { class: 'ag-rt-trace' },
-      el('span', { class: 'meta' },
-        r.action === 'answered'
-          ? `answered directly${r.confidence ? ` · router was ${pct(r.confidence)} on ${r.tool}` : ''}`
-          : `${r.tool} · ${pct(r.confidence || 0)}`)));
-  }
-
-  return el('div', { class: 'ag-rt-turn' }, bits);
+  return el('div', { class: 'ag-ch-turn' }, out);
 }
 
-/**
- * The fuzzy matcher could not settle it, so ask — with the real candidates it
- * was choosing between, as buttons. One tap beats retyping a name.
- */
 function pickOne(turn, r, repaint) {
   const opts = (r.needs && r.needs.options) || [];
   const field = (r.needs && r.needs.field) || 'value';
@@ -414,7 +404,7 @@ function pickOne(turn, r, repaint) {
       }, 'Run it'));
   }
   return el('div', { class: 'ag-rt-args' },
-    el('div', { class: 'ag-rt-picks' },
+    el('div', { class: 'ag-ch-picks' },
       opts.map((o) => el('button', {
         class: 'btn btn--ghost btn--sm', type: 'button', disabled: state.busy,
         onclick: () => ask(turn.text, { [field]: o.id ?? o.name }, repaint),
@@ -444,8 +434,8 @@ function askInput(repaint) {
 
 function askPanel(repaint) {
   const input = askInput(repaint);
-  const go = el('button', {
-    class: 'btn btn--sm', type: 'button',
+  const send = el('button', {
+    class: 'btn btn--sm ag-ch-send', type: 'button',
     disabled: state.busy || !state.ready,
     onclick: () => {
       const v = input.value.trim();
@@ -455,27 +445,44 @@ function askPanel(repaint) {
       input.focus();
     },
   }, state.busy ? '…' : 'Send');
+  input.disabled = !state.ready;
+
+  // Why you cannot type, said once, attached to the thing that is disabled --
+  // not floating above the transcript where it reads as a system message.
+  const blocked = !state.ready
+    ? (state.enabled ? 'loading the model…' : 'the router is off')
+    : null;
+
+  const log = el('div', { class: 'ag-ch-log' },
+    state.turns.length
+      ? state.turns.map((t) => turnBlock(t, repaint))
+      : el('div', { class: 'ag-ch-empty' },
+          el('b', {}, blocked ? 'not ready' : 'ask it something'),
+          el('p', { class: 'meta' }, blocked
+            ? (state.enabled
+                ? 'The language model is loading. This takes about 40 seconds the first time.'
+                : 'Turn the router on with the switch above, then ask away.')
+            : '"how is loq doing" · "whats the weather in cairo" · '
+              + '"what can you do" · "is couchdb up"')));
+
+  // A conversation reads downward, so the newest line sits at the bottom and
+  // the view follows it.
+  requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
 
   const chat = state.chat;
-  return el('section', { class: 'panel stack' },
+  return el('section', { class: 'panel stack ag-ch' },
     el('div', { class: 'ag-panel-head' },
       el('h3', { class: 'h3' }, 'Chat'),
       el('span', { class: 'ag-rt-head-side' },
-        chat ? el('span', { class: 'meta' },
-          `${chat.model}${chat.loaded ? '' : ' · cold'}`) : null,
+        chat ? el('span', { class: 'meta' }, `${chat.model}${chat.loaded ? '' : ' · cold'}`) : null,
         state.turns.length ? el('button', {
           class: 'btn btn--ghost btn--sm', type: 'button',
           onclick: () => resetChat(repaint),
         }, 'Clear') : null)),
-    el('div', { class: 'ag-rt-try' }, input, go),
-    !state.ready && el('span', { class: 'help' },
-      state.enabled ? 'waiting for the model to finish loading' : 'turn it on first'),
-    state.turns.length
-      ? el('div', { class: 'ag-rt-turns' }, state.turns.slice(0, 15).map((t) => turnBlock(t, repaint)))
-      : el('div', { class: 'empty' },
-          el('b', {}, 'ask it something'),
-          el('p', {}, '"how is loq doing" · "whats the weather in cairo" · '
-            + '"what can you do" · "is couchdb up"')));
+    log,
+    el('div', { class: 'ag-ch-composer' },
+      el('div', { class: 'ag-ch-row' }, input, send),
+      blocked ? el('span', { class: 'ag-ch-blocked meta' }, blocked) : null));
 }
 
 /* ── view ────────────────────────────────────────────────────────────── */
