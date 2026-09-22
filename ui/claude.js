@@ -107,6 +107,8 @@ const stateTag = (state, bg = null) => {
   return el('span', { class: `ag-cl-state ag-cl-state--${state}`, title: n ? bgText(bg) : null },
     STATE[state]?.label || state, n ? ` · ${n} bg` : '');
 };
+// The Agent overview lists sessions too; it words and colours them the same.
+export { dot as stateDot, stateTag };
 const bgText = (bg) => [bg.subagents ? `${bg.subagents} subagent${bg.subagents === 1 ? '' : 's'}` : null,
   bg.shells ? `${bg.shells} command${bg.shells === 1 ? '' : 's'}` : null].filter(Boolean).join(', ') + ' in the background';
 

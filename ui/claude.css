@@ -130,6 +130,9 @@ button.ag-cl-row:hover { background: var(--accent-03); }
    the .xterm element's padding. Padding on the parent gave one row too many,
    and the bottom line — Claude's status line — was cut in half. */
 .ag-cl-term .xterm { height: 100%; padding: var(--s-2) 6px 4px var(--s-2); }
+/* A drag on the terminal scrolls the terminal (touchScroll() in
+   claude-term.js), never the page under it. */
+.ag-cl-term .xterm { touch-action: none; }
 .ag-cl-term .xterm-viewport { overflow-y: auto; }
 .ag-cl-keys {
   display: flex; gap: 2px; padding: 6px 8px; overflow-x: auto;

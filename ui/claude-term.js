@@ -57,6 +57,81 @@ const KEYS = [
   ['S-Tab', '\x1b[Z'], ['PgUp', '\x1b[5~'], ['PgDn', '\x1b[6~'],
 ];
 
+/** Finger travel, in rows, per wheel tick sent. tmux and Claude move a few
+ *  lines per tick, so one per row would outrun the finger. */
+const TOUCH_STEP_ROWS = 2;
+
+/**
+ * Drag to scroll on a touchscreen. tmux keeps the mouse on (Claude's
+ * fullscreen view wants it too), and xterm ignores touch while an app has
+ * the mouse — so on a phone a drag did nothing. This turns the drag, and
+ * the fling after it, into the wheel ticks a mouse would send, dispatched
+ * through xterm so they are encoded the way the app asked for.
+ */
+function touchScroll(el, term) {
+  const screen = el.querySelector('.xterm-screen') || el;
+  const active = () => term.modes.mouseTrackingMode !== 'none';
+  const step = () => ((screen.clientHeight / term.rows) || 16) * TOUCH_STEP_ROWS;
+  let at = null;     // the finger: start y, last x/y/time
+  let dragging = false;
+  let acc = 0;       // travel not yet sent as a tick
+  let v = 0;         // px/ms, for the fling
+  let raf = 0;
+
+  const feed = (dy) => {
+    acc += dy;
+    const s = step();
+    while (Math.abs(acc) >= s) {
+      const dir = Math.sign(acc);
+      acc -= dir * s;
+      screen.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: dir, deltaMode: WheelEvent.DOM_DELTA_LINE,
+        clientX: at.x, clientY: at.y, bubbles: true, cancelable: true,
+      }));
+    }
+  };
+  const fling = () => {
+    let prev = performance.now();
+    const frame = (now) => {
+      const dt = Math.min(64, now - prev);
+      prev = now;
+      feed(v * dt);
+      v *= Math.pow(0.95, dt / 16);
+      raf = Math.abs(v) > 0.03 ? requestAnimationFrame(frame) : 0;
+    };
+    raf = requestAnimationFrame(frame);
+  };
+
+  el.addEventListener('touchstart', (e) => {
+    cancelAnimationFrame(raf);
+    v = 0;
+    if (e.touches.length !== 1 || !active()) { at = null; return; }
+    const t = e.touches[0];
+    at = { y0: t.clientY, x: t.clientX, y: t.clientY, t: e.timeStamp };
+    dragging = false;
+    acc = 0;
+  }, { passive: true });
+  el.addEventListener('touchmove', (e) => {
+    if (!at || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    // Under the slop a touch is still a tap (a click for Claude).
+    if (!dragging && Math.abs(t.clientY - at.y0) < 8) return;
+    dragging = true;
+    e.preventDefault();
+    const dy = at.y - t.clientY;
+    v = 0.7 * (dy / Math.max(1, e.timeStamp - at.t)) + 0.3 * v;
+    Object.assign(at, { x: t.clientX, y: t.clientY, t: e.timeStamp });
+    feed(dy);
+  }, { passive: false });
+  el.addEventListener('touchend', (e) => {
+    if (!at || !dragging) { at = null; return; }
+    // A finger held still before lifting is not a fling.
+    if (e.timeStamp - at.t > 80) v = 0;
+    if (Math.abs(v) > 0.2) fling();
+  }, { passive: true });
+  el.addEventListener('touchcancel', () => { at = null; v = 0; }, { passive: true });
+}
+
 /**
  * @param {object} o
  * @param {HTMLElement} o.host
@@ -213,6 +288,7 @@ export function startTerminal({ host, ctx, path, onState, onImage }) {
       return true;
     });
     term.open(termEl);
+    touchScroll(termEl, term);
     fit.fit();
     term.onData((d) => { if (ws?.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(d)); });
     ro = new ResizeObserver(() => { try { fit.fit(); sendSize(); } catch { /* not laid out */ } });

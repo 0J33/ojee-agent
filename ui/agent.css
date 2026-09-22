@@ -51,6 +51,56 @@
 .ag-problem strong { color: var(--warn); font-family: var(--mono); font-size: 0.76rem; }
 .ag-problem p { margin: 0; }
 
+/* ── overview ──────────────────────────────────────────────────────────
+   Sessions on the left, the stack and n8n in a narrower column beside them;
+   one column once the two would squeeze each other. Session rows borrow
+   .ag-cl-row (claude.css) for their hairline and hover. */
+.ag-ov-slot { min-width: 0; }
+.ag-ov-slot:empty { display: none; }
+.ag-ov-cols {
+  display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr);
+  gap: var(--s-4); align-items: start;
+}
+
+/* A readout that opens the place it reads from. */
+.ag-ov-tile { text-align: left; font: inherit; color: inherit; cursor: pointer; transition: var(--t); }
+.ag-ov-tile:hover { border-color: var(--line-hover); }
+.ag-ov-tile .value sup { font-size: 1rem; }
+/* A caption wraps rather than hiding the half that mattered. */
+.ag-ov-tile .meta { line-height: 1.6; }
+
+.ag-ov-actions { display: flex; gap: 6px; }
+.ag-ov-actions .ic { width: 15px; height: 15px; }
+.ag-ov-more { justify-self: start; align-self: flex-start; }
+
+/* Doubled class: claude.css loads after this file and its .ag-cl-row would
+   otherwise win back the centring and the padding. */
+.ag-cl-row.ag-ov-srow { grid-template-columns: 8px minmax(0, 1fr) auto; align-items: start; padding-block: 12px; }
+.ag-ov-srow > .dot { margin-top: 5px; }
+.ag-ov-srow-main { display: grid; gap: 4px; min-width: 0; }
+.ag-ov-srow-title { color: var(--ink); font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-ov-srow-sub { font-size: 0.66rem; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The last thing it said, or what it is asking: two lines, then cut. */
+.ag-ov-srow-said {
+  font-size: 0.7rem; line-height: 1.5; color: var(--ink-2);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.ag-ov-srow-side { display: grid; justify-items: end; gap: 4px; padding-top: 2px; }
+
+.ag-ov-svc  { grid-template-columns: 8px minmax(0, 0.9fr) minmax(0, 1fr) auto; }
+.ag-ov-svc > .meta { text-align: right; }
+.ag-ov-exec { grid-template-columns: 8px minmax(0, 1fr) auto; }
+
+@media (max-width: 960px) {
+  .ag-ov-cols { grid-template-columns: minmax(0, 1fr); }
+}
+/* On a phone the state and time go under the text instead of beside it,
+   which would leave the text a third of the row. */
+@media (max-width: 560px) {
+  .ag-cl-row.ag-ov-srow { grid-template-columns: 8px minmax(0, 1fr); row-gap: 6px; }
+  .ag-ov-srow-side { grid-column: 2; display: flex; gap: var(--s-2); align-items: baseline; padding-top: 0; }
+}
+
 @media (max-width: 720px) {
   /* Four columns of metadata do not fit a phone. The name, the state and the
      action are what you came for.
