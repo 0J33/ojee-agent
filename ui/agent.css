@@ -253,6 +253,12 @@
 /* Attached to the control it explains, not floating above the page. */
 .ag-ch-blocked { padding-left: 2px; }
 .ag-ch-picks { display: flex; flex-wrap: wrap; gap: 6px; }
+/* A pending side effect, stated plainly, with the choice attached to it. */
+.ag-ch-confirm {
+  display: grid; gap: var(--s-2); padding: var(--s-2) 10px;
+  border: 1px solid var(--warn); box-shadow: inset 2px 0 0 var(--warn);
+}
+.ag-ch-confirm > .meta { color: var(--ink-2); text-transform: none; letter-spacing: 0; }
 
 .ag-rt-head-side { display: flex; align-items: center; gap: var(--s-2); }
 .ag-rt-json { max-height: 300px; overflow: auto; white-space: pre; }
@@ -268,6 +274,12 @@
 @media (max-width: 720px) {
   /* Taller on a phone: the transcript IS the screen there. */
   .ag-ch-log { max-height: min(56vh, 600px); }
+
+  /* 16px is not a taste choice. Safari on iOS zooms the page in when a
+     focused input's text is smaller than that, and then leaves you zoomed --
+     so the box you tapped jumps under your thumb. The kit's .input is
+     smaller, which is right everywhere except here. */
+  .ag-ch-row .input { font-size: 16px; }
   .ag-rt-body .ag-kv { grid-template-columns: minmax(0, 1fr) auto; }
   .ag-rt-body .ag-kv > :nth-child(1) { display: none; }
   .ag-rt-json { max-height: 220px; }

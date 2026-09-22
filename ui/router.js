@@ -57,6 +57,9 @@ let api = null;
    question, which is the entire interaction. Declared up here with the other
    module state because initRouter() below resets it. */
 let inputEl = null;
+/* One warm attempt per mount: a retry loop on a cold model would queue
+   another 40-second load behind the first. */
+let warmed = false;
 
 /* Conversation state lives on Loq, keyed by this. Stable per browser so a
    reload continues the thread rather than silently starting a new one. */
@@ -155,6 +158,7 @@ export function initRouter(context, scopedApi) {
   // A remount is a new document subtree; the cached input from the last one is
   // detached and would never appear.
   inputEl = null;
+  warmed = false;
 }
 
 export async function refreshRouter(repaint) {
@@ -166,6 +170,14 @@ export async function refreshRouter(repaint) {
     Object.assign(state, r, { error: null });
   }
   repaint?.();
+  // Start the model loading now, while this page is being read, rather than
+  // when the first message is sent. Once per view; nothing waits on it.
+  if (state.ready && state.chat && !state.chat.loaded && !warmed) {
+    warmed = true;
+    api('/api/router/chat/warm', { method: 'POST' })
+      .then(() => refreshRouter(repaint))
+      .catch(() => { warmed = false; });
+  }
 }
 
 async function toggle(repaint) {
@@ -377,6 +389,7 @@ function turnBlock(turn, repaint) {
     el('span', { class: 'meta' }, who.slice(1).join(' · ')))];
   if (r.reply) body.push(el('div', { class: 'ag-cl-pre' }, r.reply));
   if (r.action === 'needs') body.push(pickOne(turn, r, repaint));
+  if (r.action === 'confirm') body.push(confirmRow(turn, r, repaint));
   out.push(el('div', { class: 'ag-cl-msg ag-cl-msg--assistant' }, body));
 
   // The data the reply was written from, kept and collapsed -- the model
@@ -411,6 +424,28 @@ function pickOne(turn, r, repaint) {
       }, o.name || String(o.id)))));
 }
 
+/**
+ * Anything with a side effect asks before it acts.
+ *
+ * Not belt-and-braces: "tell me some breaking bad quotes" routed to
+ * reminder_send at 0.976, cleared the 0.85 write gate, and posted that
+ * sentence to Discord. A threshold cannot catch a confident wrong answer, so
+ * the last word is yours.
+ */
+function confirmRow(turn, r, repaint) {
+  return el('div', { class: 'ag-ch-confirm' },
+    el('span', { class: 'meta' }, r.what || 'This will change something.'),
+    el('div', { class: 'ag-ch-picks' },
+      el('button', {
+        class: 'btn btn--sm', type: 'button', disabled: state.busy,
+        onclick: () => ask(turn.text, { ...(r.payload || {}), confirmed: true }, repaint),
+      }, 'Do it'),
+      el('button', {
+        class: 'btn btn--ghost btn--sm', type: 'button', disabled: state.busy,
+        onclick: () => { turn.res = { ...r, action: 'cancelled', reply: 'Cancelled.' }; repaint?.(); },
+      }, 'Cancel')));
+}
+
 function askInput(repaint) {
   if (inputEl) return inputEl;
   inputEl = el('input', {
@@ -434,6 +469,13 @@ function askInput(repaint) {
 
 function askPanel(repaint) {
   const input = askInput(repaint);
+  // Caching the node kept its value across repaints but not its focus:
+  // render() calls replaceChildren(), and detaching a focused element blurs
+  // it. On a phone that closes the keyboard mid-sentence. Capture the state
+  // here -- askPanel runs BEFORE the swap, so the old node is still active --
+  // and put it back once the new tree is attached.
+  const hadFocus = document.activeElement === input;
+  const caret = hadFocus ? [input.selectionStart, input.selectionEnd] : null;
   const send = el('button', {
     class: 'btn btn--sm ag-ch-send', type: 'button',
     disabled: state.busy || !state.ready,
@@ -467,14 +509,21 @@ function askPanel(repaint) {
 
   // A conversation reads downward, so the newest line sits at the bottom and
   // the view follows it.
-  requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
+  requestAnimationFrame(() => {
+    log.scrollTop = log.scrollHeight;
+    if (hadFocus && !input.disabled) {
+      input.focus({ preventScroll: true });
+      if (caret) { try { input.setSelectionRange(caret[0], caret[1]); } catch { /* not selectable */ } }
+    }
+  });
 
   const chat = state.chat;
   return el('section', { class: 'panel stack ag-ch' },
     el('div', { class: 'ag-panel-head' },
       el('h3', { class: 'h3' }, 'Chat'),
       el('span', { class: 'ag-rt-head-side' },
-        chat ? el('span', { class: 'meta' }, `${chat.model}${chat.loaded ? '' : ' · cold'}`) : null,
+        chat ? el('span', { class: 'meta' },
+          `${chat.model}${chat.loaded ? '' : (warmed ? ' · warming' : ' · cold')}`) : null,
         state.turns.length ? el('button', {
           class: 'btn btn--ghost btn--sm', type: 'button',
           onclick: () => resetChat(repaint),

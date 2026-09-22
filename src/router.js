@@ -144,6 +144,14 @@ function mount(app, auth) {
     res.json(out.data);
   });
 
+  /* Warm the language model while the view is being read, so the first
+     message does not pay the ~40s disk read. Fire and forget: whether it
+     worked changes nothing the caller can act on. */
+  r.post('/chat/warm', auth, async (_req, res) => {
+    const out = await ask(`${ROUTER_URL}/chat/warm`, { method: 'POST' }, 8000);
+    res.json(out.ok ? out.data : { warming: false, error: out.error });
+  });
+
   r.post('/chat/reset', auth, async (req, res) => {
     const out = await ask(`${ROUTER_URL}/chat/reset`, {
       method: 'POST',
