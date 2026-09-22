@@ -268,9 +268,9 @@ class Sessions extends EventEmitter {
    * one that is being resumed. Picks a usable account first; if none is,
    * the session waits paused instead of launching into a known wall.
    */
-  async start(s, { prompt } = {}) {
+  async start(s, { prompt, force = false } = {}) {
     const text = prompt ?? (s.pendingPrompt || '');
-    const pick = this.pickAccountModel(s);
+    const pick = this.pickAccountModel(s) || (force ? this.forcedPick(s) : null);
     if (!pick) {
       s.pendingPrompt = text;
       return this.pauseAll(s, 'Every account is out of usage.');
@@ -303,6 +303,25 @@ class Sessions extends EventEmitter {
       if (alt2) return { account: alt2.id, model: fb };
     }
     return null;
+  }
+
+  /**
+   * What to try when a person presses Resume now and every account is
+   * recorded as spent: its own account anyway, on whichever of its two models
+   * is not recorded as spent there. A record can be stale — the limit may
+   * have reset, or been noted for the wrong reason — and the person asking is
+   * reason enough to spend one request finding out. If it really is out, the
+   * error comes back and is handled as usual.
+   */
+  forcedPick(s) {
+    const acc = this.accounts;
+    const own = acc.get(s.account) || acc.get(this.settings.activeAccount) || acc.list()[0];
+    if (!own) return null;
+    const pref = s.model.preferred;
+    const fb = s.model.fallback;
+    const spent = acc.modelLimitedUntil(own, family(pref));
+    const model = spent && fb && !acc.modelLimitedUntil(own, family(fb)) ? fb : pref;
+    return { account: own.id, model };
   }
 
   /* ── launching ──────────────────────────────────────────────────────── */
@@ -826,13 +845,21 @@ class Sessions extends EventEmitter {
     this.touch(s);
 
     let lastErr = null;
+    let freed = false;
     for (const e of entries) {
       if (e.isSidechain) continue;
       if (e.type === 'assistant') {
         const c = classify(e);
         if (c) { lastErr = { c, uuid: e.uuid }; continue; }
         const model = e.message?.model;
-        if (model && model !== '<synthetic>') this.noteModel(s, model);
+        if (model && model !== '<synthetic>') {
+          this.noteModel(s, model);
+          // It answered, so this account is not out and neither is this model,
+          // whatever was recorded.
+          const acct = this.accounts.get(s.account);
+          const at = Date.parse(e.timestamp) || Date.now();
+          if (acct && this.accounts.noteWorking(acct, family(model), at)) freed = true;
+        }
         const text = (e.message?.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
         if (text) s.lastAssistant = clip(text, 4000);
         // A reply after an error means the error was recovered from.
@@ -845,6 +872,12 @@ class Sessions extends EventEmitter {
       } else if (e.type === 'ai-title' && e.aiTitle && s.titleSource === 'auto') {
         if (e.aiTitle !== s.title) { s.title = clip(e.aiTitle, 70); this.emit('change', s); }
       }
+    }
+    if (freed) {
+      this.log('limits', `${s.id.slice(0, 8)} answered on ${this.accountLabel(s.account)} — dropped a limit recorded for it`);
+      this.emit('accounts');
+      // Sessions parked behind that limit should not sit out the rest of it.
+      if (this.accountRestored()) this.log('limits', 'paused sessions will try again');
     }
     if (lastErr && lastErr.uuid !== s.lastErrorUuid) {
       s.lastErrorUuid = lastErr.uuid;
@@ -891,6 +924,27 @@ class Sessions extends EventEmitter {
         return this.moveOrPause(s, c.text);
       }
       case 'account-limit': {
+        // The message does not say WHOSE limit it is. A weekly allowance spent
+        // on one model reads exactly like the account's own weekly limit —
+        // same words, same seven_day window — and treating the second as the
+        // first parks an account that can still answer on another model. So
+        // the same account is tried once on the fallback model, and only a
+        // limit there too means the account is out. (A spend limit always is.)
+        const fam = family(s.model.current);
+        const fb = s.model.fallback;
+        const spend = /spend limit/i.test(c.text);
+        if (acct && fam && fb && family(fb) !== fam && !spend && this.accounts.usable(acct, family(fb))) {
+          this.accounts.markModelLimited(acct, fam, { until: retryAt(c), text: c.text });
+          const why = `${this.familyLabel(fam)} hit a usage limit on ${acct.label}, so this session moved to ${this.modelLabel(fb)}.`;
+          await this.relaunch(s, { model: fb, prompt: continueText(why), why: `${this.familyLabel(fam)} limit — trying ${this.modelLabel(fb)} on ${acct.label}` });
+          this.notifier.send('modelFallback', {
+            session: s,
+            text: `${c.text}\n\nThat may be ${this.familyLabel(fam)}'s allowance rather than the whole account, so this session is trying ${this.modelLabel(fb)} on ${acct.label}. If that is out too, the account is and it moves on.`,
+            tag: `modelFallback:${acct.id}:${fam}`,
+          });
+          this.emit('accounts');
+          return;
+        }
         if (acct) this.accounts.markAccountLimited(acct, { until: retryAt(c), window: c.window, text: c.text });
         return this.moveOrPause(s, c.text);
       }
@@ -986,8 +1040,8 @@ class Sessions extends EventEmitter {
   }
 
   /** A pause ran out: continue on whatever can take it now. */
-  async resumePaused(s) {
-    const pick = this.pickAccountModel(s);
+  async resumePaused(s, { force = false } = {}) {
+    const pick = this.pickAccountModel(s) || (force ? this.forcedPick(s) : null);
     if (!pick) {
       const until = this.accounts.earliestReturn() || Date.now() + 30 * MINUTE;
       this.pause(s, until, `Still out of usage — resumes ${fmt(until)}`);

@@ -251,6 +251,44 @@ test('runner end to end', { skip: !haveTmux && 'no tmux' }, async (t) => {
     await api('PUT', '/api/settings', { maxRunning: 3 });
   });
 
+  await t.test('a weekly limit on Fable alone keeps the account and moves to Opus', async () => {
+    for (const a of accounts.list()) a.limits = {};
+    store.updateSettings({ activeAccount: 'main' });
+    fs.writeFileSync(path.join(HOME, '.claude', 'FAKE_FABLE_WEEKLY'), '');
+    const s = (await api('POST', '/api/sessions', { cwd: work, prompt: 'start on fable' })).body;
+    await waitFor(() => sessions.get(s.id).model.current === 'claude-opus-5' && stateOf(s.id) === 'idle', 'same account, on opus');
+    const live = sessions.get(s.id);
+    assert.equal(live.account, 'main', 'the account was not blamed for its model running out');
+    assert.equal(accounts.accountLimitedUntil(accounts.get('main')), null);
+    assert.ok(accounts.modelLimitedUntil(accounts.get('main'), 'fable') > Date.now());
+    fs.unlinkSync(path.join(HOME, '.claude', 'FAKE_FABLE_WEEKLY'));
+    await api('DELETE', `/api/sessions/${s.id}?purge=1`);
+  });
+
+  await t.test('a reply drops a limit recorded for an account that plainly works', async () => {
+    for (const a of accounts.list()) a.limits = {};
+    const s = (await api('POST', '/api/sessions', { cwd: work, prompt: 'hello' })).body;
+    await waitFor(() => stateOf(s.id) === 'idle', 'idle');
+    accounts.markAccountLimited(accounts.get('main'), { until: Date.now() + 3 * 86400_000, window: 'seven_day', text: 'stale' });
+    await api('POST', `/api/sessions/${s.id}/message`, { text: 'still there?' });
+    await waitFor(() => accounts.accountLimitedUntil(accounts.get('main')) === null, 'the stale limit went');
+    await api('DELETE', `/api/sessions/${s.id}?purge=1`);
+  });
+
+  await t.test('Resume now tries even when every account is recorded as spent', async () => {
+    for (const a of accounts.list()) a.limits = {};
+    const s = (await api('POST', '/api/sessions', { cwd: work, prompt: 'hello' })).body;
+    await waitFor(() => stateOf(s.id) === 'idle', 'idle');
+    await api('POST', `/api/sessions/${s.id}/end`);
+    for (const a of accounts.list()) accounts.markAccountLimited(a, { until: Date.now() + 3 * 86400_000, window: 'seven_day', text: 'spent' });
+    // Without the record being believed blindly: it starts, answers, and the
+    // answer clears what was recorded.
+    await api('POST', `/api/sessions/${s.id}/resume`, { prompt: 'finish it off' });
+    await waitFor(() => stateOf(s.id) === 'done', 'resumed anyway');
+    assert.equal(accounts.accountLimitedUntil(accounts.get('main')), null);
+    await api('DELETE', `/api/sessions/${s.id}?purge=1`);
+  });
+
   await t.test('history lists conversations and one can be adopted', async () => {
     const r = await api('GET', '/api/history');
     assert.ok(r.body.sessions.length >= 1);

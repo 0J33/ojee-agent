@@ -325,11 +325,13 @@ function createRunner(overrides = {}) {
 
   app.post('/api/sessions/:id/resume', auth, wrap(async (req, res) => {
     const s = need(req);
+    // Resume now is a person saying "try it": it goes ahead even when every
+    // account is recorded as spent, because the record may be stale.
     if (await sessions.isAlive(s)) {
-      if (s.state === 'paused') { s.pausedUntil = Date.now(); await sessions.resumePaused(s); }
+      if (s.state === 'paused') { s.pausedUntil = Date.now(); await sessions.resumePaused(s, { force: true }); }
       return res.json(sessions.view(s));
     }
-    await sessions.start(s, { prompt: String(req.body?.prompt || '') });
+    await sessions.start(s, { prompt: String(req.body?.prompt || ''), force: true });
     res.json(sessions.view(s));
   }));
 

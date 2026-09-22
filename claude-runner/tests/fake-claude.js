@@ -15,6 +15,9 @@
  * test can make one account "run out" without touching the other:
  *   FAKE_EXHAUSTED   every request fails with the five-hour session limit
  *   FAKE_NO_FABLE    requests on a Fable model fail with the Fable limit
+ *   FAKE_FABLE_WEEKLY  Fable's WEEKLY allowance is spent — worded and shaped
+ *                      exactly like the account's own weekly limit, which is
+ *                      how Claude Code reports it
  *   FAKE_LOGGED_OUT  `auth status` says logged out
  */
 const fs = require('fs');
@@ -94,6 +97,15 @@ async function turn(prompt) {
   if (has('FAKE_NO_FABLE') && /fable/.test(opts.model)) {
     const text = "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.";
     write({ type: 'assistant', isApiErrorMessage: true, error: 'rate_limit', apiError: 'model_requires_usage_credits', apiErrorStatus: 429, message: { model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text }] } });
+    console.log(text);
+    fire('Stop', { last_assistant_message: text });
+    return;
+  }
+  if (has('FAKE_FABLE_WEEKLY') && /fable/.test(opts.model)) {
+    // 2.1.267, Fable's weekly allowance spent: nothing in the line or the
+    // quota block says which model it is about.
+    const text = "You've hit your weekly limit · resets Sep 26, 2am (Africa/Cairo)";
+    write({ type: 'assistant', isApiErrorMessage: true, error: 'rate_limit', apiErrorStatus: 429, quotaLimits: { status: 'rejected', resetsAt: Math.floor(Date.now() / 1000) + 3 * 86400, rateLimitType: 'seven_day' }, message: { model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text }] } });
     console.log(text);
     fire('Stop', { last_assistant_message: text });
     return;

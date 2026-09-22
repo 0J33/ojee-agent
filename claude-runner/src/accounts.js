@@ -191,6 +191,27 @@ class Accounts {
     this.store.save();
   }
 
+  /**
+   * A model answered on this account at `at`, so neither the account nor that
+   * model was out — whatever was recorded before that moment. A limit noted
+   * AFTER the reply stands: it is newer evidence than the reply is.
+   *
+   * This is what undoes a limit recorded for the wrong reason, which is easy
+   * to do: a weekly allowance spent on one model is reported in the same
+   * words as the account's own weekly limit.
+   *
+   * @returns {boolean} true if a recorded limit was dropped
+   */
+  noteWorking(acct, familyName, at = Date.now()) {
+    const l = this.limits(acct);
+    let changed = false;
+    if (l.account && (l.account.at || 0) <= at) { delete l.account; changed = true; }
+    const m = familyName && l.models[familyName];
+    if (m && (m.at || 0) <= at) { delete l.models[familyName]; changed = true; }
+    if (changed) this.store.save();
+    return changed;
+  }
+
   /** Drop limits whose time has passed. Returns true if anything changed. */
   expire(now = Date.now()) {
     let changed = false;
