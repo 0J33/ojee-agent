@@ -714,7 +714,12 @@ class Sessions extends EventEmitter {
       }
       case 'SubagentStop': {
         setBackground(s, evt.background_tasks);
-        if (s.bgOnly && s.state === 'running') {
+        // Marked idle while others are still running (the runner restarted
+        // after the last Stop, say): the list says otherwise.
+        if (s.background?.length && ['idle', 'done'].includes(s.state)) {
+          s.bgOnly = true;
+          this.setState(s, 'running', bgDetail(s));
+        } else if (s.bgOnly && s.state === 'running') {
           // Claude Code normally wakes the main thread when background work
           // ends, and its Stop decides what happens next; if it does not,
           // the session is simply between turns again.
