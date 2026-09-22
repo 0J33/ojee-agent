@@ -133,3 +133,144 @@
   .ag-exec { grid-template-columns: 8px minmax(0, 1fr) auto; }
   .ag-exec > :nth-child(3), .ag-exec > :nth-child(4) { display: none; }
 }
+
+/* ── router ────────────────────────────────────────────────────────────
+   The Laya tool router, which runs on Loq. The switch is the design
+   system's `.togrow`; everything here is layout around it, because the
+   one thing this view must never do is invent a second switch idiom. */
+.ag-rt-switch { width: 100%; }
+.ag-rt-switch-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-rt-switch-side { display: flex; align-items: center; gap: var(--s-3); min-width: 0; }
+/* The state sentence is the useful half; let it shrink, never the switch.
+   It keeps .meta's uppercase — an all-lowercase sentence beside an
+   uppercase label reads as a different system, not as emphasis. */
+.ag-rt-switch-side .meta {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.ag-rt-facts {
+  display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.4fr);
+  gap: var(--s-3) var(--s-4); align-items: start;
+}
+/* A labelled readout, not a floating bar: the meter means nothing without
+   the word GPU next to it. */
+.ag-rt-gpu { display: grid; gap: 6px; min-width: 0; align-content: start; }
+.ag-rt-gpu .label { color: var(--dim); }
+.ag-rt-lines { display: grid; gap: 4px; min-width: 0; }
+
+.ag-rt-try { display: flex; gap: var(--s-2); }
+.ag-rt-try .input { flex: 1; min-width: 0; }
+
+.ag-rt-result { padding-top: var(--s-2); }
+.ag-rt-verdict { grid-template-columns: 8px minmax(0, 1fr) minmax(0, 1fr) auto auto; }
+.ag-rt-verdict .ag-row-name { font-size: 0.78rem; }
+/* The verdict sits in a row of uppercase readouts; the colour stays on the
+   dot, which is where the design system puts status. */
+.ag-rt-verdict .vtag { text-transform: uppercase; white-space: nowrap; }
+.ag-rt-alts { display: grid; gap: 4px; }
+
+@media (max-width: 720px) {
+  /* The switch keeps its label and its toggle; the state sentence moves
+     under them rather than squeezing both into a third of the row. */
+  .ag-rt-switch { flex-wrap: wrap; row-gap: 8px; }
+  .ag-rt-switch-side { width: 100%; justify-content: space-between; }
+
+  .ag-rt-facts { grid-template-columns: minmax(0, 1fr); }
+
+  /* Five columns of verdict do not fit a phone. The tool and the verdict lead;
+     the numbers go under them; the effect label is already implied by the gate
+     on the panel above.
+
+     Explicit areas rather than auto-placement: with one child explicitly
+     placed the rest flow into whatever is left, which put the verdict tag in a
+     column too narrow for it and broke "NEEDS INPUT" across two lines. */
+  .ag-rt-verdict {
+    grid-template-columns: 8px minmax(0, 1fr) auto;
+    grid-template-areas: "dot name tag" "dot conf conf";
+    row-gap: 2px;
+  }
+  .ag-rt-verdict > :nth-child(1) { grid-area: dot; align-self: center; }
+  .ag-rt-verdict > :nth-child(2) { grid-area: name; }
+  .ag-rt-verdict > :nth-child(3) { grid-area: conf; }
+  .ag-rt-verdict > :nth-child(4) { display: none; }
+  .ag-rt-verdict > :nth-child(5) { grid-area: tag; margin-left: 0; }
+}
+
+@media (max-width: 480px) {
+  /* A full-width button under the box beats a 5ch one beside it. */
+  .ag-rt-try { flex-direction: column; }
+  .ag-rt-try .btn { width: 100%; }
+}
+
+/* ── router · ask ──────────────────────────────────────────────────────
+   Newest answer first. A chat log that grows downward makes you scroll to
+   see the thing you just asked for, which on a phone is the whole
+   interaction — so the transcript is reversed rather than pinned. */
+.ag-rt-turns { display: grid; gap: var(--s-4); }
+.ag-rt-turn { display: grid; gap: var(--s-2); }
+.ag-rt-turn + .ag-rt-turn { padding-top: var(--s-4); border-top: 1px solid var(--line-2); }
+
+.ag-rt-said { display: flex; gap: var(--s-2); align-items: baseline; }
+.ag-rt-you {
+  font-family: var(--mono); font-size: 0.82rem; color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.ag-rt-you::before { content: '> '; color: var(--accent); }
+
+.ag-rt-body { display: grid; gap: 2px; }
+.ag-rt-json { max-height: 320px; overflow: auto; white-space: pre; }
+.ag-rt-text { font-size: 0.74rem; line-height: 1.6; color: var(--ink-2); margin: 0; }
+
+.ag-rt-hit { display: grid; gap: 2px; padding: 6px 0; border-bottom: 1px solid var(--line-2); }
+.ag-rt-hit:last-child { border-bottom: 0; }
+.ag-rt-hit-title {
+  font-family: var(--mono); font-size: 0.74rem; color: var(--accent);
+  text-decoration: none; overflow-wrap: anywhere;
+}
+.ag-rt-hit-title:hover { text-decoration: underline; }
+.ag-rt-hit .meta { line-height: 1.5; }
+
+.ag-rt-args { padding: var(--s-3); border: 1px dashed var(--line-strong); }
+.ag-rt-args .field { gap: 4px; }
+/* A primary that spans the panel reads as the page's main action; here it is
+   the tail of one answer. Full width only where full width is the idiom. */
+.ag-rt-args .btn { align-self: flex-start; }
+
+@media (max-width: 720px) {
+  /* The key/value rows lose their leading gutter column: on a phone the name
+     and the value are the whole row. */
+  .ag-rt-body .ag-kv { grid-template-columns: minmax(0, 1fr) auto; }
+  .ag-rt-body .ag-kv > :nth-child(1) { display: none; }
+  .ag-rt-json { max-height: 220px; }
+  .ag-rt-args .btn { align-self: stretch; }
+}
+
+
+/* ── router · chat ─────────────────────────────────────────────────────
+   The reply leads; the data it was written from sits under a disclosure.
+   Not decoration: asked to summarise a list the model quietly dropped the
+   one workflow that was off, so the source it was given is always one tap
+   away rather than discarded. */
+.ag-rt-reply {
+  margin: 0; font-size: 0.82rem; line-height: 1.65; color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.ag-rt-detail > summary {
+  cursor: pointer; list-style: none; padding: 4px 0;
+  border-bottom: 1px solid var(--line-2);
+}
+.ag-rt-detail > summary::-webkit-details-marker { display: none; }
+.ag-rt-detail > summary::before { content: '+ '; color: var(--accent); }
+.ag-rt-detail[open] > summary::before { content: '- '; }
+.ag-rt-detail[open] > summary { margin-bottom: var(--s-2); }
+.ag-rt-trace { padding-top: 2px; }
+
+.ag-rt-picks { display: flex; flex-wrap: wrap; gap: 6px; }
+.ag-rt-head-side { display: flex; align-items: center; gap: var(--s-2); }
+
+@media (max-width: 720px) {
+  /* Candidate buttons go full width: a row of half-named workflows is
+     unreadable and untappable at the same time. */
+  .ag-rt-picks { flex-direction: column; align-items: stretch; }
+  .ag-rt-picks .btn { text-align: left; }
+}

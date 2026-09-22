@@ -16,6 +16,7 @@
 
 import { mountClaude, routeClaude, unmountClaude, stateDot, stateTag } from './claude.js';
 import { ensureIcons } from './claude-icons.js';
+import { viewRouter, refreshRouter, initRouter } from './router.js';
 
 const el = (tag, attrs = {}, ...kids) => {
   const n = document.createElement(tag);
@@ -530,16 +531,19 @@ function go(view) {
 function render() {
   if (!root || state.view === 'claude') return;
   root.replaceChildren();
-  if (!state.services.length && state.workflows === null) {
+  // The router view reads a different machine and does not wait on n8n or the
+  // container list, so it must not sit behind their skeleton.
+  if (state.view !== 'router' && !state.services.length && state.workflows === null) {
     root.append(el('div', { class: 'stack-lg' },
       el('span', { class: 'skeleton', style: 'height:56px;display:block' }),
       el('span', { class: 'skeleton', style: 'height:180px;display:block' })));
     return;
   }
   const body = state.view === 'workflows' ? viewWorkflows()
-    : state.view === 'odysseus' ? viewOdysseus()
-      : state.view === 'services' ? viewServices()
-        : viewOverview();
+    : state.view === 'router' ? viewRouter(render)
+      : state.view === 'odysseus' ? viewOdysseus()
+        : state.view === 'services' ? viewServices()
+          : viewOverview();
   root.append(body);
 }
 
@@ -550,6 +554,10 @@ export default {
     root = mountEl;
     ctx = context;
     state.view = context.view || 'overview';
+    // The router view talks to this module's API, which is mounted under the
+    // console's per-module base. Hand it the same scoped caller the rest of
+    // the module uses rather than letting it reach for a bare fetch().
+    initRouter(ctx, tryApi);
 
     // claude.css too: the overview draws sessions the way the Claude view does.
     for (const [id, file] of [['ag-css', 'agent.css'], ['ag-cl-css', 'claude.css']]) {
@@ -565,13 +573,22 @@ export default {
     if (state.view === 'claude') {
       claudeOpen = true;
       await mountClaude(root, ctx);
+    } else if (state.view === 'router') {
+      render();
+      await refreshRouter(render);
     } else {
       render();
       await refresh();
     }
     // n8n's own state changes on its schedule, not ours; a minute is often
     // enough to see a run land without polling a workflow engine to death.
-    timer = setInterval(() => { if (!document.hidden && state.view !== 'claude') refresh(); }, 60_000);
+    timer = setInterval(() => {
+      if (document.hidden || state.view === 'claude') return;
+      // The router reads another machine and nothing else on this page; a
+      // minute of n8n polling while you sit on that tab is wasted on both.
+      if (state.view === 'router') refreshRouter(render);
+      else refresh();
+    }, 60_000);
     // Sessions change by the second; the overview keeps up with them.
     claudeTimer = setInterval(async () => {
       if (document.hidden || state.view !== 'overview' || !state.config?.has?.claude) return;
@@ -589,6 +606,7 @@ export default {
     }
     if (claudeOpen) { unmountClaude(); claudeOpen = false; }
     render();
+    if (state.view === 'router') { await refreshRouter(render); return; }
     if (!state.services.length && state.workflows === null) await refresh();
   },
 

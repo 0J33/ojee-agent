@@ -21,6 +21,10 @@ const path = require('path');
 const express = require('express');
 const fetch = require('node-fetch');
 const { exec } = require('child_process');
+/* The Laya tool router. It runs on Loq (the GPU is there), so this is a
+   window onto another machine rather than a local service — and the module
+   must render a router that is off or asleep, not break. */
+const routerModule = require('./router');
 
 const PORT = process.env.PORT || 8080;
 const TIMEZONE = process.env.TIMEZONE || 'UTC';
@@ -86,6 +90,9 @@ const VIEWS = [
   { id: 'overview', label: 'Overview', icon: 'i-grid' },
   { id: 'claude', label: 'Claude', icon: 'i-log' },
   { id: 'workflows', label: 'Workflows', icon: 'i-auto' },
+  // Only when ROUTER_URL is set: a deployment without the router should show a
+  // module without a Router tab, not a tab that errors.
+  ...(routerModule.configured() ? [{ id: 'router', label: 'Router', icon: 'i-cpu' }] : []),
   { id: 'odysseus', label: 'Odysseus', icon: 'i-shield' },
   { id: 'services', label: 'Services', icon: 'i-gauge' },
 ];
@@ -467,6 +474,8 @@ app.get('/api/summary', auth, async (_req, res) => {
 for (const parts of [['@xterm', 'xterm', 'lib'], ['@xterm', 'xterm', 'css'], ['@xterm', 'addon-fit', 'lib'], ['@xterm', 'addon-clipboard', 'lib']]) {
   app.use('/vendor', express.static(path.join(__dirname, '..', 'node_modules', ...parts), { maxAge: '1h' }));
 }
+
+routerModule.mount(app, auth);
 
 app.use('/ui', express.static(`${__dirname}/../ui`, {
   setHeaders: (res) => res.setHeader('cache-control', 'no-cache'),
