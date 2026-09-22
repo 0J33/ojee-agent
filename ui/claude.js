@@ -736,28 +736,47 @@ function mountPane(s) {
     });
     return;
   }
-  // Transcript
-  if (S.transcript.id !== s.id) S.transcript = { id: s.id, messages: [], cursor: null, timer: null, truncated: false };
+  // Transcript. What was already read is kept per session, so coming back
+  // to this pane draws it again at once and then asks only for what is new.
+  if (S.transcript.id !== s.id) S.transcript = { id: s.id, messages: [], cursor: null, timer: null, truncated: false, gen: 0 };
+  // Each mount is a generation: a pull still in flight from an earlier one
+  // (Transcript → Terminal → Transcript inside a request) must not append
+  // to the list it built, double the messages, or start a second loop.
+  const gen = S.transcript.gen = (S.transcript.gen || 0) + 1;
+  const T = S.transcript;
   const list = el('div', { class: 'ag-cl-transcript' });
+  const note = () => list.append(el('p', { class: 'meta ag-cl-trunc' }, 'Earlier messages are in the file; showing the most recent.'));
+  if (T.truncated) note();
+  for (const m of T.messages) list.append(message(m));
   body.replaceChildren(list);
-  requestAnimationFrame(sizeTerminal);
+  requestAnimationFrame(() => { sizeTerminal(); list.scrollTop = list.scrollHeight; });
+  const current = () => S.transcript === T && T.gen === gen && S.pane === 'transcript' && S.detail === s.id;
   const pull = async () => {
     try {
-      const q = S.transcript.cursor != null ? `?cursor=${S.transcript.cursor}` : '';
+      const q = T.cursor != null ? `?cursor=${T.cursor}` : '';
       const r = await api(`/sessions/${s.id}/transcript${q}`);
+      if (!current()) return;
       const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
-      if (S.transcript.cursor == null) { S.transcript.messages = r.messages; S.transcript.truncated = r.truncated; list.replaceChildren(); }
-      else S.transcript.messages.push(...r.messages);
-      if (S.transcript.cursor == null && r.truncated) list.append(el('p', { class: 'meta ag-cl-trunc' }, 'Earlier messages are in the file; showing the most recent.'));
+      const first = T.cursor == null;
+      if (first) {
+        T.messages = r.messages;
+        T.truncated = r.truncated;
+        list.replaceChildren();
+        if (r.truncated) note();
+      } else T.messages.push(...r.messages);
       for (const m of r.messages) list.append(message(m));
-      S.transcript.cursor = r.cursor;
-      if (!S.transcript.messages.length && !list.children.length) list.append(el('p', { class: 'meta' }, 'Nothing yet.'));
-      if (nearBottom || r.messages.length === S.transcript.messages.length) list.scrollTop = list.scrollHeight;
+      T.cursor = r.cursor;
+      list.querySelector('.ag-cl-empty-note')?.remove();
+      list.querySelector('.ag-cl-err-note')?.remove();
+      if (!T.messages.length) list.append(el('p', { class: 'meta ag-cl-empty-note' }, 'Nothing yet.'));
+      if (nearBottom || first) list.scrollTop = list.scrollHeight;
     } catch (e) {
-      list.append(el('p', { class: 'meta' }, `Could not read the transcript: ${e.message}`));
+      if (!current()) return;
+      // One line for a failure that repeats every poll, not a growing pile.
+      list.querySelector('.ag-cl-err-note')?.remove();
+      list.append(el('p', { class: 'meta ag-cl-err-note' }, `Could not read the transcript: ${e.message}`));
     }
-    if (S.pane === 'transcript' && S.detail === s.id && !document.hidden) S.transcript.timer = setTimeout(pull, 3000);
-    else if (S.pane === 'transcript' && S.detail === s.id) S.transcript.timer = setTimeout(pull, 10000);
+    if (current()) T.timer = setTimeout(pull, document.hidden ? 10000 : 3000);
   };
   pull();
 }

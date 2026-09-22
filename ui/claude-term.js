@@ -309,7 +309,11 @@ export function startTerminal({ host, ctx, path, onState, onImage }) {
       disposed = true;
       try { ro?.disconnect(); } catch { /* never observed */ }
       try { ws?.close(); } catch { /* gone */ }
-      try { term?.dispose(); } catch { /* never opened */ }
+      // xterm queues its viewport sync for the next frame; disposed before
+      // that frame (a quick Terminal → Transcript), the sync throws on the
+      // renderer it just released. Two frames later the queue has drained.
+      const t = term;
+      if (t) requestAnimationFrame(() => requestAnimationFrame(() => { try { t.dispose(); } catch { /* never opened */ } }));
       ws = null; term = null; fit = null;
     },
     focus() { term?.focus(); },
