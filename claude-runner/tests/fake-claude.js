@@ -110,13 +110,30 @@ async function turn(prompt) {
     const reply = 'Started a subagent in the background.';
     write({ type: 'assistant', message: { model: opts.model, role: 'assistant', content: [{ type: 'text', text: reply }] } });
     fire('SubagentStart', { agent_id: 'agent-bg-1', agent_type: 'general-purpose' });
-    fire('Stop', { last_assistant_message: reply, background_tasks: [{ id: 'agent-bg-1', type: 'subagent', status: 'running', description: 'dig through the logs' }] });
+    const watch = { id: 'watch-1', type: 'shell', status: 'running', description: 'live updates for artifact https://claude.ai/artifact/X (re-armed on session resume)' };
+    fire('Stop', { last_assistant_message: reply, background_tasks: [{ id: 'agent-bg-1', type: 'subagent', status: 'running', description: 'dig through the logs' }, watch] });
     await sleep(2000);
     fire('SubagentStop', { agent_id: 'agent-bg-1', background_tasks: [] });
     fire('UserPromptSubmit', { prompt: '<task-notification>agent-bg-1 completed</task-notification>' });
     const fin = 'The subagent finished.\n\nDONE: background work';
     write({ type: 'assistant', message: { model: opts.model, role: 'assistant', content: [{ type: 'text', text: fin }] } });
-    fire('Stop', { last_assistant_message: fin, background_tasks: [] });
+    // The watcher is still there: it runs for as long as the session does.
+    fire('Stop', { last_assistant_message: fin, background_tasks: [watch] });
+    return;
+  }
+  const renamed = /^rename to (.+)$/i.exec(prompt);
+  if (renamed) {
+    // What /rename writes: a custom-title entry, no timestamp.
+    fs.appendFileSync(transcript, `${JSON.stringify({ type: 'custom-title', customTitle: renamed[1], sessionId: opts.id })}\n`);
+    fire('Stop', { last_assistant_message: 'Renamed.' });
+    return;
+  }
+  if (/copy me/i.test(prompt)) {
+    // What Claude's fullscreen view does when you select text: OSC 52.
+    process.stdout.write(`\x1b]52;c;${Buffer.from('copied-by-claude').toString('base64')}\x07`);
+    const reply = 'Copied.';
+    write({ type: 'assistant', message: { model: opts.model, role: 'assistant', content: [{ type: 'text', text: reply }] } });
+    fire('Stop', { last_assistant_message: reply });
     return;
   }
   if (/upsell/i.test(prompt)) {

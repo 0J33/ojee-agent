@@ -118,7 +118,16 @@ private socket (`tmux -L ojee-claude ls`). The browser's terminal is `tmux attac
 WebSocket, so it is the real one: attach from a phone and a laptop at once, close the tab and it
 keeps running, restart the runner and it keeps running (the tmux server is its own unit).
 Sessions run Claude Code's fullscreen renderer (`"tui": "fullscreen"`), so clicks and the wheel
-reach Claude; hold Shift to drag-select text for copying.
+reach Claude.
+
+The browser terminal behaves like a desktop app about the clipboard — your computer's, not the
+box's. Selecting text in Claude copies it (Claude sends OSC 52; tmux passes it on; xterm's clipboard
+add-on writes it). Shift+drag (Option+drag on a Mac) selects in the browser and copies too.
+Ctrl+C copies a browser selection and is otherwise Claude's; Ctrl+Shift+C always copies;
+Ctrl+V / Ctrl+Shift+V / Cmd+V paste — an image is uploaded to the box and its path pasted, which
+Claude attaches as `[Image #n]`. Shift+Enter is a new line. The console's `/` and Ctrl+K
+shortcuts never fire from inside the terminal, and typing anywhere on a session's page goes to it.
+`/rename` in the terminal renames the session in the console too.
 
 The runner knows what a session is doing from three sources, not from scraping the screen:
 

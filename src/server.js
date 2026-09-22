@@ -285,14 +285,23 @@ function runnerRequest(req, res) {
     authorization: `Bearer ${CLAUDE_RUNNER_TOKEN}`,
   };
   let body = null;
+  let stream = false;
   // Never a body on GET/HEAD/DELETE. express.json() leaves req.body as {} on
   // those, and sending it made the runner read a body on the event stream's
   // GET — after which Node reports the request closed and the stream was
   // dropped after its first event.
   if (!['GET', 'HEAD', 'DELETE'].includes(req.method)) {
-    body = Buffer.from(JSON.stringify(req.body ?? {}));
-    headers['content-type'] = 'application/json';
-    headers['content-length'] = body.length;
+    const type = req.get('content-type') || '';
+    if (!type || type.includes('application/json')) {
+      body = Buffer.from(JSON.stringify(req.body ?? {}));
+      headers['content-type'] = 'application/json';
+      headers['content-length'] = body.length;
+    } else {
+      // Anything else (a pasted image) was never parsed: pass the bytes on.
+      stream = true;
+      headers['content-type'] = type;
+      if (req.get('content-length')) headers['content-length'] = req.get('content-length');
+    }
   }
   const up = http.request({
     hostname: target.hostname, port: target.port, path: target.pathname + target.search, method: req.method, headers,
@@ -312,7 +321,8 @@ function runnerRequest(req, res) {
   });
   // A closed tab must not leave the runner streaming into a dead socket.
   res.on('close', () => { if (!up.destroyed) up.destroy(); });
-  up.end(body);
+  if (stream) req.pipe(up);
+  else up.end(body);
 }
 
 app.use('/api/claude', auth, runnerRequest);
@@ -454,7 +464,7 @@ app.get('/api/summary', auth, async (_req, res) => {
 
 // xterm.js for the Claude terminal, from node_modules — no build step, no
 // CDN. Same layout as ojee-remote's, so the two terminals load identically.
-for (const parts of [['@xterm', 'xterm', 'lib'], ['@xterm', 'xterm', 'css'], ['@xterm', 'addon-fit', 'lib']]) {
+for (const parts of [['@xterm', 'xterm', 'lib'], ['@xterm', 'xterm', 'css'], ['@xterm', 'addon-fit', 'lib'], ['@xterm', 'addon-clipboard', 'lib']]) {
   app.use('/vendor', express.static(path.join(__dirname, '..', 'node_modules', ...parts), { maxAge: '1h' }));
 }
 

@@ -137,13 +137,21 @@ test('runner end to end', { skip: !haveTmux && 'no tmux' }, async (t) => {
 
   await t.test('a turn that ends with subagents still running is working, not idle', async () => {
     await api('POST', `/api/sessions/${id}/message`, { text: 'do some background work' });
-    await waitFor(() => sessions.get(id).background?.length === 1 && stateOf(id) === 'running', 'running with a background subagent');
+    await waitFor(() => sessions.view(sessions.get(id)).background?.subagents === 1 && stateOf(id) === 'running', 'running with a background subagent');
     const v = (await api('GET', `/api/sessions/${id}`)).body;
     assert.equal(v.state, 'running');
     assert.equal(v.background.subagents, 1);
+    assert.equal(v.background.shells, 0, 'the artifact watcher is not a command');
     assert.match(v.detail, /1 subagent/);
-    await waitFor(() => stateOf(id) === 'done', 'done once the subagent finished');
-    assert.equal(sessions.get(id).background.length, 0);
+    await waitFor(() => stateOf(id) === 'done', 'done once the subagent finished, a standing watcher notwithstanding');
+    assert.equal((await api('GET', `/api/sessions/${id}`)).body.background, null);
+  });
+
+  await t.test('/rename in the terminal renames the session, even after a console rename', async () => {
+    await api('PATCH', `/api/sessions/${id}`, { title: 'Named in the console' });
+    assert.equal(sessions.get(id).title, 'Named in the console');
+    await api('POST', `/api/sessions/${id}/message`, { text: 'rename to Named in the terminal' });
+    await waitFor(() => sessions.get(id).title === 'Named in the terminal', 'title from /rename');
   });
 
   await t.test('BLOCKED is recognised', async () => {

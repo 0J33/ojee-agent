@@ -285,7 +285,13 @@ function createRunner(overrides = {}) {
   app.patch('/api/sessions/:id', auth, wrap(async (req, res) => {
     const s = need(req);
     const b = req.body || {};
-    if (typeof b.title === 'string' && b.title.trim()) { s.title = b.title.trim().slice(0, 70); s.titleSource = 'user'; }
+    if (typeof b.title === 'string' && b.title.trim()) {
+      s.title = b.title.trim().slice(0, 70);
+      s.titleSource = 'user';
+      // Where the conversation file ended when this rename happened: a
+      // /rename further down than this is newer and wins.
+      try { if (sessions.hasTranscript(s)) s.titleOffset = fs.statSync(s.transcript).size; } catch { /* no file yet */ }
+    }
     if (b.notifyDone !== undefined) s.notifyDone = b.notifyDone === null ? null : !!b.notifyDone;
     if (b.autoContinue !== undefined) s.autoContinue = Math.max(0, Math.min(10, Number(b.autoContinue) || 0));
     if (b.unattended !== undefined) s.unattended = !!b.unattended;
@@ -364,6 +370,27 @@ function createRunner(overrides = {}) {
       truncated: truncated || (req.query.cursor == null && messages.length > 400),
       file: s.transcript,
     });
+  }));
+
+  /**
+   * An image pasted in the browser. Saved on this machine, then its path is
+   * pasted into the session as a bracketed paste — tested: Claude Code turns
+   * a pasted image path into an [Image #n] attachment (typing it would not).
+   */
+  const IMAGE_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+  app.post('/api/sessions/:id/image', auth, express.raw({ type: 'image/*', limit: '20mb' }), wrap(async (req, res) => {
+    const s = need(req);
+    const ext = IMAGE_TYPES[String(req.get('content-type') || '').split(';')[0].trim()];
+    if (!ext) return res.status(415).json({ error: 'PNG, JPEG, GIF or WebP only' });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'empty image' });
+    if (!(await sessions.isAlive(s))) return res.status(409).json({ error: 'The session is not running — resume it first.' });
+    const dir = path.join(config.STATE_DIR, 'uploads', s.id);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = path.join(dir, `pasted-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`);
+    fs.writeFileSync(file, req.body, { mode: 0o600 });
+    await tmux.run(['load-buffer', '-b', 'ojee-image', '-'], { input: file });
+    await tmux.run(['paste-buffer', '-p', '-d', '-b', 'ojee-image', '-t', `=${s.tmux}:`]);
+    res.json({ ok: true, path: file });
   }));
 
   app.get('/api/sessions/:id/screen', auth, wrap(async (req, res) => {

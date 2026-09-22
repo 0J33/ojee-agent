@@ -369,7 +369,7 @@ function detailHead(s) {
         : null,
       el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => changeSession(s) }, svg('swap'), 'Change'),
       alive ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', disabled: busy('end'), onclick: () => endSession(s) }, svg('stop'), 'End') : null,
-      el('button', { class: 'btn btn--ghost btn--sm btn--icon', type: 'button', title: 'Delete', 'aria-label': 'Delete', onclick: () => deleteSession(s) }, svg('trash'))));
+      el('button', { class: 'btn btn--ghost btn--sm btn--icon ag-cl-sq', type: 'button', title: 'Delete', 'aria-label': 'Delete', onclick: () => deleteSession(s) }, svg('trash'))));
 }
 
 function detailCallouts(s) {
@@ -395,10 +395,7 @@ function detailCallouts(s) {
     out.push(el('div', { class: 'alert alert--info' }, el('b', {}, 'Starting'), el('span', {}, s.detail)));
   }
   if (s.background) {
-    out.push(el('div', { class: 'alert alert--info ag-cl-bg' }, el('b', {}, 'Background'),
-      el('span', {}, bgText(s.background),
-        el('span', { class: 'ag-cl-bg-list' }, s.background.items.map((t) => el('span', { class: 'ag-cl-bg-item' },
-          el('span', { class: 'ag-cl-bg-type' }, t.type === 'subagent' ? 'subagent' : 'command'), t.description || t.id))))));
+    out.push(el('div', { class: 'alert alert--info' }, el('b', {}, 'Background'), el('span', {}, bgText(s.background))));
   }
   return out;
 }
@@ -454,6 +451,7 @@ function paintDetail(reason) {
         el('span', { class: 'meta ag-cl-compose-note' }),
         el('button', { class: 'btn btn--sm ag-cl-send', type: 'button', onclick: () => send(s.id) }, 'Send'))));
   root.replaceChildren(view);
+  if (!typeWatch) { window.addEventListener('keydown', typeAnywhere, true); typeWatch = true; }
   watchViewport();
   lockPage();
   updateComposer(s);
@@ -483,6 +481,57 @@ function maxBar(s) {
         onclick: () => { if (x.id !== s.id) go(x.id); },
       }, dot(x.state), el('span', {}, x.title)))),
   ];
+}
+
+/**
+ * Put the keyboard in the terminal — on a desktop, where it is what you came
+ * to type into. Not on a touch screen: focusing there raises the keyboard
+ * over half the screen before anyone asked for it.
+ */
+function focusTerminal() {
+  if (!S.term || !window.matchMedia('(pointer: fine)').matches) return;
+  const a = document.activeElement;
+  if (a && a !== document.body && a.closest('input, textarea, select, [contenteditable]') && !a.closest('.ag-cl-term')) return;
+  S.term.focus();
+}
+
+/**
+ * Type into the session from anywhere on its page. Without this, a key
+ * pressed after clicking a button (Maximize, a session chip) went nowhere —
+ * and "/" opened the console's jump menu instead of Claude's command list.
+ * Moving focus during keydown sends the character to the terminal, and the
+ * console's shortcut, which checks focus, stands down.
+ */
+function typeAnywhere(e) {
+  if (!S.detail || !S.term || S.pane !== 'terminal' || !root?.isConnected) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.key.length !== 1) return;
+  const a = document.activeElement;
+  if (a && a !== document.body && (a.closest('input, textarea, select, [contenteditable]') || a.isContentEditable)) return;
+  if (document.querySelector('.modal-backdrop, .cp-backdrop')) return; // a dialog or the jump menu is open
+  S.term.focus();
+}
+
+/**
+ * An image pasted or dropped on the terminal: uploaded to the box, where the
+ * runner pastes its path into Claude — which attaches it as [Image #n],
+ * exactly as dragging a file into a local terminal does.
+ */
+async function sendImage(id, file) {
+  if (!file) return;
+  if (file.size > 20 * 1024 * 1024) { ctx.toast?.('err', 'Image too large', 'The limit is 20 MB.'); return; }
+  try {
+    const res = await fetch(`${ctx.base}/api/claude/sessions/${id}/image`, {
+      method: 'POST',
+      headers: { 'content-type': file.type || 'image/png' },
+      body: file,
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || res.statusText);
+    ctx.toast?.('ok', 'Image attached', 'Add your message and press Enter.');
+    S.term?.focus();
+  } catch (e) {
+    ctx.toast?.('err', 'Could not attach the image', e.message);
+  }
 }
 
 function setMax(on) {
@@ -579,6 +628,7 @@ function onViewport() {
 }
 
 let viewportWatch = null;
+let typeWatch = false;
 function watchViewport() {
   if (viewportWatch) return;
   const vv = window.visualViewport;
@@ -672,8 +722,10 @@ function mountPane(s) {
       host: body,
       ctx,
       path: `/sessions/${s.id}/terminal`,
+      onImage: (file) => sendImage(s.id, file),
       onState: (st, detail) => {
         S.termState = st;
+        if (st === 'connected') focusTerminal();
         const stateEl = root?.querySelector('.ag-cl-term-state');
         if (stateEl) stateEl.textContent = detail ? `${st} · ${detail}` : st;
       },
@@ -999,7 +1051,7 @@ function accountRow(a) {
     el('span', { class: 'ag-cl-arow-actions' },
       !a.active ? el('button', { class: 'btn btn--sm', type: 'button', onclick: () => activate(a) }, 'Make active') : null,
       el('button', { class: `btn btn--sm ${a.status === 'needs-login' ? '' : 'btn--ghost'}`, type: 'button', onclick: () => startLogin(a) }, a.loggedIn ? 'Log in again' : 'Log in'),
-      el('button', { class: 'btn btn--ghost btn--sm btn--icon', type: 'button', title: 'More', 'aria-label': `More for ${a.label}`, onclick: () => accountMenu(a) }, svg('cog'))));
+      el('button', { class: 'btn btn--ghost btn--sm btn--icon ag-cl-sq', type: 'button', title: 'More', 'aria-label': `More for ${a.label}`, onclick: () => accountMenu(a) }, svg('cog'))));
 }
 
 function paintAccounts(reason) {
@@ -1343,6 +1395,8 @@ export async function mountClaude(el0, context) {
 }
 
 export function unmountClaude() {
+  window.removeEventListener('keydown', typeAnywhere, true);
+  typeWatch = false;
   clearInterval(govTimer);
   govTimer = null;
   document.documentElement.style.overflow = '';

@@ -79,16 +79,34 @@ function setBackground(s, list) {
   if (!Array.isArray(list)) return;
   s.background = list
     .filter((t) => t && (!t.status || t.status === 'running'))
-    .map((t) => ({ id: String(t.id || ''), type: t.type === 'subagent' ? 'subagent' : 'shell', description: clip(t.description || t.command || '', 120) }));
+    .map((t) => ({ id: String(t.id || ''), type: bgKind(t) }));
+}
+
+/**
+ * subagent, command — or watch: a standing watcher such as an artifact's
+ * live comment updates ("re-armed on session resume"), which runs for as
+ * long as the session does. A watch is not work; counting it would keep a
+ * session "working" forever.
+ */
+function bgKind(t) {
+  if (t.type === 'subagent') return 'subagent';
+  const d = String(t.description || '');
+  if (/^live updates for |re-armed (on|when)|watch requested/i.test(d)) return 'watch';
+  if (!t.type || /^(shell|bash|local_bash|command)$/i.test(t.type)) return 'command';
+  return 'watch';
+}
+
+/** Work still running in the background: subagents and commands, counted. */
+function bgWork(s) {
+  return (s.background || []).filter((t) => t.type === 'subagent' || t.type === 'command');
 }
 
 function bgSummary(s) {
-  const list = s.background || [];
-  if (!list.length) return null;
+  const work = bgWork(s);
+  if (!work.length) return null;
   return {
-    subagents: list.filter((t) => t.type === 'subagent').length,
-    shells: list.filter((t) => t.type !== 'subagent').length,
-    items: list.slice(0, 8),
+    subagents: work.filter((t) => t.type === 'subagent').length,
+    shells: work.filter((t) => t.type === 'command').length,
   };
 }
 
@@ -593,6 +611,7 @@ class Sessions extends EventEmitter {
     delete this.store.sessions[s.id];
     this.tails.delete(s.id);
     fs.rmSync(this.dir(s), { recursive: true, force: true });
+    fs.rmSync(path.join(this.config.STATE_DIR, 'uploads', s.id), { recursive: true, force: true });
     let purged = false;
     if (purge && this.hasTranscript(s)) {
       try {
@@ -705,7 +724,7 @@ class Sessions extends EventEmitter {
       case 'SubagentStart': {
         const id = String(evt.agent_id || '');
         s.background = s.background || [];
-        if (id && !s.background.some((t) => t.id === id)) s.background.push({ id, type: 'subagent', description: evt.agent_type || 'subagent' });
+        if (id && !s.background.some((t) => t.id === id)) s.background.push({ id, type: 'subagent' });
         // A subagent launched from an idle session (it does happen: a
         // notification turn starts one and ends) means it is working again.
         if (['idle', 'done'].includes(s.state)) { s.bgOnly = true; this.setState(s, 'running', bgDetail(s)); }
@@ -716,14 +735,14 @@ class Sessions extends EventEmitter {
         setBackground(s, evt.background_tasks);
         // Marked idle while others are still running (the runner restarted
         // after the last Stop, say): the list says otherwise.
-        if (s.background?.length && ['idle', 'done'].includes(s.state)) {
+        if (bgWork(s).length && ['idle', 'done'].includes(s.state)) {
           s.bgOnly = true;
           this.setState(s, 'running', bgDetail(s));
         } else if (s.bgOnly && s.state === 'running') {
           // Claude Code normally wakes the main thread when background work
           // ends, and its Stop decides what happens next; if it does not,
           // the session is simply between turns again.
-          if (s.background?.length) this.setState(s, 'running', bgDetail(s));
+          if (bgWork(s).length) this.setState(s, 'running', bgDetail(s));
           else { s.bgOnly = false; this.setState(s, 'idle', null); }
         }
         break;
@@ -753,7 +772,7 @@ class Sessions extends EventEmitter {
     if (blocked) {
       this.setState(s, 'blocked', clip(blocked, 300));
       this.notifier.send('blocked', { session: s, text: blocked });
-    } else if (s.background?.length && !asksSomething(msg)) {
+    } else if (bgWork(s).length && !asksSomething(msg)) {
       // The main turn ended, but subagents or background commands are still
       // at it: that is working, not idle. Their completion wakes the main
       // thread, and that turn's Stop decides done or idle.
@@ -815,9 +834,13 @@ class Sessions extends EventEmitter {
         if (text) s.lastAssistant = clip(text, 4000);
         // A reply after an error means the error was recovered from.
         lastErr = null;
-      } else if ((e.type === 'custom-title' || e.type === 'ai-title') && s.titleSource !== 'user') {
-        const t = e.customTitle || e.aiTitle;
-        if (t && t !== s.title) { s.title = clip(t, 70); this.emit('change', s); }
+      } else if (e.type === 'custom-title' && e.customTitle) {
+        s.titleOffset = tail.offset;
+        // /rename typed in the terminal: the latest word on the name, over
+        // an earlier rename from the console too.
+        if (e.customTitle !== s.title) { s.title = clip(e.customTitle, 70); s.titleSource = 'user'; this.emit('change', s); }
+      } else if (e.type === 'ai-title' && e.aiTitle && s.titleSource === 'auto') {
+        if (e.aiTitle !== s.title) { s.title = clip(e.aiTitle, 70); this.emit('change', s); }
       }
     }
     if (lastErr && lastErr.uuid !== s.lastErrorUuid) {
@@ -1055,7 +1078,7 @@ class Sessions extends EventEmitter {
 
       // Background commands (a long test run) write nothing to the transcript
       // while they work; give them more rope before calling it quiet.
-      const stallMs = (this.settings.stallMinutes || 20) * MINUTE * (s.background?.length ? 3 : 1);
+      const stallMs = (this.settings.stallMinutes || 20) * MINUTE * (bgWork(s).length ? 3 : 1);
       if (s.state === 'running' && alive && now - (s.lastActivityAt || now) > stallMs && !s.stallNotified) {
         s.stallNotified = true;
         const screen = await this.tmux.capture(s.tmux);
@@ -1083,9 +1106,39 @@ class Sessions extends EventEmitter {
    * After a runner restart: re-attach to every session whose tmux session
    * survived, and deal with the ones that did not (a reboot kills tmux).
    */
+  /**
+   * The newest /rename in a session's file, and where it is. Transcript
+   * entries carry no timestamps, so position is the order: one further down
+   * than the last console rename (titleOffset) is newer than it.
+   */
+  latestRename(s) {
+    if (!this.hasTranscript(s)) return null;
+    let size;
+    try { size = fs.statSync(s.transcript).size; } catch { return null; }
+    const len = Math.min(size, 4 * 1024 * 1024);
+    const buf = Buffer.alloc(len);
+    const fd = fs.openSync(s.transcript, 'r');
+    try { fs.readSync(fd, buf, 0, len, size - len); } finally { fs.closeSync(fd); }
+    const text = buf.toString('utf8');
+    const at = text.lastIndexOf('"type":"custom-title"');
+    if (at < 0) return null;
+    const start = text.lastIndexOf('\n', at) + 1;
+    const end = text.indexOf('\n', at);
+    try {
+      const e = JSON.parse(text.slice(start, end < 0 ? undefined : end));
+      return e.customTitle ? { title: e.customTitle, offset: size - len + Buffer.byteLength(text.slice(0, start)) } : null;
+    } catch { return null; }
+  }
+
   async reconcile() {
     const panes = new Map((await this.tmux.list()).map((p) => [p.name, p]));
     for (const s of this.all()) {
+      const r = this.latestRename(s);
+      if (r && r.title !== s.title && (s.titleOffset == null || r.offset >= s.titleOffset)) {
+        s.title = clip(r.title, 70);
+        s.titleSource = 'user';
+        s.titleOffset = r.offset;
+      }
       const pane = panes.get(s.tmux);
       const alive = !!pane && !pane.dead;
       this.alive.set(s.id, alive);

@@ -64,12 +64,6 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 
 .ag-cl-ended > summary { cursor: pointer; padding: var(--s-2) 0; }
 
-.ag-cl-bg > span { display: grid; gap: 6px; }
-.ag-cl-bg-list { display: grid; gap: 2px; }
-.ag-cl-bg-item { display: flex; gap: 8px; align-items: baseline; min-width: 0; font-size: 0.7rem; color: var(--ink-2); }
-.ag-cl-bg-type {
-  flex: none; font-family: var(--hud); font-size: 0.55rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent);
-}
 
 /* ── a session ──────────────────────────────────────────────── */
 
@@ -100,6 +94,11 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-chip--btn:hover { border-color: var(--line-hover); color: var(--ink); }
 .ag-cl-head-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .ag-cl-head-actions .ic, .ag-cl-term-bar .ic, .ag-cl-browser-bar .ic, .ag-cl-login-panel .ic { width: 15px; height: 15px; }
+/* An icon-only button beside labelled small buttons: the design system's
+   small icon button drops both padding and min-height, so it came out as
+   tall as its glyph — a flat sliver next to 31px neighbours. It takes the
+   row's height instead, which keeps it square. */
+.ag-cl-sq { align-self: stretch; height: auto; min-height: 30px; }
 
 .ag-cl-callouts { display: grid; gap: 2px; }
 .ag-cl-callouts:empty { display: none; }
