@@ -60,7 +60,18 @@ const S = {
   transcript: { id: null, messages: [], cursor: null, timer: null, truncated: false },
   login: null,          // { id, state, timer, term }
   busy: new Set(),
+  // Per-viewer layout, remembered in this browser only.
+  compose: pref('ag-cl-compose') === '1',   // the message box (the terminal is the way in)
+  max: pref('ag-cl-max') === '1',           // the session filling the window
 };
+
+function pref(key, value) {
+  try {
+    if (value === undefined) return localStorage.getItem(key);
+    localStorage.setItem(key, value);
+  } catch { /* private window, blocked storage: the default layout it is */ }
+  return null;
+}
 
 /* ── small pieces ───────────────────────────────────────────────────── */
 
@@ -356,7 +367,9 @@ function detailCallouts(s) {
   if (s.state === 'waiting' && s.question) {
     out.push(el('div', { class: 'alert alert--warn ag-cl-q' }, el('b', {}, 'Asking'),
       el('span', {}, el('span', { class: 'ag-cl-pre' }, s.question.text),
-        el('span', { class: 'meta ag-cl-hint' }, 'Answer in the terminal, or type below — a message dismisses the question and becomes the answer.'))));
+        el('span', { class: 'meta ag-cl-hint' }, S.compose
+          ? 'Answer in the terminal, or with the message box — a message dismisses the question and becomes the answer.'
+          : 'Answer in the terminal.'))));
   } else if (s.state === 'blocked') {
     out.push(el('div', { class: 'alert alert--warn' }, el('b', {}, 'Blocked'), el('span', {}, s.detail || '')));
   } else if (s.state === 'paused') {
@@ -389,6 +402,7 @@ function paintDetail(reason) {
   if (existing) {
     existing.querySelector('.ag-cl-headwrap').replaceChildren(detailHead(s));
     existing.querySelector('.ag-cl-callouts').replaceChildren(...detailCallouts(s));
+    existing.querySelector('.ag-cl-maxbar').replaceChildren(...maxBar(s));
     updateComposer(s);
     // A session that came back (resumed, relaunched into a new tmux session)
     // gets its terminal back; one that is gone gets the "not running" card.
@@ -407,20 +421,82 @@ function paintDetail(reason) {
     placeholder: 'Message Claude — Ctrl+Enter to send',
     onkeydown: (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(s.id); } },
   });
-  const view = el('section', { class: 'stack ag-cl-detail', 'data-session': s.id },
+  const view = el('section', {
+    class: `stack ag-cl-detail${S.max ? ' is-max' : ''}${S.compose ? ' has-compose' : ''}`,
+    'data-session': s.id,
+  },
     tabs(),
+    el('div', { class: 'ag-cl-maxbar' }, ...maxBar(s)),
     el('div', { class: 'ag-cl-headwrap' }, detailHead(s)),
     el('div', { class: 'ag-cl-callouts' }, ...detailCallouts(s)),
     el('div', { class: 'ag-cl-panes' }, ...paneTabs(s)),
     el('div', { class: 'ag-cl-body' }),
-    el('div', { class: 'ag-cl-compose' },
+    el('div', { class: 'ag-cl-compose', hidden: !S.compose },
       text,
       el('div', { class: 'ag-cl-compose-bar' },
         el('span', { class: 'meta ag-cl-compose-note' }),
         el('button', { class: 'btn btn--sm ag-cl-send', type: 'button', onclick: () => send(s.id) }, 'Send'))));
   root.replaceChildren(view);
+  lockPage();
   updateComposer(s);
   mountPane(s);
+}
+
+/**
+ * Maximized: the session takes the whole window — not the browser's
+ * fullscreen, just everything the console draws around the view covered —
+ * with a switcher to hop between sessions and a way back. The console's
+ * chrome is not touched; the view is lifted over it (fixed, above the nav
+ * and tab bar, below dialogs and toasts so Rename and Delete still work).
+ */
+function maxBar(s) {
+  const others = (S.data?.sessions || [])
+    .filter((x) => x.id === s.id || x.state !== 'stopped')
+    .sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0));
+  return [
+    el('button', { class: 'btn btn--sm ag-cl-restore', type: 'button', title: 'Back to the normal view', onclick: () => setMax(false) }, svg('unfull'), 'Restore'),
+    el('div', { class: 'ag-cl-switch', role: 'group', 'aria-label': 'Sessions' },
+      others.map((x) => el('button', {
+        class: `ag-cl-switch-item${x.id === s.id ? ' is-current' : ''}`,
+        type: 'button',
+        title: `${x.title} — ${STATE[x.state]?.label || x.state}`,
+        'aria-current': x.id === s.id ? 'true' : null,
+        onclick: () => { if (x.id !== s.id) go(x.id); },
+      }, dot(x.state), el('span', {}, x.title)))),
+  ];
+}
+
+function setMax(on) {
+  S.max = on;
+  pref('ag-cl-max', on ? '1' : '0');
+  const view = root?.querySelector('.ag-cl-detail');
+  view?.classList.toggle('is-max', on);
+  const s = session(S.detail);
+  if (view && s) view.querySelector('.ag-cl-panes').replaceChildren(...paneTabs(s));
+  lockPage();
+  S.term?.focus();
+}
+
+/** While maximized, the page behind must not scroll under the wheel. */
+function lockPage() {
+  const on = S.max && !!S.detail && !!root?.querySelector('.ag-cl-detail.is-max');
+  document.documentElement.style.overflow = on ? 'hidden' : '';
+}
+
+function setCompose(on) {
+  S.compose = on;
+  pref('ag-cl-compose', on ? '1' : '0');
+  const view = root?.querySelector('.ag-cl-detail');
+  if (!view) return;
+  view.classList.toggle('has-compose', on);
+  const box = view.querySelector('.ag-cl-compose');
+  box.hidden = !on;
+  const s = session(S.detail);
+  if (s) {
+    view.querySelector('.ag-cl-panes').replaceChildren(...paneTabs(s));
+    view.querySelector('.ag-cl-callouts').replaceChildren(...detailCallouts(s));
+  }
+  if (on) box.querySelector('.ag-cl-input')?.focus();
 }
 
 function paneTabs(s) {
@@ -428,13 +504,19 @@ function paneTabs(s) {
     el('div', { class: 'segctl ag-cl-pane-tabs', role: 'group', 'aria-label': 'View' },
       el('button', { type: 'button', 'aria-pressed': String(S.pane === 'terminal'), onclick: () => switchPane('terminal') }, svg('terminal'), 'Terminal'),
       el('button', { type: 'button', 'aria-pressed': String(S.pane === 'transcript'), onclick: () => switchPane('transcript') }, svg('log'), 'Transcript')),
-    S.pane === 'terminal'
-      ? el('div', { class: 'ag-cl-term-bar' },
-        el('span', { class: 'meta ag-cl-term-state' }, s.alive ? 'connecting…' : 'not running'),
-        el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Special keys', onclick: () => S.term?.toggleKeys() }, svg('keyboard'), 'Keys'),
-        el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => S.term?.reconnect() }, svg('refresh'), 'Reconnect'))
-      : null,
-  ].filter(Boolean);
+    el('div', { class: 'ag-cl-term-bar' },
+      S.pane === 'terminal' ? el('span', { class: 'meta ag-cl-term-state' }, S.termState || (s.alive ? 'connecting…' : 'not running')) : null,
+      S.pane === 'terminal' ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Special keys', onclick: () => S.term?.toggleKeys() }, svg('keyboard'), 'Keys') : null,
+      S.pane === 'terminal' ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => S.term?.reconnect() }, svg('refresh'), 'Reconnect') : null,
+      el('button', {
+        class: 'btn btn--ghost btn--sm',
+        type: 'button',
+        'aria-pressed': String(S.compose),
+        title: S.compose ? 'Hide the message box' : 'Show a message box under the terminal',
+        onclick: () => setCompose(!S.compose),
+      }, svg('edit'), S.compose ? 'Hide message' : 'Message'),
+      S.max ? null : el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Fill the window with this session', onclick: () => setMax(true) }, svg('full'), 'Maximize')),
+  ];
 }
 
 function switchPane(pane) {
@@ -1084,6 +1166,7 @@ export function routeClaude() {
   // A new place starts at its top, not wherever the last one was scrolled to.
   if (prevDetail !== S.detail || prevTab !== S.tab) window.scrollTo(0, 0);
   paint();
+  lockPage();
 }
 
 export async function mountClaude(el0, context) {
@@ -1104,6 +1187,7 @@ export async function mountClaude(el0, context) {
 }
 
 export function unmountClaude() {
+  document.documentElement.style.overflow = '';
   stopPane();
   stopLogin();
   sse?.stop();
