@@ -464,6 +464,18 @@ app.get('/api/summary', auth, async (_req, res) => {
         : 'automation stack up · n8n unreachable',
     facts,
     alerts: alerts.slice(0, 5),
+    // The console draws this module as a board with traffic on its traces:
+    // the rate follows what is actually running, a queue bead lights per
+    // waiting job, and a failed run turns one trace red. Idle has to LOOK
+    // idle, so nothing here is padded to keep the board busy.
+    model: {
+      running: (cc.up ? Number(cc.running) || 0 : 0)
+        + execs.filter((e) => e.status === 'running').length,
+      queued: (cc.up ? Number(cc.waiting) || 0 : 0)
+        + execs.filter((e) => e.status === 'waiting' || e.status === 'new').length,
+      failed: failed.length,
+      idle: !(cc.up && Number(cc.running) > 0) && !execs.some((e) => e.status === 'running'),
+    },
   });
 });
 
