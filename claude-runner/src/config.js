@@ -80,14 +80,15 @@ const config = {
  */
 config.MODELS = [
   { id: 'claude-fable-5-1', label: 'Fable 5.1', family: 'fable' },
+  { id: 'claude-opus-5-5', label: 'Opus 5.5', family: 'opus' },
   { id: 'claude-opus-5', label: 'Opus 5', family: 'opus' },
   { id: 'claude-sonnet-5', label: 'Sonnet 5', family: 'sonnet' },
   { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', family: 'haiku' },
 ];
 
 config.DEFAULT_SETTINGS = {
-  defaultModel: 'claude-fable-5-1',
-  fallbackModel: 'claude-opus-5',
+  defaultModel: 'claude-opus-5-5',
+  fallbackModel: 'claude-opus-5-5',
   // A model limit carries no reset time; this is when to try the preferred
   // model again.
   modelRetryHours: 5,
