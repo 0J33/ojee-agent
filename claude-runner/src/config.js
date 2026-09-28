@@ -38,8 +38,17 @@ function hookSock(preferred) {
   return path.join(os.tmpdir(), `ojee-claude-${process.getuid?.() ?? 'u'}-${tag}.sock`);
 }
 
+/** A number from the environment, or the fallback when unset or not a number. */
+const num = (v, fallback) => (v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : fallback);
+const flag = (v, fallback) => (v === undefined || v === '' ? fallback : !/^(0|false|no|off)$/i.test(String(v)));
+
 const config = {
   HOME,
+  // Which machine this is, for a console that talks to more than one runner
+  // (HP and LOQ). The module has its own copy of the id for routing; this one
+  // is what the runner says about itself.
+  DEVICE_ID: (env.DEVICE_ID || os.hostname() || 'host').toLowerCase().replace(/[^a-z0-9-]+/g, '-'),
+  DEVICE_LABEL: env.DEVICE_LABEL || env.DEVICE_ID || os.hostname() || 'Host',
   PORT: Number(env.PORT || 7777),
   // Loopback unless told otherwise. On the HP box the env file sets the
   // tailnet address: that plus the token is the boundary, and 0.0.0.0 would
@@ -68,6 +77,15 @@ const config = {
   CONSOLE_URL: (env.CONSOLE_URL || '').replace(/\/+$/, ''),
   STACK_DIR: env.STACK_DIR || path.join(HOME, 'stack'),
   DEFAULT_CWD: env.DEFAULT_CWD || HOME,
+
+  // The governor's temperature back-off. Off on a machine whose package
+  // idles near its limit anyway (LOQ's HX CPU sits at ~95 °C doing nothing,
+  // and its firmware manages heat) — there it would only ever hold sessions
+  // back for heat they did not make. The CPU cap still applies.
+  THERMAL_BACKOFF: flag(env.THERMAL_BACKOFF, true),
+  // One line about this machine for the unattended instructions. The default
+  // is measured; the env file can say more ("the user's own workstation").
+  MACHINE_NOTE: env.MACHINE_NOTE || '',
 
   // How often the background checks run. Tests shorten these.
   TICK_MS: Number(env.TICK_MS || 15_000),
@@ -101,9 +119,9 @@ config.DEFAULT_SETTINGS = {
   resumeInterrupted: true,
   // CPU and heat (see governor.js). The cap is a share of all threads; the
   // cap shrinks while the CPU package is hotter than the target.
-  governor: true,
-  cpuCapPct: 60,
-  tempTarget: 80,
+  governor: flag(env.DEFAULT_GOVERNOR, true),
+  cpuCapPct: num(env.DEFAULT_CPU_CAP_PCT, 60),
+  tempTarget: num(env.DEFAULT_TEMP_TARGET, 80),
   // Sessions run at low priority and default their tools to two workers.
   lightFootprint: true,
   notify: {

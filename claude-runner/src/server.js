@@ -82,23 +82,35 @@ function claudeSettings() {
   };
 }
 
-const UNATTENDED = `You are running unattended, in a session started from the ojee console on this machine. Nobody is watching the terminal while you work.
+/** One line about the machine: measured, unless the env file says more. */
+function machineNote(cfg = config) {
+  if (cfg.MACHINE_NOTE) return cfg.MACHINE_NOTE;
+  const os = require('os');
+  const gb = Math.round(os.totalmem() / 2 ** 30);
+  return `This machine (${cfg.DEVICE_LABEL}) is a laptop (${os.cpus().length} threads, ${gb} GB) that also runs other services and overheats under sustained load.`;
+}
+
+const unattendedText = (cfg = config) => `You are running unattended, in a session started from the ojee console on this machine. Nobody is watching the terminal while you work.
 
 - Do not stop to ask for confirmation or clarification. Make the most reasonable decision, say what you assumed in your final message, and keep going until the task is complete.
 - Ask the user something (with the AskUserQuestion tool) only when you genuinely cannot continue without them — missing credentials, a choice with irreversible consequences, or requirements that contradict each other. Asking sends them a notification.
 - When the whole task is finished, end your final message with a line that starts with "DONE:" and a one-line summary.
 - If you are blocked and cannot continue, end your final message with a line that starts with "BLOCKED:" and the reason.
 - sudo is not available here. Some commands that could take down other services on this machine are blocked; if one is, find another way or end with BLOCKED.
-- This machine is a small laptop (8 threads, 16 GB) that also runs other services and overheats under sustained load. Run heavy commands (test suites, builds, installs) one at a time, keep their parallelism low (for example vitest or jest with 2 workers), and do not have several subagents run builds or tests at the same time.
+- ${machineNote(cfg)} Run heavy commands (test suites, builds, installs) one at a time, keep their parallelism low (for example vitest or jest with 2 workers), and do not have several subagents run builds or tests at the same time.
+- Never kill, signal or attach to processes or tmux sessions you did not start yourself: other Claude Code sessions and the user's own programs may be running on this machine.
 `;
+const UNATTENDED = unattendedText();
 
 
 function writeFiles(FILES) {
   for (const d of [config.STATE_DIR, config.RUNTIME_DIR, path.join(config.STATE_DIR, 'sessions'), config.ACCOUNTS_DIR]) {
     fs.mkdirSync(d, { recursive: true, mode: 0o700 });
   }
+  // Every session's TMPDIR: a missing one breaks mktemp and os.tmpdir().
+  try { fs.mkdirSync(config.SESSION_TMPDIR, { recursive: true, mode: 0o700 }); } catch { /* reported by the tools that need it */ }
   fs.writeFileSync(FILES.settingsFile, JSON.stringify(claudeSettings(), null, 2));
-  fs.writeFileSync(FILES.unattendedFile, UNATTENDED);
+  fs.writeFileSync(FILES.unattendedFile, unattendedText(config));
   fs.chmodSync(FILES.sessionSh, 0o755);
 }
 
@@ -128,7 +140,7 @@ function createRunner(overrides = {}) {
   // Only when the sessions live in their own unit: in dev (self mode) the
   // tmux server shares the runner's cgroup, and freezing that would freeze us.
   const governor = config.TMUX_MODE === 'systemd'
-    ? new Governor({ unit: 'ojee-claude-tmux.service', settings: () => store.settings, log })
+    ? new Governor({ unit: 'ojee-claude-tmux.service', settings: () => store.settings, thermal: config.THERMAL_BACKOFF, log })
     : null;
   for (const a of accounts.list()) { try { accounts.prepare(a); } catch (e) { log('accounts', `${a.id}: ${e.message}`); } }
 
@@ -160,14 +172,16 @@ function createRunner(overrides = {}) {
   };
 
   const accountsView = () => accounts.list().map((a) => accounts.describe(a));
+  const device = () => ({ id: config.DEVICE_ID, label: config.DEVICE_LABEL });
   const stateView = () => ({
     version: VERSION,
+    device: device(),
     sessions: sessions.all().map((s) => sessions.view(s)).sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0)),
     accounts: accountsView(),
     settings: store.settings,
     models: config.MODELS,
     notify: { enabled: notifier.enabled, recent: notifier.recent.slice(0, 20) },
-    runner: { tmux: runtime.tmux, claude: runtime.claude, host: config.HOST, stackDir: config.STACK_DIR, home: config.HOME, defaultCwd: config.DEFAULT_CWD },
+    runner: { tmux: runtime.tmux, claude: runtime.claude, host: config.HOST, port: config.PORT, stackDir: config.STACK_DIR, home: config.HOME, defaultCwd: config.DEFAULT_CWD },
     governor: governor ? governor.view() : { active: false, reason: 'only when sessions run in ojee-claude-tmux.service' },
   });
   const runtime = { tmux: null, claude: null };
@@ -175,7 +189,7 @@ function createRunner(overrides = {}) {
   /* ── health, state, events ───────────────────────────────────────── */
 
   app.get('/health', (_req, res) => res.json({ ok: true, version: VERSION }));
-  app.get('/api/health', auth, (_req, res) => res.json({ ok: true, version: VERSION, tmux: runtime.tmux, claude: runtime.claude }));
+  app.get('/api/health', auth, (_req, res) => res.json({ ok: true, version: VERSION, device: device(), tmux: runtime.tmux, claude: runtime.claude }));
   app.get('/api/state', auth, (_req, res) => res.json(stateView()));
 
   app.get('/api/summary', auth, (_req, res) => {
@@ -183,6 +197,7 @@ function createRunner(overrides = {}) {
     const count = (st) => all.filter((s) => s.state === st).length;
     const active = accounts.get(store.settings.activeAccount);
     res.json({
+      device: device(),
       running: count('running') + count('starting'),
       waiting: count('waiting'),
       blocked: count('blocked'),
@@ -425,6 +440,13 @@ function createRunner(overrides = {}) {
     const id = req.params.id;
     const file = findTranscript(accounts.projectDirs(), id);
     if (!file) return res.status(404).json({ error: 'No conversation with that id' });
+    // A conversation open in a terminal somewhere else on this machine (the
+    // user's own claude, another tool) is theirs: resuming it here too would
+    // run two processes on one conversation. Only when asked twice.
+    if (!req.body?.force) {
+      const live = (await agentsJson()).find((a) => a.sessionId === id);
+      if (live && !sessions.byClaudeId(id)) return res.status(409).json({ error: 'That conversation is running in a terminal on this machine. Close it there first.', reason: 'running-elsewhere' });
+    }
     const info = require('./transcript').describe(file);
     const s = sessions.adopt({ id, cwd: req.body?.cwd || info.cwd, title: req.body?.title || info.title || info.firstPrompt });
     res.json(sessions.view(s));
@@ -730,4 +752,4 @@ if (require.main === module) {
   process.on('SIGINT', bye);
 }
 
-module.exports = { createRunner, claudeSettings, UNATTENDED };
+module.exports = { createRunner, claudeSettings, UNATTENDED, unattendedText };

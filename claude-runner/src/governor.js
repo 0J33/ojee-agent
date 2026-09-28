@@ -1,7 +1,8 @@
 /**
  * Keeps the sessions from cooking the box.
  *
- * The HP box is a laptop running a docker stack, and unattended sessions run
+ * The HP box is a laptop running a docker stack (and LOQ is the user's own
+ * workstation), and unattended sessions run
  * test suites and builds that take every core for as long as they run —
  * 100% CPU sustained, and the package into the high 80s. The kernel's own CPU
  * controller would be the clean tool, but this systemd (249) delegates only
@@ -60,10 +61,12 @@ class Governor {
    * @param {object} o
    * @param {string} o.unit          the user unit whose cgroup holds the sessions
    * @param {Function} o.settings    () => current settings
+   * @param {boolean} [o.thermal]  lower the cap while the package is hot
    * @param {Function} [o.log]
    */
-  constructor({ unit, settings, log = () => {} }) {
+  constructor({ unit, settings, thermal = true, log = () => {} }) {
     this.unit = unit;
+    this.thermal = thermal;
     this.settings = settings;
     this.log = log;
     this.ncpu = os.cpus().length || 1;
@@ -155,7 +158,8 @@ class Governor {
     // Heat first: above the target the cap shrinks a little every second;
     // well below it, it grows back.
     const target = Number(s.tempTarget) || 80;
-    if (this.temp !== null) {
+    if (!this.thermal) this.thermalScale = 1;
+    else if (this.temp !== null) {
       if (this.temp >= target) this.thermalScale = Math.max(0.15, this.thermalScale * 0.92);
       else if (this.temp <= target - 4) this.thermalScale = Math.min(1, this.thermalScale * 1.04);
     }
@@ -185,6 +189,7 @@ class Governor {
       frozenPct: Math.round(this.frozenShare * 100),
       temp: this.temp === null ? null : Math.round(this.temp),
       hot: this.thermalScale < 0.999,
+      thermal: this.thermal,
     };
   }
 }

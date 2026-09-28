@@ -21,8 +21,8 @@ const PROTECTED_CONTAINERS = [
   'n8n', 'couchdb', 'guacd', 'odysseus', 'chromadb', 'searxng', 'ntfy',
 ];
 
-/** User units a session must not stop: this runner, and the remote agent. */
-const PROTECTED_UNITS = /\b(ojee-claude(?:-tmux)?|ojee-remote-agent)(?:\.service)?\b/;
+/** User units a session must not stop: this runner, and the remote desktop and peripherals services. */
+const PROTECTED_UNITS = /\b(ojee-claude(?:-tmux)?|ojee-remote(?:-agent)?|ojee-peripherals)(?:\.service)?\b/;
 
 const within = (child, parent) => {
   const rel = path.relative(parent, child);

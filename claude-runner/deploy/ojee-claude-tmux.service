@@ -14,7 +14,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=%h/.local/bin:@NODEDIR@:/usr/local/bin:/usr/bin:/bin
 Environment=LANG=C.UTF-8
 ExecStart=@TMUX@ -L ojee-claude -f @ROOT@/deploy/tmux.conf -D
 ExecStop=@TMUX@ -L ojee-claude kill-server

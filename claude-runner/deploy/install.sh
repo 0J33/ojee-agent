@@ -2,7 +2,12 @@
 # Install the Claude runner as two systemd --user services on this machine.
 #
 #   ./deploy/install.sh            install; start nothing
-#   ./deploy/install.sh --start    install, retire the old code-agent, start
+#   ./deploy/install.sh --start    install and start
+#   ./deploy/install.sh --start --retire-code-agent
+#                                  also stop + disable the old code-agent (HP)
+#
+# First install on another machine: DEVICE_ID=loq DEVICE_LABEL=LOQ PORT=7778
+# in the environment are written into the new env file.
 #
 # Idempotent — run it again after a `git pull`. It never overwrites the env
 # file, so the token and webhook survive.
@@ -17,7 +22,13 @@ DATA="${XDG_DATA_HOME:-$HOME/.local/share}/ojee-claude"
 CONF="${XDG_CONFIG_HOME:-$HOME/.config}/ojee-claude"
 UNITS="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 START=0
-[ "${1:-}" = "--start" ] && START=1
+RETIRE=0
+for a in "$@"; do
+  case "$a" in
+    --start) START=1 ;;
+    --retire-code-agent) RETIRE=1 ;;
+  esac
+done
 
 say() { printf '\n[%s] %s\n' "$1" "$2"; }
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
@@ -79,12 +90,17 @@ if [ ! -f "$CONF/env" ]; then
 # token are the boundary. Never 0.0.0.0 — this runs Claude with bypass
 # permissions.
 HOST=${HOST_IP:-127.0.0.1}
-PORT=7777
+PORT=${PORT:-7777}
 RUNNER_TOKEN=$TOKEN
 
+# Which machine this is (the console lists sessions per device).
+DEVICE_ID=${DEVICE_ID:-$(hostname | tr 'A-Z' 'a-z')}
+DEVICE_LABEL=${DEVICE_LABEL:-$(hostname)}
+
 # The agent module's own setting for the same pair, in the stack's .env:
-#   CLAUDE_RUNNER_URL=http://${HOST_IP:-<tailnet ip>}:7777
-#   CLAUDE_RUNNER_TOKEN=<the token above>
+#   CLAUDE_RUNNER_URL=http://${HOST_IP:-<tailnet ip>}:${PORT:-7777}     (the first runner)
+#   CLAUDE_RUNNER_<ID>_URL / _TOKEN / _LABEL                          (any other)
+#   with the token above
 
 CLAUDE_BIN=$CLAUDE_BIN
 TMUX_BIN=$TMUX_BIN
@@ -101,7 +117,7 @@ DEFAULT_CWD=$HOME
 TIMEZONE=${TZ:-Africa/Cairo}
 EOF
   chmod 600 "$CONF/env"
-  echo "  written. Token for the stack's .env (CLAUDE_RUNNER_TOKEN): $TOKEN"
+  echo "  written (mode 600). The token is in that file — copy it from there, it is not printed."
 else
   echo "  exists, kept"
   grep -q '^TMUX_BIN=' "$CONF/env" || echo "TMUX_BIN=$TMUX_BIN" >> "$CONF/env"
@@ -110,7 +126,7 @@ fi
 say 6/7 "systemd units → $UNITS"
 mkdir -p "$UNITS"
 for u in ojee-claude-tmux.service ojee-claude.service; do
-  sed -e "s|@ROOT@|$ROOT|g" -e "s|@NODE@|$NODE|g" -e "s|@TMUX@|$TMUX_BIN|g" "$ROOT/deploy/$u" > "$UNITS/$u"
+  sed -e "s|@ROOT@|$ROOT|g" -e "s|@NODE@|$NODE|g" -e "s|@NODEDIR@|$(dirname "$NODE")|g" -e "s|@TMUX@|$TMUX_BIN|g" "$ROOT/deploy/$u" > "$UNITS/$u"
 done
 systemctl --user daemon-reload
 if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != "yes" ]; then
@@ -119,7 +135,7 @@ fi
 
 say 7/7 "start"
 if [ "$START" = 1 ]; then
-  if systemctl --user is-active --quiet code-agent.service 2>/dev/null; then
+  if [ "$RETIRE" = 1 ] && systemctl --user is-active --quiet code-agent.service 2>/dev/null; then
     echo "  retiring the old code-agent (it holds :7777 on every interface)"
     systemctl --user disable --now code-agent.service
   fi
@@ -132,7 +148,7 @@ else
     echo "    systemctl --user disable --now code-agent.service    # the old one, on 0.0.0.0:7777"
   fi
   echo "    systemctl --user enable --now ojee-claude-tmux.service ojee-claude.service"
-  echo "  or re-run: $0 --start"
+  echo "  or re-run: $0 --start   (add --retire-code-agent to stop the old one)"
 fi
 
 echo

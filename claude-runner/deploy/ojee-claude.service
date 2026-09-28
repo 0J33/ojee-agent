@@ -15,7 +15,7 @@ Wants=network-online.target ojee-claude-tmux.service
 Type=simple
 EnvironmentFile=%h/.config/ojee-claude/env
 Environment=TMUX_MODE=systemd
-Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=%h/.local/bin:@NODEDIR@:/usr/local/bin:/usr/bin:/bin
 ExecStart=@NODE@ @ROOT@/src/server.js
 # The tailnet address may not exist yet at boot; keep trying.
 Restart=always
