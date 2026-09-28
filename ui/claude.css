@@ -320,6 +320,27 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-tog { display: grid; gap: 4px; min-width: 0; }
 .ag-cl-tog-detail { font-family: var(--mono); font-size: 0.66rem; color: var(--dim); line-height: 1.45; text-transform: none; letter-spacing: 0; font-weight: 400; }
 
+/* ── devices ────────────────────────────────────────────────── */
+
+/* Which machine a session runs on: a small mark before its path, only when
+   there is more than one machine to tell apart. */
+.ag-cl-devtag {
+  display: inline-block; margin-right: 6px; padding: 0 5px; border: 1px solid var(--line);
+  font-family: var(--hud); font-size: 0.55rem; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-2); vertical-align: 1px;
+}
+.ag-cl-chip--dev { font-family: var(--hud); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink); }
+.ag-cl-devswitch { max-width: 520px; }
+.ag-cl-devdot { margin-right: 6px; }
+.ag-cl-devoff { margin: 0; }
+.ag-cl-drow { grid-template-columns: 8px minmax(0, 1fr) auto; }
+.ag-cl-drow-state {
+  margin-left: 8px; font-family: var(--hud); font-size: 0.55rem; letter-spacing: 0.12em; text-transform: uppercase;
+}
+/* A device that is offline, and its sessions: last known, so quieter. */
+.ag-cl-row.is-off { color: var(--dim); }
+.ag-cl-row.is-off .ag-cl-srow-title { color: var(--ink-2); }
+
 @media (max-width: 560px) {
   /* Four labelled buttons do not fit beside the view switch on a phone; the
      icons do, and each keeps its name as a title and aria-label. */
@@ -345,7 +366,8 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 }
 
 @media (max-width: 720px) {
-  .ag-cl-tabs { max-width: none; }
+  .ag-cl-tabs, .ag-cl-devswitch { max-width: none; }
+  .ag-cl-drow > .ag-cl-srow-when { display: none; }
   /* Title, state and when are what a phone needs; the path and model sit
      under the title already. */
   .ag-cl-srow { grid-template-columns: 8px minmax(0, 1fr) auto; }

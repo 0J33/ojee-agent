@@ -195,12 +195,14 @@ function ovTiles() {
 
   const bg = open.reduce((n, s) => n + (s.background?.subagents || 0) + (s.background?.shells || 0), 0);
   const count = (st) => needs.filter((s) => s.state === st).length;
+  // The CPU tile is the first device's (HP's): it is the one that overheats.
   const g = c.governor;
+  const others = (c.devices || []).slice(1);
   const target = c.settings?.tempTarget || 80;
   const heat = g?.temp == null ? null : g.temp >= target + 8 ? 'err' : g.temp >= target ? 'warn' : null;
   const accts = c.accounts || [];
   const ready = accts.filter((a) => a.status === 'ok');
-  const others = accts.filter((a) => a !== active && a.status !== 'ok');
+  const spent = accts.filter((a) => a !== active && a.status !== 'ok');
 
   return el('div', { class: 'tiles' },
     tile('Working', working.length,
@@ -220,17 +222,18 @@ function ovTiles() {
         unit: g?.active ? '%' : null,
         tag: g?.temp != null ? el('span', { class: `vtag ${heat ? `vtag--${heat}` : ''}` }, `${g.temp}°C`) : null,
         tone: g?.hot ? 'warn' : null,
-        title: 'CPU used by the Claude sessions on HP, as a share of all its threads',
+        title: `CPU used by the Claude sessions on ${c.mainDevice?.label || 'HP'}, as a share of all its threads`,
         onclick: () => openClaude('settings'),
       }),
     tile('Accounts', ready.length,
       [active ? `on ${active.label}${active.status !== 'ok' ? ` (${active.status})` : ''}` : 'none active',
-        ...others.map((a) => `${a.label} ${a.status}`)].join(' · '),
+        ...spent.map((a) => `${a.label} ${a.status}`),
+        ...others.map((d) => `${d.label} ${d.online ? 'online' : 'offline'}`)].join(' · '),
       { unit: `/${accts.length}`, tone: active && active.status !== 'ok' ? 'warn' : null, onclick: () => openClaude('accounts') }));
 }
 
 function ovSessionRow(s, c) {
-  const home = c.runner?.home;
+  const home = s.home || c.runner?.home;
   const where = home && s.cwd?.startsWith(home) ? `~${s.cwd.slice(home.length)}` : s.cwd;
   const model = c.models?.find((m) => m.id === s.model?.current)?.label || s.model?.current;
   const fell = s.model?.current && s.model.preferred && s.model.current !== s.model.preferred;
@@ -241,7 +244,7 @@ function ovSessionRow(s, c) {
     stateDot(s.state),
     el('span', { class: 'ag-ov-srow-main' },
       el('span', { class: 'ag-ov-srow-title' }, s.title || s.id.slice(0, 8)),
-      el('span', { class: 'ag-ov-srow-sub' }, [where, model ? `${model}${fell ? ' (fallback)' : ''}` : null].filter(Boolean).join(' · ')),
+      el('span', { class: 'ag-ov-srow-sub' }, [(c.devices?.length || 0) > 1 ? s.deviceLabel : null, where, model ? `${model}${fell ? ' (fallback)' : ''}` : null].filter(Boolean).join(' · ')),
       said ? el('span', { class: 'ag-ov-srow-said' }, plain(said)) : null),
     el('span', { class: 'ag-ov-srow-side' },
       stateTag(s.state, s.background),
@@ -275,7 +278,7 @@ function ovSessions() {
     panel.append(el('div', { class: 'empty' },
       icon('terminal'),
       el('b', {}, 'No sessions open'),
-      el('p', {}, 'Start one in any folder on HP. It runs unattended and pings Discord when it needs you.'),
+      el('p', {}, `Start one in any folder on ${(c.devices || []).map((d) => d.label).join(' or ') || 'HP'}. It runs unattended and pings Discord when it needs you.`),
       el('button', { class: 'btn btn--sm', type: 'button', onclick: () => openClaude('new') }, 'New session')));
     return panel;
   }
@@ -497,10 +500,26 @@ async function toggleWorkflow(w) {
 
 /* ── load ────────────────────────────────────────────────────────────── */
 
+/**
+ * Every device's runner state as one: the first device that answers
+ * (HP) gives the accounts, settings and governor the tiles read; sessions
+ * come from all of them, each marked with its device.
+ */
+function mergeDevices(devices) {
+  const up = devices.filter((d) => d.state);
+  if (!up.length) {
+    return { error: devices.map((d) => (devices.length > 1 ? `${d.label}: ${d.error || 'offline'}` : d.error || 'offline')).join(' · ') || 'No runner configured' };
+  }
+  const main = up[0].state;
+  const sessions = up.flatMap((d) => (d.state.sessions || []).map((s) => ({ ...s, device: d.id, deviceLabel: d.label, home: d.state.runner?.home })))
+    .sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0));
+  return { ...main, sessions, devices, mainDevice: up[0] };
+}
+
 async function loadClaude() {
   if (state.config && !state.config.has?.claude) { state.claude = null; return; }
-  const r = await tryApi('/api/claude/state');
-  state.claude = r?.error ? { error: r.error } : r;
+  const r = await tryApi('/api/claude/all/state');
+  state.claude = r?.error ? { error: r.error } : mergeDevices(r?.devices || []);
 }
 
 async function refresh() {

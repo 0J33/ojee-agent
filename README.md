@@ -192,6 +192,26 @@ vim ~/.config/ojee-claude/env  # CLAUDE_DISCORD_WEBHOOK, CONSOLE_URL
 Then give this module `CLAUDE_RUNNER_URL=http://<tailnet ip>:7777` and the token from the env file.
 Updating is `git pull && systemctl --user restart ojee-claude` — sessions survive it.
 
+### More than one machine
+
+Each machine that runs sessions has its own runner, accounts and settings (HP, and LOQ — a
+laptop). The module lists them all: `CLAUDE_RUNNER_URL/_TOKEN` is the first (id `hp`, label `HP`;
+`CLAUDE_RUNNER_ID/_LABEL` to change), and each other one is `CLAUDE_RUNNER_<ID>_URL`, `_TOKEN`,
+`_LABEL`, and `_SLEEPS=1` when being offline is normal (a laptop asleep: drawn as a state, never an
+alert). Or all of it as JSON in `CLAUDE_RUNNERS=[{id,label,url,token,sleeps}]`.
+
+The module proxies each under `/api/claude/d/<id>/…` (HTTP, SSE, terminal WebSocket), merges their
+states (`/api/claude/all/state`) and event streams (`/api/claude/all/events`, each event
+`{device, data}` plus `device` events when one drops or returns), and adds their summaries up.
+`/api/claude/…` without a device is still the first runner. In the UI: a device picker on New
+(last used, else HP; an offline one disabled with the reason), the folder picker browses that
+machine, sessions carry a device tag and can be filtered, and Accounts / Settings switch device.
+
+Installing on a second machine: `DEVICE_ID=loq DEVICE_LABEL=LOQ PORT=7778 ./deploy/install.sh`,
+then `--start` (never `--retire-code-agent` unless the old code-agent should go). Per-machine env:
+`THERMAL_BACKOFF=0` (no temperature back-off, for a CPU that idles hot), `DEFAULT_CPU_CAP_PCT`,
+`MACHINE_NOTE` (a line about the machine in the unattended instructions).
+
 `npm test` in `claude-runner/` runs the unit tests; the end-to-end suite
 (`tests/integration.test.js`) drives real tmux and a fake `claude` that writes real-shaped
 transcripts, through a Fable limit, an account switch and a pause.

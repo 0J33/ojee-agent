@@ -37,12 +37,57 @@ const N8N_DOMAIN = process.env.N8N_DOMAIN || '';
 const ODYSSEUS_URL = (process.env.ODYSSEUS_URL || '').replace(/\/+$/, '');
 const ODYSSEUS_DOMAIN = process.env.ODYSSEUS_DOMAIN || '';
 const COUCHDB_DOMAIN = process.env.COUCHDB_DOMAIN || '';
-/* The Claude runner: a host service (claude-runner/ in this repo), because
-   sessions have to start in any folder on the machine and share the user's
-   own ~/.claude — neither of which a container can do. The CODE_AGENT_*
-   names are the ones the old code-agent used; they still work. */
-const CLAUDE_RUNNER_URL = (process.env.CLAUDE_RUNNER_URL || process.env.CODE_AGENT_URL || '').replace(/\/+$/, '');
-const CLAUDE_RUNNER_TOKEN = process.env.CLAUDE_RUNNER_TOKEN || process.env.CODE_AGENT_TOKEN || '';
+/* The Claude runners: a host service (claude-runner/ in this repo) on each
+   machine that runs sessions, because sessions have to start in any folder on
+   that machine and share the user's own ~/.claude — neither of which a
+   container can do. */
+const RUNNERS = readRunners(process.env);
+const CLAUDE_CONFIGURED = RUNNERS.length > 0;
+
+/**
+ * Which runners there are, in the order the UI lists them.
+ *
+ *   CLAUDE_RUNNER_URL / _TOKEN            the first one (HP). The CODE_AGENT_*
+ *                                         names the old code-agent used still work.
+ *   CLAUDE_RUNNER_ID / _LABEL             its id and label (default hp / HP)
+ *   CLAUDE_RUNNER_<ID>_URL / _TOKEN       any other (e.g. _LOQ_); optional
+ *   CLAUDE_RUNNER_<ID>_LABEL / _SLEEPS    _SLEEPS=1: a laptop, so being
+ *                                         offline is normal, not an alert
+ *   CLAUDE_RUNNERS                        or all of it as JSON:
+ *                                         [{id,label,url,token,sleeps}]
+ */
+function readRunners(env) {
+  const clean = (u) => String(u || '').replace(/\/+$/, '');
+  const slug = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '');
+  const out = [];
+  const add = (r) => {
+    const id = slug(r.id);
+    if (!id || !clean(r.url) || out.some((x) => x.id === id)) return;
+    out.push({ id, label: String(r.label || id.toUpperCase()), url: clean(r.url), token: String(r.token || ''), sleeps: !!r.sleeps });
+  };
+  if (env.CLAUDE_RUNNERS) {
+    try { for (const r of JSON.parse(env.CLAUDE_RUNNERS)) add(r); } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(`CLAUDE_RUNNERS is not valid JSON (${e.message}) — ignored`);
+    }
+  }
+  add({
+    id: env.CLAUDE_RUNNER_ID || 'hp',
+    label: env.CLAUDE_RUNNER_LABEL || 'HP',
+    url: env.CLAUDE_RUNNER_URL || env.CODE_AGENT_URL,
+    token: env.CLAUDE_RUNNER_TOKEN || env.CODE_AGENT_TOKEN,
+    sleeps: /^(1|true|yes)$/i.test(env.CLAUDE_RUNNER_SLEEPS || ''),
+  });
+  for (const [k, v] of Object.entries(env)) {
+    const m = /^CLAUDE_RUNNER_([A-Z0-9]+)_URL$/.exec(k);
+    if (!m) continue;
+    const p = `CLAUDE_RUNNER_${m[1]}_`;
+    add({ id: m[1], label: env[`${p}LABEL`], url: v, token: env[`${p}TOKEN`], sleeps: /^(1|true|yes)$/i.test(env[`${p}SLEEPS`] || '') });
+  }
+  return out;
+}
+
+const runnerById = (id) => RUNNERS.find((r) => r.id === id) || null;
 
 /**
  * How far back "recent runs" goes.
@@ -115,7 +160,8 @@ app.get('/api/config', (_req, res) => res.json({
     ODYSSEUS_DOMAIN ? { label: 'Odysseus', href: `https://${ODYSSEUS_DOMAIN}` } : null,
     COUCHDB_DOMAIN ? { label: 'CouchDB', href: `https://${COUCHDB_DOMAIN}` } : null,
   ].filter(Boolean),
-  has: { n8n: !!N8N_API_KEY, odysseus: !!ODYSSEUS_URL, claude: !!CLAUDE_RUNNER_URL },
+  has: { n8n: !!N8N_API_KEY, odysseus: !!ODYSSEUS_URL, claude: CLAUDE_CONFIGURED },
+  devices: RUNNERS.map((r) => ({ id: r.id, label: r.label, sleeps: r.sleeps })),
 }));
 
 /* ── the stack's own containers ───────────────────────────────────────── */
@@ -274,22 +320,26 @@ async function odysseus() {
 
 app.get('/api/odysseus', auth, async (_req, res) => res.json(await odysseus()));
 
-/* ── the Claude runner ────────────────────────────────────────────────── */
+/* ── the Claude runners ───────────────────────────────────────────────── */
 
 /**
- * Everything under /api/claude/* goes to the runner, with the runner's token
- * added here — the browser never holds it. Hand-rolled on node:http for the
- * same two reasons the console's own proxy is: an event stream must not be
- * buffered, and a terminal is a WebSocket upgrade, which express never sees.
+ * Everything under /api/claude/d/<device>/* goes to that device's runner,
+ * with its token added here — the browser never holds one. /api/claude/* with
+ * no device is the first runner (HP), as it was before there were two.
+ * Hand-rolled on node:http for the same two reasons the console's own proxy
+ * is: an event stream must not be buffered, and a terminal is a WebSocket
+ * upgrade, which express never sees.
  */
-function runnerRequest(req, res) {
-  if (!CLAUDE_RUNNER_URL) {
-    return res.status(503).json({ error: 'The Claude runner is not configured here (set CLAUDE_RUNNER_URL and CLAUDE_RUNNER_TOKEN).', reason: 'not-configured' });
+function runnerRequest(runner, rest, req, res) {
+  if (!runner) {
+    return res.status(CLAUDE_CONFIGURED ? 404 : 503).json(CLAUDE_CONFIGURED
+      ? { error: 'No such device', reason: 'no-device' }
+      : { error: 'The Claude runner is not configured here (set CLAUDE_RUNNER_URL and CLAUDE_RUNNER_TOKEN).', reason: 'not-configured' });
   }
-  const target = new URL(`/api${req.url}`, CLAUDE_RUNNER_URL);
+  const target = new URL(`/api${rest}`, runner.url);
   const headers = {
     accept: req.get('accept') || 'application/json',
-    authorization: `Bearer ${CLAUDE_RUNNER_TOKEN}`,
+    authorization: `Bearer ${runner.token}`,
   };
   let body = null;
   let stream = false;
@@ -310,8 +360,11 @@ function runnerRequest(req, res) {
       if (req.get('content-length')) headers['content-length'] = req.get('content-length');
     }
   }
+  const events = String(req.get('accept') || '').includes('text/event-stream') || /\/events(\?|$)/.test(rest);
   const up = http.request({
     hostname: target.hostname, port: target.port, path: target.pathname + target.search, method: req.method, headers,
+    // A laptop that is asleep answers nothing at all: give up rather than hang.
+    timeout: events ? 0 : 15_000,
   }, (r) => {
     res.status(r.statusCode || 502);
     for (const k of ['content-type', 'cache-control']) if (r.headers[k]) res.setHeader(k, r.headers[k]);
@@ -322,9 +375,16 @@ function runnerRequest(req, res) {
     }
     r.pipe(res);
   });
+  up.on('timeout', () => up.destroy(Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' })));
   up.on('error', (e) => {
     if (res.headersSent) return res.destroy();
-    res.status(502).json({ error: `The Claude runner is not answering (${e.code || e.message}). On the host: systemctl --user status ojee-claude`, reason: 'unreachable' });
+    res.status(502).json({
+      error: runner.sleeps
+        ? `${runner.label} is offline (${e.code || e.message}) — asleep, shut, or away from the tailnet.`
+        : `The Claude runner on ${runner.label} is not answering (${e.code || e.message}). On the host: systemctl --user status ojee-claude`,
+      reason: 'unreachable',
+      device: runner.id,
+    });
   });
   // A closed tab must not leave the runner streaming into a dead socket.
   res.on('close', () => { if (!up.destroyed) up.destroy(); });
@@ -332,19 +392,133 @@ function runnerRequest(req, res) {
   else up.end(body);
 }
 
-app.use('/api/claude', auth, runnerRequest);
+/** One runner's JSON, or null. Never throws; a sleeping laptop is a null. */
+async function runnerJson(runner, pathname, timeout = 4000) {
+  try {
+    const r = await fetch(`${runner.url}/api${pathname}`, { timeout, headers: { authorization: `Bearer ${runner.token}` } });
+    if (!r.ok) return { ok: false, error: r.status === 401 ? 'the runner rejected the token' : `HTTP ${r.status}` };
+    return { ok: true, data: await r.json() };
+  } catch (e) {
+    const why = e.type === 'request-timeout' ? 'no answer' : (e.code || e.message);
+    return { ok: false, error: runner.sleeps ? `offline — ${why}` : `not answering — ${why}` };
+  }
+}
+
+const deviceInfo = (r) => ({ id: r.id, label: r.label, sleeps: r.sleeps });
+
+/** Every runner's whole state at once, each marked online or not. */
+app.get('/api/claude/all/state', auth, async (_req, res) => {
+  const all = await Promise.all(RUNNERS.map(async (r) => {
+    const x = await runnerJson(r, '/state');
+    return { ...deviceInfo(r), online: x.ok, error: x.ok ? null : x.error, state: x.ok ? x.data : null };
+  }));
+  res.json({ devices: all });
+});
+
+/**
+ * One event stream for every runner. Each upstream event is passed on as
+ * {device, data}; a runner dropping away or coming back is a `device` event,
+ * so an offline laptop is a state the page draws, never a broken stream.
+ */
+app.get('/api/claude/all/events', auth, (req, res) => {
+  res.setHeader('content-type', 'text/event-stream');
+  res.setHeader('cache-control', 'no-cache');
+  res.setHeader('connection', 'keep-alive');
+  res.setHeader('x-accel-buffering', 'no');
+  res.flushHeaders();
+  res.socket?.setNoDelay(true);
+  let closed = false;
+  const send = (event, data) => { if (!closed) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
+  const links = RUNNERS.map((runner) => {
+    const link = { runner, up: null, timer: null, watchdog: null, online: null };
+    const status = (online, error = null) => {
+      if (link.online === online) return;
+      link.online = online;
+      send('device', { device: runner.id, online, error });
+    };
+    const retry = (error) => {
+      link.up?.destroy();
+      link.up = null;
+      clearTimeout(link.watchdog);
+      status(false, error);
+      if (!closed) link.timer = setTimeout(connect, 10_000);
+    };
+    // The runner pings every 20 s. A laptop that fell asleep mid-stream sends
+    // nothing and closes nothing; silence is how that looks.
+    const alive = () => {
+      clearTimeout(link.watchdog);
+      link.watchdog = setTimeout(() => retry('offline — stopped answering'), 50_000);
+    };
+    function connect() {
+      if (closed) return;
+      const target = new URL('/api/events', runner.url);
+      let buf = '';
+      const up = http.request({
+        hostname: target.hostname, port: target.port, path: target.pathname, method: 'GET',
+        headers: { accept: 'text/event-stream', authorization: `Bearer ${runner.token}` },
+      });
+      link.up = up;
+      const connectTimer = setTimeout(() => { if (link.up === up) retry(runner.sleeps ? 'offline — no answer' : 'not answering'); }, 6000);
+      up.on('response', (r) => {
+        clearTimeout(connectTimer);
+        if (r.statusCode !== 200) { r.resume(); retry(r.statusCode === 401 ? 'the runner rejected the token' : `HTTP ${r.statusCode}`); return; }
+        alive();
+        status(true);
+        r.setEncoding('utf8');
+        r.on('data', (chunk) => {
+          alive();
+          buf += chunk;
+          let at;
+          while ((at = buf.indexOf('\n\n')) >= 0) {
+            const frame = buf.slice(0, at);
+            buf = buf.slice(at + 2);
+            let event = 'message';
+            const data = [];
+            for (const line of frame.split('\n')) {
+              if (line.startsWith('event:')) event = line.slice(6).trim();
+              else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
+            }
+            if (!data.length) continue;
+            try {
+              const parsed = JSON.parse(data.join('\n'));
+              send(event, { device: runner.id, data: parsed });
+            } catch { /* a frame that is not JSON is not ours */ }
+          }
+        });
+        r.on('end', () => { if (link.up === up) retry('the runner closed the stream'); });
+        r.on('error', () => { if (link.up === up) retry('the stream broke'); });
+      });
+      up.on('error', (e) => { clearTimeout(connectTimer); if (link.up === up) retry(runner.sleeps ? `offline — ${e.code || e.message}` : `not answering — ${e.code || e.message}`); });
+      up.end();
+    }
+    connect();
+    return link;
+  });
+  const ping = setInterval(() => { if (!closed) res.write(': ping\n\n'); }, 20_000);
+  res.on('close', () => {
+    closed = true;
+    clearInterval(ping);
+    for (const l of links) { clearTimeout(l.timer); clearTimeout(l.watchdog); l.up?.destroy(); }
+  });
+});
+
+app.use('/api/claude/d/:device', auth, (req, res) => runnerRequest(runnerById(req.params.device), req.url, req, res));
+app.use('/api/claude', auth, (req, res) => runnerRequest(RUNNERS[0] || null, req.url, req, res));
 
 /** WebSocket upgrades for the terminal, forwarded with the runner's token. */
 function runnerUpgrade(req, socket, head) {
-  const m = /^\/api\/claude(\/(?:sessions|accounts)\/[^/?]+\/terminal)(\?.*)?$/.exec(req.url || '');
+  const m = /^\/api\/claude(?:\/d\/([a-z0-9-]+))?(\/(?:sessions|accounts)\/[^/?]+\/terminal)(\?.*)?$/.exec(req.url || '');
   if (!m) return false;
-  if (!CLAUDE_RUNNER_URL) { socket.end('HTTP/1.1 503 Service Unavailable\r\n\r\n'); return true; }
-  const target = new URL(`/api${m[1]}${m[2] || ''}`, CLAUDE_RUNNER_URL);
-  const headers = { ...req.headers, host: target.host, authorization: `Bearer ${CLAUDE_RUNNER_TOKEN}` };
+  const runner = m[1] ? runnerById(m[1]) : RUNNERS[0];
+  if (!runner) { socket.end(`HTTP/1.1 ${CLAUDE_CONFIGURED ? '404 Not Found' : '503 Service Unavailable'}\r\n\r\n`); return true; }
+  const target = new URL(`/api${m[2]}${m[3] || ''}`, runner.url);
+  const headers = { ...req.headers, host: target.host, authorization: `Bearer ${runner.token}` };
   // The console's identity headers are for this module, not for the runner.
   for (const k of Object.keys(headers)) if (k.startsWith('x-console-') || k === 'cookie') delete headers[k];
-  const up = http.request({ hostname: target.hostname, port: target.port, path: target.pathname + target.search, method: 'GET', headers });
+  const up = http.request({ hostname: target.hostname, port: target.port, path: target.pathname + target.search, method: 'GET', headers, timeout: 10_000 });
   up.on('upgrade', (res, upSocket, upHead) => {
+    up.setTimeout(0);
+    upSocket.setTimeout(0);
     const lines = [`HTTP/1.1 ${res.statusCode} ${res.statusMessage}`];
     for (let i = 0; i < res.rawHeaders.length; i += 2) lines.push(`${res.rawHeaders[i]}: ${res.rawHeaders[i + 1]}`);
     socket.write(`${lines.join('\r\n')}\r\n\r\n`);
@@ -360,24 +534,34 @@ function runnerUpgrade(req, socket, head) {
   up.on('response', (res) => {
     socket.end(`HTTP/1.1 ${res.statusCode} ${res.statusMessage}\r\n\r\n`);
   });
+  up.on('timeout', () => up.destroy());
   up.on('error', () => socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n'));
   up.end();
   return true;
 }
 
-/** The runner's one-line state for the front page. Never throws. */
+/**
+ * Every runner's one-line state for the front page, added up. Never throws.
+ * A laptop that is offline is not a problem and is not reported as one.
+ */
 async function claudeSummary() {
-  if (!CLAUDE_RUNNER_URL) return { configured: false };
-  try {
-    const r = await fetch(`${CLAUDE_RUNNER_URL}/api/summary`, {
-      timeout: 3000,
-      headers: { authorization: `Bearer ${CLAUDE_RUNNER_TOKEN}` },
-    });
-    if (!r.ok) return { configured: true, up: false, error: `HTTP ${r.status}` };
-    return { configured: true, up: true, ...(await r.json()) };
-  } catch (e) {
-    return { configured: true, up: false, error: e.message };
-  }
+  if (!CLAUDE_CONFIGURED) return { configured: false };
+  const all = await Promise.all(RUNNERS.map(async (r) => ({ r, x: await runnerJson(r, '/summary', 3000) })));
+  const up = all.filter(({ x }) => x.ok);
+  const sum = (k) => up.reduce((n, { x }) => n + (Number(x.data[k]) || 0), 0);
+  const multi = RUNNERS.length > 1;
+  return {
+    configured: true,
+    up: up.length > 0,
+    down: all.filter(({ r, x }) => !x.ok && !r.sleeps).map(({ r, x }) => ({ id: r.id, label: r.label, error: x.error })),
+    error: up.length ? null : all.map(({ r, x }) => `${r.label}: ${x.error}`).join(' · '),
+    running: sum('running'),
+    waiting: sum('waiting'),
+    blocked: sum('blocked'),
+    paused: sum('paused'),
+    errors: sum('errors'),
+    attention: up.flatMap(({ r, x }) => (x.data.attention || []).map((a) => ({ ...a, device: r.id, title: multi ? `${a.title} (${r.label})` : a.title }))),
+  };
 }
 
 /* ── health and summary ───────────────────────────────────────────────── */
@@ -448,7 +632,7 @@ app.get('/api/summary', auth, async (_req, res) => {
       severity: x.state === 'error' ? 'err' : 'warn',
       view: 'claude',
     })) : []),
-    ...(cc.configured && !cc.up ? [{ text: 'The Claude runner is not answering', severity: 'warn', view: 'claude' }] : []),
+    ...(cc.configured ? (cc.down || []).map((d) => ({ text: RUNNERS.length > 1 ? `The Claude runner on ${d.label} is not answering` : 'The Claude runner is not answering', severity: 'warn', view: 'claude' })) : []),
     ...stopped.map((s) => ({ text: `${s.name} is not running`, severity: 'err', view: 'services' })),
     ...(wf.ok ? [] : [{ text: n8nWhy(wf.reason, wf.detail), severity: 'warn', view: 'workflows' }]),
     ...(ody.configured && !ody.up ? [{ text: `Odysseus is not answering`, severity: 'warn', view: 'odysseus' }] : []),
@@ -504,7 +688,7 @@ server.listen(PORT, '0.0.0.0', () => {
   // eslint-disable-next-line no-console
   console.log(`ojee-agent (AI + automation) on :${PORT}`);
   // eslint-disable-next-line no-console
-  console.log(`  n8n ${N8N_API_KEY ? N8N_URL : 'no API key'} · odysseus ${ODYSSEUS_URL || 'not configured'} · claude runner ${CLAUDE_RUNNER_URL || 'not configured'}`);
+  console.log(`  n8n ${N8N_API_KEY ? N8N_URL : 'no API key'} · odysseus ${ODYSSEUS_URL || 'not configured'} · claude runners ${RUNNERS.map((r) => `${r.id}=${r.url}${r.token ? '' : ' (no token)'}`).join(', ') || 'not configured'}`);
 });
 
 module.exports = app;
