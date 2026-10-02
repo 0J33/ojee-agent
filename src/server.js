@@ -148,7 +148,7 @@ const VIEWS = [
 app.get('/module.json', (_req, res) => res.json({
   id: process.env.MODULE_ID || 'agent',
   name: process.env.MODULE_NAME || 'Agent',
-  version: '2.4.0',
+  version: '3.0.0',
   icon: 'i-cpu',
   views: VIEWS,
   ui: '/ui/index.js',

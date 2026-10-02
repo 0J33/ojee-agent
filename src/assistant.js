@@ -206,7 +206,7 @@ function isModelExhausted(res) {
   if (res.status === 429) return true;
   const s = JSON.stringify(res.data || '').toLowerCase();
   if (/not found|unknown model|does not exist/.test(s)) return false;
-  return /rate.?limit|quota|capacity|out of|exceeded|too many|temporarily unavailable|no available|credit/.test(s);
+  return /rate.?limit|quota|capacity|out of|exceeded|too many|temporarily unavailable|no available|credit|global regions|upstream request failed|region not/.test(s);
 }
 
 /* ── the routes ───────────────────────────────────────────────────────── */
@@ -324,12 +324,21 @@ function mount(app, auth) {
         }),
       }, CHAT_TIMEOUT_MS);
 
-      if (out.ok) {
+      // opencode reports some upstream failures as HTTP 200 carrying a message
+      // with no parts in it — the turn was retried and gave up, and the only
+      // signal left is that nothing came back. Counting that as an answer
+      // would show an empty bubble AND pin the next message to the model that
+      // just failed, so it is treated as a refusal and the walk continues.
+      const parts = out.data?.parts || [];
+      const said = parts.filter((p) => p.type === 'text').map((p) => p.text).join('');
+      const worked = parts.some((p) => p.type === 'tool');
+      if (out.ok && (said || worked)) {
         currentModel = key(model);
         return res.json({ ...out.data, model: key(model) });
       }
-      last = { model: key(model), ...out };
-      if (!isModelExhausted(out)) break;
+      last = { model: key(model), ...out, error: out.ok ? 'empty reply' : out.error };
+      if (out.ok || isModelExhausted(out)) continue;
+      break;
     }
 
     res.status(502).json({

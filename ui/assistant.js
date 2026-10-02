@@ -93,8 +93,9 @@ const S = {
   one: null,              // a session fetched on its own, for a deep link
   msgs: null,             // null = not loaded, [] = empty transcript
   id: null,
-  tab: 'sessions',        // 'sessions' | 'new'
+  tab: 'sessions',        // 'sessions' | 'new' | 'chat'
   model: null,            // the model that answered last
+  fallback: false,        // and whether it had to be a different one
   pick: pref('ag-as-model') || null,   // the model the reader chose
   dir: pref('ag-as-dir') || '',
   path: pref('ag-as-path') || '',
@@ -128,6 +129,35 @@ function loadCss() {
   document.head.appendChild(link);
 }
 
+/* ── the small vocabulary the Claude view shares ───────────────────── */
+
+/** An icon from the sprite, as a node — the same call the Claude view makes. */
+const svg = (name, cls = 'ic') => {
+  const t = document.createElement('template');
+  t.innerHTML = ctx.icon(`i-${name}`, cls);
+  return t.content.firstChild;
+};
+
+const lbl = (text) => el('span', { class: 'ag-as-lbl' }, text);
+
+/** `.dot` is the design system's; the tone is optional. */
+const dot = (tone) => el('span', { class: tone ? `dot dot--${tone}` : 'dot' });
+
+/** The human name for a `provider/id`, falling back to the id itself. */
+function modelName(key) {
+  if (!key) return '';
+  const found = (S.cfg?.models || []).find((m) => m.key === key);
+  return found?.name || key;
+}
+
+/** `/media/…/ojee.net` → `…/ojee.net`: a chip has a width to respect. */
+const shortPath = (p) => {
+  if (!p) return '';
+  const parts = p.split('/').filter(Boolean);
+  if (parts.length <= 3) return p;
+  return `…/${parts.slice(-2).join('/')}`;
+};
+
 /* ── data ───────────────────────────────────────────────────────────── */
 
 async function loadConfig() {
@@ -135,6 +165,13 @@ async function loadConfig() {
     S.cfg = await api('/assistant/config');
     S.cfgError = null;
     S.model = S.cfg?.model || S.model;
+    // A pick stored as a bare id — the server accepts either — is resolved
+    // against the catalog, so the control shows the name of the model rather
+    // than an id the reader never typed.
+    if (S.cfg?.models?.length && S.pick && !S.pick.includes('/')) {
+      const hit = S.cfg.models.find((m) => m.id === S.pick);
+      if (hit) { S.pick = hit.key; pref('ag-as-model', S.pick); }
+    }
     // A pick the server no longer offers is a dead end — every message would
     // come back "model not found" — so drop it. Only when the catalog really
     // came back: a failed call is handled above, and a fallback catalog (the
@@ -187,18 +224,46 @@ async function loadMsgs() {
 
 async function send() {
   const text = String(S.draft || '').trim();
-  if (!text || !S.id || S.busy) return;
+  if (!text || S.busy) return;
+  const directory = String(S.path || S.cfg?.defaultPath || '').trim();
+
   S.busy = true;
   S.error = null;
   S.draft = '';
   paint();
+
+  // The conversation is made by the first message, not by a form filled in
+  // before it. That is the whole difference between a dialog you open to talk
+  // and a dialog you open to configure.
+  let phantom = null;
   try {
+    if (!S.id) {
+      const s = await post('/assistant/sessions', { directory: directory || '/' });
+      S.id = s.id;
+      pref('ag-as-sid', s.id);
+      S.msgs = [];
+      await loadSessions();
+      // In the view the transcript is a real place, so the URL becomes it —
+      // replaceState rather than a hash change, which would re-enter routing
+      // half way through sending.
+      if (mode === 'view') history.replaceState(null, '', `#/assistant/${encodeURIComponent(s.id)}`);
+    }
+
+    // Echo the line immediately: a reply is seconds away and a chat that
+    // swallows what you typed while you wait reads as broken.
+    phantom = { info: { role: 'user', time: { created: Date.now() } }, parts: [{ type: 'text', text }] };
+    S.msgs = [...(S.msgs || []), phantom];
+    paint();
+
+    const chosen = S.pick;
     const r = await post(`/assistant/sessions/${encodeURIComponent(S.id)}/message`,
-      { text, ...(S.pick ? { model: S.pick } : {}) });
-    // Whatever answered becomes the model we are on. If the pick refused and
-    // the fallback replied, staying on the exhausted model would only buy the
-    // same refusal on the next message.
+      { text, ...(chosen ? { model: chosen } : {}) });
+
+    // Whatever answered becomes the model we are on, and whether it was the
+    // one that was asked for is kept — the callout under the head is the only
+    // place that says so out loud.
     if (r.model) {
+      S.fallback = !!(chosen && r.model !== chosen);
       S.model = r.model;
       if (S.pick !== r.model) { S.pick = r.model; pref('ag-as-model', r.model); }
     }
@@ -206,6 +271,7 @@ async function send() {
   } catch (e) {
     // Hand the text back: losing what you typed to a dead gateway is the
     // one failure a chat window must not commit.
+    if (phantom) S.msgs = (S.msgs || []).filter((m) => m !== phantom);
     S.draft = text;
     S.error = e.message;
     ctx.toast?.('err', 'That did not work', e.message);
@@ -258,6 +324,8 @@ async function openSession(id) {
   S.msgs = null;
   S.tab = 'sessions';
   S.error = null;
+  S.one = null;
+  S.fallback = false;
   if (mode === 'view') { go(id); return; }
   S.id = id;
   paint();
@@ -306,6 +374,8 @@ export function routeAssistant() {
 function showSessions() {
   S.tab = 'sessions';
   S.id = null;
+  S.one = null;
+  S.fallback = false;
   if (mode === 'modal') { paint(); loadSessions().then(paint); return; }
   go();
 }
@@ -358,21 +428,39 @@ function modelPicker() {
 }
 
 function tabs() {
+  // As in the Claude view: being inside a conversation reads as still being
+  // on Sessions, so the tab that is lit is the one you came from.
+  const active = (S.id || S.tab === 'chat') ? 'sessions' : S.tab;
   return el('div', { class: 'segctl ag-as-tabs', role: 'group', 'aria-label': 'Assistant' },
     el('button', {
       type: 'button',
-      'aria-pressed': String(S.tab === 'sessions' && !S.id),
+      'aria-pressed': String(active === 'sessions'),
       onclick: showSessions,
     }, 'Sessions'),
     el('button', {
       type: 'button',
-      'aria-pressed': String(S.tab === 'new'),
+      'aria-pressed': String(active === 'new'),
       onclick: showNew,
     }, 'New'));
 }
 
-function bar() {
-  return el('div', { class: 'ag-as-bar' }, tabs(), modelPicker());
+/**
+ * One line under the tabs: what there is, which model answers it, and the way
+ * to make more. Same shape as the Claude view's verdict — the dot carries
+ * whether anything about the current model is worth knowing (a fallback), and
+ * the model itself is a control rather than a label, because the point of it
+ * is that it can be changed.
+ */
+function verdict() {
+  const n = S.sessions?.length || 0;
+  const key = S.pick || S.model;
+  return el('div', { class: 'ag-verdict ag-as-verdict' },
+    dot(S.fallback ? 'warn' : n ? 'ok' : null),
+    el('strong', {}, n ? `${n} session${n === 1 ? '' : 's'}` : 'no sessions'),
+    el('span', { class: 'meta' }, key ? `on ${modelName(key)}` : ''),
+    modelPicker(),
+    el('button', { class: 'btn btn--sm ag-as-verdict-new', type: 'button', onclick: () => go('new') },
+      svg('plus'), 'New session'));
 }
 
 function pathRow(action) {
@@ -427,15 +515,17 @@ const clock = (ms) => {
   return `${d.getDate()}/${d.getMonth() + 1} ${p(d.getHours())}:${p(d.getMinutes())}`;
 };
 
+/* Three columns, like every list in this module: the title, the folder it
+   lives in, and when it last changed. Two columns left the clock stranded a
+   thousand pixels from the thing it timestamps. */
 function sessionRow(s) {
   return el('button', {
     class: 'ag-as-row',
     type: 'button',
     onclick: () => openSession(s.id),
   },
-  el('span', { class: 'ag-as-row-main' },
-    el('span', { class: 'ag-as-row-title' }, s.title || s.slug || s.id),
-    el('span', { class: 'ag-as-row-sub' }, s.directory || '/')),
+  el('span', { class: 'ag-as-row-title' }, s.title || s.slug || s.id),
+  el('span', { class: 'ag-as-row-path' }, s.directory || '/'),
   el('span', { class: 'ag-as-row-when meta' }, clock(s.time?.updated)));
 }
 
@@ -444,76 +534,180 @@ function listPane() {
     class: 'btn btn--ghost btn--sm', type: 'button',
     onclick: async () => { S.sessions = null; paint(); await loadSessions(); paint(); },
   }, 'Try again');
+  const wrap = (panel) => el('section', { class: 'stack-lg' }, tabs(), verdict(), panel);
 
   if (S.sessions === null) {
-    return el('section', { class: 'panel stack' },
+    return wrap(el('section', { class: 'panel stack' },
       el('span', { class: 'skeleton', style: 'height:18px;display:block' }),
-      el('span', { class: 'skeleton', style: 'height:120px;display:block' }));
+      el('span', { class: 'skeleton', style: 'height:120px;display:block' })));
   }
   if (S.error && !S.sessions.length) {
-    return el('section', { class: 'panel stack' },
+    return wrap(el('section', { class: 'panel stack' },
       el('h3', { class: 'h3' }, 'Sessions'),
-      problem('OpenCode is not answering', S.error, retry));
+      problem('OpenCode is not answering', S.error, retry)));
   }
   if (!S.sessions.length) {
-    return el('section', { class: 'panel stack' },
+    return wrap(el('section', { class: 'panel stack' },
       el('h3', { class: 'h3' }, 'Sessions'),
       problem(S.dir ? 'No session in that path' : 'No sessions yet',
         S.dir
           ? 'Nothing has been opened there. Change the path, or clear it to see every session.'
           : 'Open one under New — a path and a title are all a session takes.',
-        el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: showNew }, 'New session')));
+        el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: showNew }, 'New session'))));
   }
-  return el('section', { class: 'panel stack' },
+  return wrap(el('section', { class: 'panel stack' },
     el('div', { class: 'ag-panel-head' },
       el('h3', { class: 'h3' }, 'Sessions'),
       el('span', { class: 'meta' }, `${S.sessions.length} ${S.sessions.length === 1 ? 'session' : 'sessions'}`)),
     filterRow(),
-    el('div', { class: 'ag-as-list' }, S.sessions.map(sessionRow)));
+    el('div', { class: 'ag-as-list' }, S.sessions.map(sessionRow))));
 }
 
+/* Two panels, the way the Claude view splits a new session: where it runs,
+   and what to call it. One form with everything in it read as setup. */
 function newPane() {
-  return el('section', { class: 'panel stack' },
-    el('h3', { class: 'h3' }, 'New session'),
-    el('div', { class: 'field' },
-      el('label', {}, 'Path'),
+  const retry = el('button', {
+    class: 'btn btn--ghost btn--sm', type: 'button',
+    onclick: async () => { S.error = null; await openNew(); },
+  }, 'Try again');
+  return el('section', { class: 'stack-lg' },
+    tabs(),
+    el('section', { class: 'panel stack' },
+      el('h3', { class: 'h3' }, 'Folder'),
       pathRow(openNew),
-      el('span', { class: 'help' }, 'Where the session runs. Fixed once it is open — opencode will not move a live one.')),
-    el('div', { class: 'field' },
-      el('label', {}, 'Title (optional)'),
-      el('input', {
-        class: 'input',
-        value: S.title,
-        maxlength: '120',
-        oninput: (e) => { S.title = e.target.value; },
-      })),
-    S.error ? problem('Could not open a session', S.error) : null,
-    el('div', { class: 'ag-as-start' },
-      el('span', { class: 'meta' },
-        'The model chosen in the bar answers first. If it cannot, the next one picks up the reply.'),
-      el('button', {
-        class: 'btn', type: 'button', disabled: S.busy || undefined, onclick: openNew,
-      }, S.busy ? 'Opening…' : 'Open session')));
+      el('span', { class: 'help' },
+        'Where the session runs. Fixed once it is open — opencode will not move a live one.')),
+    el('section', { class: 'panel stack' },
+      el('h3', { class: 'h3' }, 'Session'),
+      el('div', { class: 'field' },
+        el('label', { for: 'ag-as-title-input' }, 'Title (optional)'),
+        el('input', {
+          id: 'ag-as-title-input',
+          class: 'input',
+          value: S.title,
+          maxlength: '120',
+          oninput: (e) => { S.title = e.target.value; },
+        })),
+      S.error ? problem('Could not open a session', S.error, retry) : null,
+      el('div', { class: 'ag-as-start' },
+        el('span', { class: 'meta' },
+          'Opens a conversation straight away — you can type in it the moment it exists.'),
+        el('button', {
+          class: 'btn', type: 'button', disabled: S.busy || undefined, onclick: openNew,
+        }, S.busy ? 'Opening…' : 'Open session'))));
+}
+
+/* ── a reply, drawn from its Markdown ─────────────────────────────────── */
+
+const INLINE = /`([^`\n]+)`|\*\*([^*\n]+?)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"`])/g;
+
+function inline(text) {
+  const out = [];
+  let last = 0;
+  for (const m of text.matchAll(INLINE)) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m[1] != null) out.push(el('code', { class: 'ag-as-md-c' }, m[1]));
+    else if (m[2] != null) out.push(el('strong', { class: 'ag-as-md-b' }, ...inline(m[2])));
+    else {
+      const href = m[4] || m[5];
+      out.push(el('a', { class: 'ag-as-md-a', href, target: '_blank', rel: 'noreferrer noopener' }, m[3] || m[5]));
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+/**
+ * The same renderer the Claude view uses for a reply — fenced code, headings,
+ * lists, quotes, rules and tables — with this view's own class names. A model
+ * answers in Markdown; showing it raw puts `**` and `#` in front of the reader
+ * as if they were the words.
+ */
+function md(src) {
+  const out = el('div', { class: 'ag-as-md' });
+  const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
+  let para = [];
+  const flush = () => {
+    if (!para.length) return;
+    const p = el('p', { class: 'ag-as-md-p' });
+    para.forEach((l, i) => { if (i) p.append(el('br')); p.append(...inline(l)); });
+    out.append(p);
+    para = [];
+  };
+  const cells = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    let m;
+    if (/^\s*```/.test(line)) {
+      flush();
+      const code = [];
+      while (++i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i]);
+      out.append(el('pre', { class: 'ag-as-md-code' }, code.join('\n')));
+    } else if (/^\s*\|.*\|\s*$/.test(line)) {
+      flush();
+      const rows = [];
+      for (; i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i]); i++) rows.push(lines[i]);
+      i--;
+      const body = rows.filter((r) => !/^\s*\|[\s:|-]+\|\s*$/.test(r)).map(cells);
+      const [head, ...rest] = body;
+      out.append(el('div', { class: 'ag-as-md-tablewrap' }, el('table', { class: 'ag-as-md-table' },
+        head ? el('tr', {}, head.map((c) => el('th', { class: 'ag-as-md-th' }, ...inline(c)))) : null,
+        rest.map((r) => el('tr', {}, r.map((c) => el('td', { class: 'ag-as-md-td' }, ...inline(c))))))));
+    } else if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) {
+      flush();
+      out.append(el('div', { class: `ag-as-md-h ag-as-md-h${Math.min(m[1].length, 3)}` }, ...inline(m[2])));
+    } else if ((m = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(line))) {
+      flush();
+      const depth = Math.min(4, Math.floor(m[1].replace(/\t/g, '  ').length / 2));
+      out.append(el('div', { class: 'ag-as-md-li', style: `--d:${depth}` },
+        el('span', { class: 'ag-as-md-mark' }, /\d/.test(m[2]) ? m[2] : '•'), el('span', {}, ...inline(m[3]))));
+    } else if ((m = /^\s*>\s?(.*)$/.exec(line))) {
+      flush();
+      out.append(el('div', { class: 'ag-as-md-quote' }, ...inline(m[1])));
+    } else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      flush();
+      out.append(el('div', { class: 'ag-as-md-hr' }));
+    } else if (!line.trim()) {
+      flush();
+    } else {
+      para.push(line);
+    }
+  }
+  flush();
+  return out;
 }
 
 const textOf = (m) => (m.parts || []).filter((p) => p.type === 'text').map((p) => p.text).join('');
 
-function bubble(m) {
-  const text = textOf(m);
+const stampOf = (m) => {
+  const ms = m.info?.time?.completed || m.info?.time?.created;
+  if (!Number.isFinite(ms)) return '';
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
+/**
+ * One message, in the Claude view's shape: who said it on one line, then what
+ * they said. For a reply, "who" is the model — that is the fallback made
+ * legible, because a conversation where two different models answered is a
+ * fact the reader can see rather than one they have to be told.
+ */
+function messageOf(m) {
   const tools = (m.parts || []).filter((p) => p.type === 'tool' && p.tool).map((p) => p.tool);
+  const time = stampOf(m);
+  const who = (label) => el('span', { class: 'ag-as-msg-who' }, label,
+    time ? el('span', { class: 'meta' }, time) : null);
+
   if (m.info?.role === 'user') {
-    return el('div', { class: 'ag-as-msg ag-as-msg--user' },
-      el('span', { class: 'ag-as-who' }, 'you'),
-      el('div', { class: 'ag-as-text' }, text));
+    return el('div', { class: 'ag-as-msg ag-as-msg--user' }, who('You'),
+      el('div', { class: 'ag-as-pre' }, textOf(m)));
   }
-  // The model tag is the answer to "which one actually replied" — the whole
-  // point of the fallback, so it travels with the reply rather than only
-  // living in the bar while you are reading the message.
-  return el('div', { class: 'ag-as-msg ag-as-msg--bot' },
-    el('span', { class: 'ag-as-who' }, 'assistant'),
-    text ? el('div', { class: 'ag-as-text' }, text) : null,
-    tools.length ? el('div', { class: 'ag-as-tools meta' }, tools.map((t) => `› ${t}`).join('  ')) : null,
-    m.info?.modelID ? el('div', { class: 'ag-as-model meta' }, m.info.modelID) : null);
+  return el('div', { class: 'ag-as-msg ag-as-msg--assistant' },
+    who(modelName(m.info?.modelID) || m.info?.modelID || 'Assistant'),
+    textOf(m) ? md(textOf(m)) : null,
+    tools.length ? el('div', { class: 'ag-as-tools meta' }, tools.map((t) => `› ${t}`).join('  ')) : null);
 }
 
 function transcript() {
@@ -530,16 +724,23 @@ function transcript() {
     return el('div', { class: 'ag-as-transcript is-empty' },
       robot('ic ag-as-empty-ic'),
       el('p', { class: 'ag-as-empty-lead' }, 'Nothing here yet.'),
-      el('p', { class: 'meta' }, 'Say something — the model in the bar answers first.'));
+      el('p', { class: 'meta' }, 'Type below — the session is made when you send.'));
   }
-  return el('div', { class: 'ag-as-transcript' }, shown.map(bubble));
+  return el('div', { class: 'ag-as-transcript' }, shown.map(messageOf));
+}
+
+function composerNote() {
+  if (S.busy) return 'Waiting — if this model cannot answer, the next one will.';
+  const key = S.pick || S.model;
+  if (S.fallback && key) return `${modelName(key)} is answering. Send to keep it.`;
+  return 'Enter sends · Shift+Enter makes a new line';
 }
 
 function composer() {
   const box = el('textarea', {
     class: 'textarea ag-as-input',
     rows: '3',
-    placeholder: 'Ask the Assistant…',
+    placeholder: 'Message the Assistant — Enter to send',
     'aria-label': 'Message',
     oninput: (e) => { S.draft = e.target.value; },
     onkeydown: (e) => {
@@ -548,17 +749,58 @@ function composer() {
   });
   box.value = S.draft;
   return el('div', { class: 'ag-as-compose' },
-    S.error && S.msgs?.length ? el('div', { class: 'ag-as-err meta' }, S.error) : null,
+    box,
     el('div', { class: 'ag-as-compose-bar' },
-      box,
+      el('span', { class: 'meta ag-as-compose-note' }, composerNote()),
       el('button', {
-        class: 'btn', type: 'button', disabled: S.busy || undefined, onclick: send,
-      }, S.busy ? 'Thinking…' : 'Send')),
-    el('div', { class: 'ag-as-note meta' },
-      // The model is stated by the picker in the bar, so naming it again here
-      // would be the same fact twice; the waiting line is the one worth saying.
-      S.busy ? 'waiting — if this model cannot answer, the next one will'
-        : 'Enter sends, Shift+Enter makes a new line'));
+        class: 'btn btn--sm ag-as-send', type: 'button', disabled: S.busy || undefined, onclick: send,
+      }, S.busy ? '…' : 'Send')));
+}
+
+/* ── a conversation ─────────────────────────────────────────────────── */
+
+function detailHead(s) {
+  const path = s?.directory || S.path || S.cfg?.defaultPath || '';
+  const key = S.pick || S.model;
+  return el('header', { class: 'ag-as-head' },
+    el('button', {
+      class: 'iconbtn', type: 'button', title: 'All sessions', 'aria-label': 'All sessions',
+      onclick: showSessions,
+    }, svg('back')),
+    el('div', { class: 'ag-as-head-main' },
+      el('span', { class: 'ag-as-title' }, s?.title || 'New conversation'),
+      el('div', { class: 'ag-as-chips' },
+        el('span', { class: 'ag-as-chip', title: 'Model' },
+          key ? modelName(key) : 'no model'),
+        S.fallback ? el('span', { class: 'ag-as-chip ag-as-chip--warn', title: 'The chosen model could not answer' },
+          'fallback') : null,
+        path ? el('span', { class: 'ag-as-chip ag-as-chip--path', title: path }, shortPath(path)) : null)),
+    el('div', { class: 'ag-as-head-actions' },
+      modelPicker(),
+      el('button', {
+        class: 'btn btn--ghost btn--sm', type: 'button', title: 'Start a new conversation',
+        onclick: newConversation,
+      }, svg('plus'), lbl('New'))));
+}
+
+/** The Claude view's callouts: state, said once, above the work. */
+function callouts() {
+  const out = [];
+  if (S.error && S.msgs?.length) {
+    out.push(el('div', { class: 'alert alert--err' }, el('b', {}, 'Error'), el('span', {}, S.error)));
+  }
+  if (S.fallback) {
+    const key = S.pick || S.model;
+    out.push(el('div', { class: 'alert alert--warn' }, el('b', {}, 'Fallback'),
+      el('span', {}, key
+        ? `${modelName(key)} answered because the model you chose could not. The next message starts here unless you change it above.`
+        : 'The model you chose could not answer, so another one did.')));
+  }
+  if (S.cfg && !S.cfg.configured && !S.cfgError) {
+    out.push(el('div', { class: 'alert alert--info' }, el('b', {}, 'Not configured'),
+      el('span', {}, 'Set OPENCODE_URL for this module to an `opencode serve` instance.')));
+  }
+  return out;
 }
 
 function detailPane() {
@@ -566,17 +808,13 @@ function detailPane() {
   // its own when a link reached the transcript before the list did.
   const s = (S.sessions || []).find((x) => x.id === S.id)
     || (S.one?.id === S.id ? S.one : null);
-  // The same container the list and New use: three panes that look like three
-  // different things is what made this read as a set of loose parts.
-  return el('section', { class: 'panel stack ag-as-detail' },
-    el('div', { class: 'ag-as-head' },
-      el('button', {
-        class: 'btn btn--ghost btn--sm', type: 'button', onclick: showSessions,
-      }, '← Sessions'),
-      el('span', { class: 'ag-as-head-main' },
-        el('span', { class: 'ag-as-title' }, s?.title || S.id || ''),
-        s?.directory ? el('span', { class: 'ag-as-path meta' }, s.directory) : null)),
-    transcript(),
+  // `stack ag-as-detail`, not a panel: tabs, head, callouts, body, composer —
+  // the same five-part shape the Claude view gives a conversation.
+  return el('section', { class: 'stack ag-as-detail' },
+    tabs(),
+    el('div', { class: 'ag-as-headwrap' }, detailHead(s)),
+    el('div', { class: 'ag-as-callouts' }, ...callouts()),
+    el('div', { class: 'ag-as-body' }, transcript()),
     composer());
 }
 
@@ -590,40 +828,48 @@ async function retryConfig() {
   paint();
 }
 
+/** A blank conversation — the state the overview's dialog opens in. */
+function newConversation() {
+  S.id = null;
+  S.one = null;
+  S.msgs = [];
+  S.error = null;
+  S.fallback = false;
+  S.tab = 'chat';
+  paint();
+}
+
 function paint() {
   if (!host) return;
-  const parts = [bar()];
+  const top = (panel) => el('section', { class: 'stack-lg' }, tabs(), panel);
+
+  let view;
   if (!S.cfg) {
-    parts.push(el('section', { class: 'panel stack' },
+    view = top(el('section', { class: 'panel stack' },
       el('span', { class: 'skeleton', style: 'height:18px;display:block' }),
       el('span', { class: 'skeleton', style: 'height:160px;display:block' })));
   } else if (S.cfgError) {
     // Not answering and not configured are different facts with different
     // fixes — one wants a button, the other wants an environment variable.
-    // This branch used to report them as one, so a blip told the reader to go
-    // change a setting that was already right.
-    parts.push(el('section', { class: 'panel stack' },
+    view = top(el('section', { class: 'panel stack' },
       el('h3', { class: 'h3' }, 'Assistant'),
       problem('OpenCode is not answering', S.cfgError,
         el('button', {
           class: 'btn btn--ghost btn--sm', type: 'button', onclick: retryConfig,
         }, 'Try again'))));
   } else if (!S.cfg.configured) {
-    parts.push(el('section', { class: 'panel stack' },
+    view = top(el('section', { class: 'panel stack' },
       el('h3', { class: 'h3' }, 'Assistant'),
       problem('OpenCode is not configured',
         'Set OPENCODE_URL for this module to an `opencode serve` instance.')));
-  } else if (S.id) {
-    parts.push(detailPane());
+  } else if (S.id || S.tab === 'chat') {
+    view = detailPane();
   } else if (S.tab === 'new') {
-    parts.push(newPane());
+    view = newPane();
   } else {
-    parts.push(listPane());
+    view = listPane();
   }
-  // One column of a conversation's width, centred: a chat stretched to a
-  // dashboard's measure is a column of 100-character lines, which is the part
-  // of this that reads as unfinished rather than as designed.
-  host.replaceChildren(el('div', { class: 'ag-as-view stack-lg' }, ...parts));
+  host.replaceChildren(view);
   const t = host.querySelector('.ag-as-transcript');
   if (t) t.scrollTop = t.scrollHeight;
 }
@@ -660,11 +906,16 @@ export async function mountAssistantModal(el0, context) {
   mode = 'modal';
   host = el0;
   host.classList.add('as-chat');
-  S.tab = 'new';
+  // Straight into a conversation, not into the Folder/Session form: the dialog
+  // is opened to say something, and the session is made by the first message
+  // it sends. `chat` with no id is exactly that state.
+  S.tab = 'chat';
   S.id = null;
-  S.msgs = null;
+  S.one = null;
+  S.msgs = [];
   S.busy = false;
   S.error = null;
+  S.fallback = false;
   S.draft = '';
   S.sessions = null;
   ensureIcons();
@@ -675,6 +926,8 @@ export async function mountAssistantModal(el0, context) {
   if (S.cfg?.configured) {
     await loadSessions();
     paint();
+    // Land on the words: the whole point of the dialog is to type in it.
+    host.querySelector('.ag-as-input')?.focus();
   }
   return () => {
     host = null;
