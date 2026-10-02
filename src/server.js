@@ -2,7 +2,8 @@
  * ojee-agent — the AI and automation module.
  *
  * What it is now: unattended Claude Code sessions (through the host runner in
- * claude-runner/), n8n's workflows, the Odysseus stack, and the services
+ * claude-runner/), the Assistant (OpenCode's Zen gateway, hosted as
+ * opencode serve), n8n's workflows, the Odysseus stack, and the services
  * those depend on. What it used to be: a host dashboard with CPU graphs, a
  * list of every container on the box, and a whitelist of restart commands.
  *
@@ -21,10 +22,9 @@ const path = require('path');
 const express = require('express');
 const fetch = require('node-fetch');
 const { exec } = require('child_process');
-/* The Laya tool router. It runs on Loq (the GPU is there), so this is a
-   window onto another machine rather than a local service — and the module
-   must render a router that is off or asleep, not break. */
-const routerModule = require('./router');
+/* The Assistant: OpenCode's Zen gateway, hosted on this stack as
+   `opencode serve` and reached through OPENCODE_URL. */
+const assistantModule = require('./assistant');
 
 const PORT = process.env.PORT || 8080;
 const TIMEZONE = process.env.TIMEZONE || 'UTC';
@@ -134,10 +134,13 @@ const execP = (cmd, timeout = 6000) => new Promise((resolve) => {
 const VIEWS = [
   { id: 'overview', label: 'Overview', icon: 'i-grid' },
   { id: 'claude', label: 'Claude', icon: 'i-log' },
+  { id: 'assistant', label: 'Assistant', icon: 'i-assistant' },
   { id: 'workflows', label: 'Workflows', icon: 'i-auto' },
-  // Only when ROUTER_URL is set: a deployment without the router should show a
-  // module without a Router tab, not a tab that errors.
-  ...(routerModule.configured() ? [{ id: 'router', label: 'Router', icon: 'i-cpu' }] : []),
+  // The Router tab is gone: the Laya router lives on Loq, a laptop that is
+  // asleep more often than it is on, and it was the one view on this module
+  // that always had something to explain about another machine. src/router.js
+  // and ui/router.js are still in the tree — put the entry above back and it
+  // returns.
   { id: 'odysseus', label: 'Odysseus', icon: 'i-shield' },
   { id: 'services', label: 'Services', icon: 'i-gauge' },
 ];
@@ -145,10 +148,14 @@ const VIEWS = [
 app.get('/module.json', (_req, res) => res.json({
   id: process.env.MODULE_ID || 'agent',
   name: process.env.MODULE_NAME || 'Agent',
-  version: '2.1.0',
+  version: '2.3.0',
   icon: 'i-cpu',
   views: VIEWS,
   ui: '/ui/index.js',
+  // The console opens this without mounting the module first — the
+  // Assistant button on the overview and the idle display both import it
+  // straight into a dialog — so it is advertised on its own.
+  assistant: '/ui/assistant.js',
   health: '/api/health',
   capabilities: ['summary', 'sse'],
 }));
@@ -160,7 +167,12 @@ app.get('/api/config', (_req, res) => res.json({
     ODYSSEUS_DOMAIN ? { label: 'Odysseus', href: `https://${ODYSSEUS_DOMAIN}` } : null,
     COUCHDB_DOMAIN ? { label: 'CouchDB', href: `https://${COUCHDB_DOMAIN}` } : null,
   ].filter(Boolean),
-  has: { n8n: !!N8N_API_KEY, odysseus: !!ODYSSEUS_URL, claude: CLAUDE_CONFIGURED },
+  has: {
+    n8n: !!N8N_API_KEY,
+    odysseus: !!ODYSSEUS_URL,
+    claude: CLAUDE_CONFIGURED,
+    assistant: assistantModule.configured(),
+  },
   devices: RUNNERS.map((r) => ({ id: r.id, label: r.label, sleeps: r.sleeps })),
 }));
 
@@ -671,7 +683,7 @@ for (const parts of [['@xterm', 'xterm', 'lib'], ['@xterm', 'xterm', 'css'], ['@
   app.use('/vendor', express.static(path.join(__dirname, '..', 'node_modules', ...parts), { maxAge: '1h' }));
 }
 
-routerModule.mount(app, auth);
+assistantModule.mount(app, auth);
 
 app.use('/ui', express.static(`${__dirname}/../ui`, {
   setHeaders: (res) => res.setHeader('cache-control', 'no-cache'),
@@ -688,7 +700,7 @@ server.listen(PORT, '0.0.0.0', () => {
   // eslint-disable-next-line no-console
   console.log(`ojee-agent (AI + automation) on :${PORT}`);
   // eslint-disable-next-line no-console
-  console.log(`  n8n ${N8N_API_KEY ? N8N_URL : 'no API key'} · odysseus ${ODYSSEUS_URL || 'not configured'} · claude runners ${RUNNERS.map((r) => `${r.id}=${r.url}${r.token ? '' : ' (no token)'}`).join(', ') || 'not configured'}`);
+  console.log(`  n8n ${N8N_API_KEY ? N8N_URL : 'no API key'} · odysseus ${ODYSSEUS_URL || 'not configured'} · claude runners ${RUNNERS.map((r) => `${r.id}=${r.url}${r.token ? '' : ' (no token)'}`).join(', ') || 'not configured'} · assistant ${assistantModule.configured() ? assistantModule.url : 'not configured'}`);
 });
 
 module.exports = app;

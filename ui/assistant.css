@@ -1,0 +1,140 @@
+/* ============================================================
+   ojee-agent — the Assistant view's styles.
+
+   Same contract as claude.css: every selector here is an `ag-as-`
+   class this view invented, except the one rule that sizes the
+   console's modal while this view is the thing inside it — that
+   one is keyed on `.as-chat`, which only exists when this view is
+   open, so it cannot reach a dialog belonging to anyone else.
+
+   Containers, controls and toggles are ojee-ui's own (.panel, .btn,
+   .segctl, .field, .input, .textarea, .skeleton); this file only
+   lays them out. ojee-ui has no border radius. Nothing here adds
+   one. Every value is a token.
+   ============================================================ */
+
+.ag-as-bar { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+.ag-as-tabs { flex: 1 1 260px; max-width: 380px; }
+
+/* Which model answers next. It sits where the read-only chip used to, so the
+   bar keeps its shape; as a control it takes its look from ojee-ui's .select
+   and this rule only sets its place in the row. */
+.ag-as-pick {
+  margin-left: auto;
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 0;
+  max-width: min(320px, 100%);
+  font-size: 0.72rem;
+}
+
+/* A path box: the input takes the row, the button sits on its end.
+   Same shape as the Claude view's folder row, because it is the same job. */
+.ag-as-cwdrow { display: flex; align-items: center; gap: var(--s-2); }
+.ag-as-cwdrow > .input { flex: 1 1 auto; min-width: 0; }
+.ag-as-filter { margin-bottom: var(--s-2); }
+
+/* ── the list ───────────────────────────────────────────────────────── */
+
+.ag-as-list { display: grid; }
+
+/* A row is a button when it opens something; it keeps the list's hairline
+   rhythm rather than looking like a control. */
+.ag-as-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center; gap: var(--s-2);
+  width: 100%; min-height: 44px; padding: 9px 0;
+  background: transparent; border: 0; border-bottom: 1px solid var(--line-2);
+  color: var(--ink-2); font-family: var(--mono); font-size: 0.72rem;
+  text-align: left; cursor: pointer; transition: var(--t);
+}
+.ag-as-row:last-child { border-bottom: 0; }
+.ag-as-row:hover { background: var(--accent-03); }
+.ag-as-row-main { display: grid; gap: 3px; min-width: 0; }
+.ag-as-row-title { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-as-row-sub {
+  font-size: 0.66rem; color: var(--dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ag-as-row-when { white-space: nowrap; }
+
+.ag-as-start {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s-3); flex-wrap: wrap;
+}
+
+/* ── a transcript ───────────────────────────────────────────────────── */
+
+.ag-as-detail { display: grid; gap: var(--s-3); }
+
+.ag-as-head { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.ag-as-head-main { display: grid; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.ag-as-title {
+  color: var(--ink); font-family: var(--mono); font-size: 0.8rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ag-as-path {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Fixed rather than flex-grow: the same height reads correctly inside the
+   console's modal and on the module's own page, without the two layouts
+   needing to know about each other. */
+.ag-as-transcript {
+  height: clamp(240px, 46vh, 520px);
+  overflow-y: auto;
+  display: grid; gap: var(--s-3); align-content: start;
+  padding: var(--s-3);
+  background: var(--panel); border: 1px solid var(--line-2);
+}
+.ag-as-transcript.is-empty { align-content: center; justify-items: center; }
+
+.ag-as-msg {
+  display: grid; gap: 5px;
+  padding: 10px var(--s-3);
+  border-left: 2px solid var(--line-2);
+}
+.ag-as-msg--user { background: var(--tint-1); border-left-color: var(--accent); }
+.ag-as-msg--bot { background: transparent; }
+.ag-as-who {
+  font-family: var(--hud); font-size: 0.58rem;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim);
+}
+.ag-as-msg--user .ag-as-who { color: var(--accent); }
+/* Answers can be paragraphs of code: keep the shape of what was written. */
+.ag-as-text {
+  color: var(--ink); font-size: 0.82rem; line-height: 1.6;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.ag-as-msg--user .ag-as-text { color: var(--ink); }
+.ag-as-tools { font-size: 0.66rem; color: var(--dim); overflow-wrap: anywhere; }
+.ag-as-model {
+  font-size: 0.6rem; color: var(--dim);
+  font-family: var(--hud); letter-spacing: 0.1em; text-transform: uppercase;
+}
+
+/* ── the composer ───────────────────────────────────────────────────── */
+
+.ag-as-compose { display: grid; gap: 6px; }
+.ag-as-compose-bar { display: flex; align-items: flex-end; gap: var(--s-2); }
+.ag-as-input { flex: 1 1 auto; min-width: 0; min-height: 64px; resize: vertical; }
+.ag-as-compose-bar > .btn { flex: none; }
+.ag-as-note, .ag-as-err { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-as-err { color: var(--err); }
+
+/* ── as the console's modal ─────────────────────────────────────────── */
+
+/* `.as-chat` is this view's own class, so the rule only fires while this
+   view is the body of a dialog. It widens that dialog from the default
+   480px: a chat window at 480px is a column of line breaks. */
+.modal-backdrop:has(.as-chat) .modal { max-width: min(880px, 94vw); }
+.modal-backdrop:has(.as-chat) .modal-body { padding: var(--s-3); }
+
+@media (max-width: 560px) {
+  .ag-as-tabs { max-width: none; }
+  /* Below this width the picker takes its own full row rather than squeezing
+     the tabs: a model name is the one thing here that cannot be shortened. */
+  .ag-as-pick { margin-left: 0; flex: 1 1 100%; max-width: none; }
+  .ag-as-transcript { padding: var(--s-2); }
+  .ag-as-msg { padding: 8px var(--s-2); }
+}
