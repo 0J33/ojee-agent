@@ -62,6 +62,26 @@ const pref = (key, value) => {
 const problem = (title, detail, action) => el('div', { class: 'ag-problem' },
   el('strong', {}, title), detail ? el('p', { class: 'meta' }, detail) : null, action || null);
 
+/**
+ * The Assistant's own mark, as a node. The sprite is already on the page by
+ * the time any of this renders — ensured in mount() — so this is a <use>, the
+ * same shape the shell's own icons take.
+ */
+function robot(cls) {
+  if (typeof ctx?.icon === 'function') {
+    const probe = document.createElement('span');
+    probe.innerHTML = ctx.icon('i-assistant', cls);
+    if (probe.firstElementChild) return probe.firstElementChild;
+  }
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', cls);
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use.setAttribute('href', '#i-assistant');
+  svg.append(use);
+  return svg;
+}
+
 let ctx = null;
 let host = null;          // the element this instance renders into
 let mode = 'view';        // 'view' | 'modal'
@@ -505,8 +525,12 @@ function transcript() {
   const shown = S.msgs.filter((m) => m.info?.role === 'user' || textOf(m)
     || (m.parts || []).some((p) => p.type === 'tool'));
   if (!shown.length) {
+    // An empty box the size of a full reply is the least inviting thing this
+    // view can show. Say who is on the other end instead.
     return el('div', { class: 'ag-as-transcript is-empty' },
-      el('span', { class: 'meta' }, 'Nothing here yet. Say something.'));
+      robot('ic ag-as-empty-ic'),
+      el('p', { class: 'ag-as-empty-lead' }, 'Nothing here yet.'),
+      el('p', { class: 'meta' }, 'Say something — the model in the bar answers first.'));
   }
   return el('div', { class: 'ag-as-transcript' }, shown.map(bubble));
 }
@@ -542,7 +566,9 @@ function detailPane() {
   // its own when a link reached the transcript before the list did.
   const s = (S.sessions || []).find((x) => x.id === S.id)
     || (S.one?.id === S.id ? S.one : null);
-  return el('section', { class: 'ag-as-detail' },
+  // The same container the list and New use: three panes that look like three
+  // different things is what made this read as a set of loose parts.
+  return el('section', { class: 'panel stack ag-as-detail' },
     el('div', { class: 'ag-as-head' },
       el('button', {
         class: 'btn btn--ghost btn--sm', type: 'button', onclick: showSessions,
@@ -594,7 +620,10 @@ function paint() {
   } else {
     parts.push(listPane());
   }
-  host.replaceChildren(...parts);
+  // One column of a conversation's width, centred: a chat stretched to a
+  // dashboard's measure is a column of 100-character lines, which is the part
+  // of this that reads as unfinished rather than as designed.
+  host.replaceChildren(el('div', { class: 'ag-as-view stack-lg' }, ...parts));
   const t = host.querySelector('.ag-as-transcript');
   if (t) t.scrollTop = t.scrollHeight;
 }
