@@ -26,7 +26,7 @@ import {
   el, pref, svg, mark, relTime, shortPath,
   S, on, connect, disconnect, loadConv,
   liveState, busy, dot, stateTag, sessionsSorted, titleOf, untitled,
-  createSession, sendMessage, transcript, composer, modelMenu,
+  createSession, sendMessage, transcript, composer, modelMenu, remove,
 } from './assistant-core.js';
 
 const RESUME_MS = 30 * 60 * 1000;
@@ -81,23 +81,37 @@ export async function mountAssistantModal(host, context) {
     if (!list.length) return null;
     return el('div', { class: 'ag-qc-list' }, list.map((s) => {
       const st = liveState(s.id);
-      return el('button', { class: 'ag-qc-item', type: 'button', onclick: () => { setSession(s.id); C.focus(); } },
+      // Delete asks by asking twice: the first click arms the button for a
+      // few seconds, the second removes. A dialog over a dialog would be worse.
+      const del = el('button', { class: 'iconbtn ag-qc-del', type: 'button', title: 'Delete', 'aria-label': `Delete ${titleOf(s)}` }, svg('trash'));
+      let armed = 0;
+      del.onclick = async (e) => {
+        e.stopPropagation();
+        if (!armed) {
+          del.classList.add('is-armed'); del.title = 'Click again to delete';
+          armed = setTimeout(() => { armed = 0; del.classList.remove('is-armed'); del.title = 'Delete'; }, 3000);
+          return;
+        }
+        clearTimeout(armed); armed = 0; del.disabled = true;
+        try {
+          await remove(s.id);
+          del.closest('.ag-qc-itemwrap')?.remove();
+        } catch (err) { del.disabled = false; del.classList.remove('is-armed'); del.title = `Could not delete: ${err.message}`; }
+      };
+      return el('div', { class: 'ag-qc-itemwrap' }, el('button', { class: 'ag-qc-item', type: 'button', onclick: () => { setSession(s.id); C.focus(); } },
         dot(st),
         el('span', { class: 'ag-qc-item-main' },
           el('span', { class: `ag-qc-item-t${untitled(s) ? ' is-untitled' : ''}` }, titleOf(s)),
           el('span', { class: 'ag-qc-item-s' }, [shortPath(s.directory), s.metadata?.source === 'quick' ? 'quick chat' : null].filter(Boolean).join(' · '))),
         st !== 'idle' ? stateTag(st) : null,
-        el('span', { class: 'ag-qc-item-w' }, relTime(s.time?.updated)));
+        el('span', { class: 'ag-qc-item-w' }, relTime(s.time?.updated))), del);
     }));
   }
 
+  // A new quick chat is just the composer: no suggestions, no list in the
+  // way. Earlier conversations stay one click away behind the Recent button.
   function hero() {
-    const ask = (t) => { C.input.value = t; C.input.dispatchEvent(new Event('input')); C.focus(); };
-    const recent = recentList();
-    return el('div', { class: 'ag-qc-hero' },
-      el('div', { class: 'ag-qc-sugg' }, ['CPU temps across the fleet?', 'What is the AC set to?', 'Is anything in the stack down?']
-        .map((t) => el('button', { class: 'ag-as-chip ag-as-chip--btn', type: 'button', onclick: () => ask(t) }, t))),
-      recent ? el('div', { class: 'ag-qc-recentwrap' }, el('div', { class: 'ag-qc-label' }, 'Pick up where you left off'), recent) : null);
+    return el('div', { class: 'ag-qc-hero ag-qc-hero--empty' });
   }
 
   function paintHead() {

@@ -53,6 +53,8 @@ const V = {
   hidden: false,
   form: null,           // New: { dir, text, title, model, agent }
   busy: new Set(),
+  selecting: false,     // the list's Select mode
+  sel: new Set(),       // session ids ticked in it
 };
 
 /* ── routing ────────────────────────────────────────────────────────── */
@@ -146,9 +148,28 @@ function rowSub(s) {
     s.metadata?.source === 'quick' ? 'quick chat' : null].filter(Boolean).join(' · ');
 }
 
+/* A row is the conversation (one button) plus what can be done to it: a
+   delete beside it, or a tick box in Select mode. Buttons cannot nest, so
+   the row is a wrapper holding siblings. */
 function sessionRow(s) {
   const st = liveState(s.id);
-  return el('button', { class: `ag-as-row${st === 'error' ? ' is-bad' : ''}`, type: 'button', onclick: () => go(s.id) },
+  const lead = V.selecting
+    ? el('label', { class: 'ag-as-rowtick', title: 'Select' },
+      el('input', { type: 'checkbox', checked: V.sel.has(s.id), 'aria-label': `Select ${titleOf(s)}`,
+        onchange: (e) => { if (e.target.checked) V.sel.add(s.id); else V.sel.delete(s.id); paint(); } }))
+    : null;
+  const tail = V.selecting ? null
+    : el('button', { class: 'iconbtn ag-as-rowdel', type: 'button', title: 'Delete', 'aria-label': `Delete ${titleOf(s)}`,
+      disabled: V.busy.has(`del:${s.id}`), onclick: () => deleteDialog(s) }, svg('trash'));
+  return el('div', { class: `ag-as-rowwrap${V.selecting ? ' is-selecting' : ''}${V.sel.has(s.id) ? ' is-sel' : ''}` },
+    lead, mainRow(s, st), tail);
+}
+
+function mainRow(s, st) {
+  const open = V.selecting
+    ? () => { if (V.sel.has(s.id)) V.sel.delete(s.id); else V.sel.add(s.id); paint(); }
+    : () => go(s.id);
+  return el('button', { class: `ag-as-row${st === 'error' ? ' is-bad' : ''}`, type: 'button', onclick: open },
     dot(st),
     el('span', { class: 'ag-as-row-main' },
       el('span', { class: `ag-as-row-title${untitled(s) ? ' is-untitled' : ''}` }, titleOf(s)),
@@ -221,9 +242,24 @@ function paintSessions() {
       onclick: () => { V.dir = id; pref('ag-as-dirf', id); paint(); },
     }, label))) : null;
 
+  // Ticks only ever refer to conversations that still exist.
+  for (const id of V.sel) if (!S.sessions.has(id)) V.sel.delete(id);
+  const shown = list.slice(0, V.limit);
+  const allShownOn = shown.length > 0 && shown.every((s) => V.sel.has(s.id));
+  const selectBar = !all.length ? null : V.selecting
+    ? el('div', { class: 'ag-as-selbar' },
+      el('button', { class: 'btn btn--ghost btn--sm', type: 'button',
+        onclick: () => { if (allShownOn) shown.forEach((s) => V.sel.delete(s.id)); else shown.forEach((s) => V.sel.add(s.id)); paint(); } },
+      allShownOn ? 'Clear' : `Select all ${shown.length}`),
+      el('button', { class: 'btn btn--sm btn--danger', type: 'button', disabled: !V.sel.size || V.busy.has('bulkdel'), onclick: () => bulkDelete() },
+        svg('trash'), V.sel.size ? `Delete ${V.sel.size}` : 'Delete'),
+      el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => { V.selecting = false; V.sel.clear(); paint(); } }, 'Done'))
+    : el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => { V.selecting = true; paint(); } }, svg('check'), 'Select');
+
   const panel = el('section', { class: 'panel stack' },
     el('div', { class: 'ag-panel-head' }, el('h3', { class: 'h3' }, 'Conversations'),
-      el('span', { class: 'meta' }, S.listed ? `${list.length}${list.length !== all.length ? ` of ${all.length}` : ''}` : '')),
+      el('span', { class: 'meta' }, S.listed ? `${list.length}${list.length !== all.length ? ` of ${all.length}` : ''}` : ''),
+      el('span', { class: 'ag-as-headgap' }), selectBar),
     el('div', { class: 'ag-as-filterbar' }, search, dirChips));
 
   if (!S.listed && !S.listError) {
@@ -467,6 +503,27 @@ async function renameDialog(s) {
   const ok = await ctx.modal({ title: 'Rename conversation', body: el('div', { class: 'field' }, el('label', {}, 'Title'), input), actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'Save', value: true }] });
   if (!ok || !input.value.trim()) return;
   await act(`rename:${s.id}`, () => rename(s.id, input.value.trim()));
+}
+
+async function bulkDelete() {
+  const ids = [...V.sel];
+  if (!ids.length) return;
+  const ok = await ctx.modal({
+    title: `Delete ${ids.length} conversation${ids.length === 1 ? '' : 's'}?`,
+    body: el('p', { class: 'meta' }, `They and everything in them are removed from OpenCode on HP. This cannot be undone.`),
+    actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: `Delete ${ids.length}`, value: true, variant: 'danger' }],
+  });
+  if (!ok) return;
+  V.busy.add('bulkdel'); paint();
+  let done = 0; let failed = 0;
+  for (const id of ids) {
+    try { await remove(id); done += 1; V.sel.delete(id); } catch { failed += 1; }
+  }
+  V.busy.delete('bulkdel');
+  if (!V.sel.size) V.selecting = false;
+  if (failed) toast('err', `Deleted ${done}, ${failed} failed`, 'The ones that failed are still ticked.');
+  else toast('ok', `Deleted ${done}`);
+  paint();
 }
 
 async function deleteDialog(s) {
