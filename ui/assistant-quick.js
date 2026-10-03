@@ -113,7 +113,7 @@ export async function mountAssistantModal(host, context) {
     wrap.classList.toggle('is-convo', !!s);
   }
 
-  function setSession(id) {
+  function setSession(id, { keepText = false } = {}) {
     T?.destroy(); T = null;
     sid = id;
     remember(id);
@@ -128,8 +128,15 @@ export async function mountAssistantModal(host, context) {
     } else {
       body.replaceChildren(hero());
     }
-    C.reload();
+    if (keepText) { const t = C.input.value; C.reload(); if (t) { C.input.value = t; C.input.dispatchEvent(new Event('input')); } }
+    else C.reload();
     paintHead();
+  }
+
+  /** A remembered chat that no longer exists (deleted elsewhere) gives way to a new one. */
+  function dropIfGone() {
+    if (sid && S.listed && !S.sessions.has(sid)) { setSession(null, { keepText: true }); return true; }
+    return false;
   }
 
   function hideRecent() { recentBox.hidden = true; btnRecent.setAttribute('aria-expanded', 'false'); }
@@ -147,6 +154,8 @@ export async function mountAssistantModal(host, context) {
 
   off = on((what, id) => {
     if (what === 'removed' && id === sid) { setSession(null); return; }
+    if (what === 'conv' && id === sid && S.convs.get(id)?.error && /no such/i.test(S.convs.get(id).error)) { S.sessions.delete(id); setSession(null, { keepText: true }); return; }
+    if (what === 'sessions' && dropIfGone()) return;
     if (what === 'sessions' || what === 'upstream' || (what === 'session' && id === sid)) {
       paintHead();
       if (!sid && body.querySelector('.ag-qc-hero') && !body.contains(document.activeElement)) body.replaceChildren(hero());
@@ -170,6 +179,7 @@ export async function mountAssistantModal(host, context) {
   const once = on((what) => {
     if (what !== 'sessions' || !S.listed) return;
     once();
+    if (dropIfGone()) return;
     if (!sid && !C.input.value) { const id = resumeTarget(); if (id) setSession(id); }
     else paintHead();
   });
@@ -178,7 +188,8 @@ export async function mountAssistantModal(host, context) {
 
   const stop = () => { once(); off?.(); T?.destroy(); C.destroy(); disconnect(); };
   stop.show = () => {
-    if (!sid) { const id = resumeTarget(); if (id) setSession(id); else body.replaceChildren(hero()); }
+    if (sid && dropIfGone()) { /* gone: a new chat */ }
+    else if (!sid) { const id = resumeTarget(); if (id) setSession(id); else body.replaceChildren(hero()); }
     else { T?.toEnd(); paintHead(); }
     requestAnimationFrame(() => C.focus());
   };
