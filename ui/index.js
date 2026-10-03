@@ -71,6 +71,7 @@ const state = {
   executions: null,
   odysseus: null,
   claude: null,           // the runner's /api/state; null = not loaded, {error} = down
+  assistant: null,        // /api/assistant/state; null = not loaded, {error} = down
   busy: null,
   error: null,
   execWindow: null,
@@ -167,8 +168,10 @@ function ovVerdict() {
   const execs = Array.isArray(state.executions) ? state.executions : [];
   const failed = execs.filter((e) => e.status === 'error' || e.status === 'failed');
 
+  const asNeeds = (state.assistant?.sessions || []).filter((s) => s.live?.state === 'waiting').length;
   const [tone, head] = p?.needs.length
     ? ['warn', `${plural(p.needs.length, 'session')} need${p.needs.length === 1 ? 's' : ''} you`]
+    : asNeeds ? ['warn', `The Assistant is asking${asNeeds > 1 ? ` in ${asNeeds} conversations` : ''}`]
     : stopped.length ? ['err', `${plural(stopped.length, 'service')} stopped`]
       : p?.working.length ? ['live', `${plural(p.working.length, 'session')} working`]
         : state.claude?.error ? ['warn', 'The Claude runner is not answering']
@@ -295,6 +298,48 @@ function ovSessions() {
   return panel;
 }
 
+/** Into the Assistant view, whatever this module is mounted as. */
+function openAssistantView(...segs) {
+  const mod = location.hash.replace(/^#\/?/, '').split('/')[0] || 'agent';
+  location.hash = `#/${[mod, 'assistant', ...segs].map(encodeURIComponent).join('/')}`;
+}
+
+const AS_DOT = { working: 'live', waiting: 'warn', retrying: 'warn', error: 'err' };
+const AS_WORD = { working: 'working', waiting: 'needs you', retrying: 'retrying', error: 'failed' };
+
+function ovAssistant() {
+  if (!state.config?.has?.assistant) return null;
+  const a = state.assistant;
+  const head = el('div', { class: 'ag-panel-head' },
+    el('h3', { class: 'h3' }, 'Assistant'),
+    el('div', { class: 'ag-ov-actions' },
+      el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => openAssistantView('new') }, icon('plus'), 'New'),
+      el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => openAssistantView() }, 'All')));
+  const panel = el('section', { class: 'panel stack' }, head);
+  if (!a) { panel.append(el('span', { class: 'skeleton', style: 'height:80px;display:block' })); return panel; }
+  if (a.error) { panel.append(problem('OpenCode is not answering', a.error, el('p', { class: 'meta' }, 'It runs on HP as ojee-opencode.service.'))); return panel; }
+  const rows = (a.sessions || []).slice(0, 4);
+  if (!rows.length) {
+    panel.append(el('p', { class: 'meta' }, 'No conversations yet. Ask about the fleet, the AC or a folder on HP.'));
+    return panel;
+  }
+  if (a.online === false) panel.append(el('p', { class: 'meta' }, `The event stream to OpenCode is down${a.error ? ` (${a.error})` : ''}.`));
+  panel.append(el('div', { class: 'ag-cl-list' }, rows.map((s) => {
+    const st = s.live?.state || 'idle';
+    const title = !s.title || /^New session - \d{4}-/.test(s.title) ? 'New conversation' : s.title;
+    const model = s.model?.id ? s.model.id : null;
+    return el('button', { class: `ag-cl-row ag-ov-srow ${st === 'error' ? 'is-bad' : ''}`, type: 'button', onclick: () => openAssistantView(s.id) },
+      el('span', { class: AS_DOT[st] ? `dot dot--${AS_DOT[st]}` : 'dot' }),
+      el('span', { class: 'ag-ov-srow-main' },
+        el('span', { class: 'ag-ov-srow-title' }, title),
+        el('span', { class: 'ag-ov-srow-sub' }, [s.directory?.replace(/^\/home\/[^/]+/, '~'), model].filter(Boolean).join(' · '))),
+      el('span', { class: 'ag-ov-srow-side' },
+        AS_WORD[st] ? el('span', { class: `ag-cl-state ag-cl-state--${st === 'working' ? 'running' : st === 'error' ? 'error' : 'waiting'}` }, AS_WORD[st]) : null,
+        el('span', { class: 'meta' }, s.time?.updated ? ctx.relTime(s.time.updated) : '—')));
+  })));
+  return panel;
+}
+
 function ovStack() {
   const deployed = state.services.filter((s) => s.present);
   const up = deployed.filter((s) => s.ok).length;
@@ -346,7 +391,7 @@ function ovWorkflows() {
 const slot = (name, content) => el('div', { class: 'ag-ov-slot', 'data-slot': name }, content);
 
 function viewOverview() {
-  const side = el('div', { class: 'stack-lg ag-ov-side' }, ovStack(), ovWorkflows());
+  const side = el('div', { class: 'stack-lg ag-ov-side' }, slot('assistant', ovAssistant()), ovStack(), ovWorkflows());
   return el('section', { class: 'stack-lg' },
     slot('verdict', ovVerdict()),
     slot('tiles', ovTiles()),
@@ -358,7 +403,7 @@ function viewOverview() {
 /** Only the parts drawn from the runner, in place. */
 function repaintClaude() {
   if (!root || state.view !== 'overview') return;
-  for (const [name, make] of [['verdict', ovVerdict], ['tiles', ovTiles], ['sessions', ovSessions]]) {
+  for (const [name, make] of [['verdict', ovVerdict], ['tiles', ovTiles], ['sessions', ovSessions], ['assistant', ovAssistant]]) {
     const s = root.querySelector(`[data-slot="${name}"]`);
     if (s) s.replaceChildren(...[make()].filter(Boolean));
   }
@@ -527,6 +572,12 @@ async function loadClaude() {
   state.claude = r?.error ? { error: r.error } : mergeDevices(r?.devices || []);
 }
 
+async function loadAssistant() {
+  if (!state.config?.has?.assistant) { state.assistant = null; return; }
+  const r = await tryApi('/api/assistant/state');
+  state.assistant = r?.error ? { error: r.error } : r;
+}
+
 async function refresh() {
   const [cfg, svc, wf, ex, ody] = await Promise.all([
     state.config ? state.config : tryApi('/api/config'),
@@ -543,6 +594,7 @@ async function refresh() {
   state.execWindow = ex?.windowDays || null;
   state.odysseus = ody?.error ? { configured: true, up: false, error: ody.error } : ody;
   if (!state.config?.has?.claude) state.claude = null;
+  await loadAssistant();
   render();
 }
 
@@ -605,8 +657,8 @@ export default {
     }, 60_000);
     // Sessions change by the second; the overview keeps up with them.
     claudeTimer = setInterval(async () => {
-      if (document.hidden || state.view !== 'overview' || !state.config?.has?.claude) return;
-      await loadClaude();
+      if (document.hidden || state.view !== 'overview') return;
+      await Promise.all([state.config?.has?.claude ? loadClaude() : null, loadAssistant()]);
       repaintClaude();
     }, 5000);
   },

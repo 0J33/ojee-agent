@@ -218,6 +218,40 @@ transcripts, through a Fable limit, an account switch and a pause.
 
 ---
 
+## The Assistant
+
+Agent → Assistant, and the quick chat behind the console overview's Assistant
+button (or the `a` key there). The model is OpenCode — `opencode serve` on HP
+(`ojee-opencode.service`, tailnet address only) — with the console's own tools
+wired in through `src/mcp.js`: fleet temperatures, the AC, the stack's
+services, a shell on loq or disinteg.
+
+- **One stream.** The module holds one subscription to opencode's
+  `/global/event` and fans it out on `/api/assistant/events`, so replies stream
+  part by part (reasoning, text, tool calls with their state) into whichever
+  window is open — and a turn keeps going with none open.
+- **Fallback.** A message is sent with `prompt_async` and watched. When the
+  model refuses (quota, rate limit, the free tier saying no, a provider that
+  keeps retrying, a reply with nothing in it) the failed exchange is deleted
+  and the same words go to the next model; the page is told who took over.
+- **Approvals.** Shell, file edits, console actions and web can each be
+  Allow / Ask / Off (Settings). Ask puts an Allow / Always / Deny card inline
+  under the tool call. **Off** removes the tool, which OpenCode's free tier
+  refuses outright, so while anything is off only OpenCode Go models are used.
+- **Pings** (needs you, failed, replied) go out as `notify` events on
+  `/api/events` — the console phone app turns those into notifications — and to
+  Discord when `ASSISTANT_DISCORD_WEBHOOK` is set.
+
+| env | |
+|---|---|
+| `OPENCODE_URL` | `opencode serve`, e.g. `http://100.117.98.52:4799` |
+| `OPENCODE_PATH` | default folder for new conversations (`/home/ojee`) |
+| `OPENCODE_PROVIDERS` / `OPENCODE_MODELS` | which providers to offer / pin the head of the order |
+| `OPENCODE_RETRY_LIMIT` | provider retries before moving to the next model (2) |
+| `ASSISTANT_DISCORD_WEBHOOK` | optional Discord pings |
+| `DATA_DIR` | where `assistant.json` (settings) lives (`/app/data` in the image) |
+| `HOST_ROOT` | the host's `/` mounted read-only, for the folder picker (`/host` when present) |
+
 ## Licence
 
 MIT.

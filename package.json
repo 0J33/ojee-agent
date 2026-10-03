@@ -14,7 +14,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "cd claude-runner && npm test"
+    "test": "node --test tests/*.test.js && cd claude-runner && npm test"
   },
   "dependencies": {
     "@xterm/addon-clipboard": "^0.1.0",

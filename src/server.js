@@ -148,7 +148,7 @@ const VIEWS = [
 app.get('/module.json', (_req, res) => res.json({
   id: process.env.MODULE_ID || 'agent',
   name: process.env.MODULE_NAME || 'Agent',
-  version: '3.0.0',
+  version: '3.1.0',
   icon: 'i-cpu',
   views: VIEWS,
   ui: '/ui/index.js',
@@ -591,12 +591,13 @@ app.get('/api/health', async (_req, res) => {
 });
 
 app.get('/api/summary', auth, async (_req, res) => {
-  const [services, wf, ex, ody, cc] = await Promise.all([
+  const [services, wf, ex, ody, cc, as] = await Promise.all([
     stackServices(),
     n8n('/workflows?limit=100'),
     n8n('/executions?limit=25&includeData=false'),
     odysseus(),
     claudeSummary(),
+    assistantModule.summary().catch(() => ({ configured: false })),
   ]);
   const deployed = services.filter((s) => s.present);
   const stopped = deployed.filter((s) => !s.ok);
@@ -618,6 +619,14 @@ app.get('/api/summary', auth, async (_req, res) => {
         v: !cc.up ? 'runner not answering'
           : [`${cc.running} running`, ccNeeds ? `${ccNeeds} need${ccNeeds === 1 ? 's' : ''} you` : null, cc.paused ? `${cc.paused} paused` : null]
             .filter(Boolean).join(' · '),
+      }
+      : null,
+    as.configured
+      ? {
+        k: 'Assistant',
+        v: !as.up ? 'OpenCode not answering'
+          : [as.working ? `${as.working} working` : null, as.waiting.length ? `${as.waiting.length} asking` : null,
+            !as.working && !as.waiting.length ? `idle · ${as.sessions} chats` : null].filter(Boolean).join(' · '),
       }
       : null,
     wf.ok
@@ -644,6 +653,7 @@ app.get('/api/summary', auth, async (_req, res) => {
       severity: x.state === 'error' ? 'err' : 'warn',
       view: 'claude',
     })) : []),
+    ...(as.configured && as.up ? as.waiting.map((x) => ({ text: `The Assistant is asking to use a tool in “${x.title}”`, severity: 'warn', view: 'assistant' })) : []),
     ...(cc.configured ? (cc.down || []).map((d) => ({ text: RUNNERS.length > 1 ? `The Claude runner on ${d.label} is not answering` : 'The Claude runner is not answering', severity: 'warn', view: 'claude' })) : []),
     ...stopped.map((s) => ({ text: `${s.name} is not running`, severity: 'err', view: 'services' })),
     ...(wf.ok ? [] : [{ text: n8nWhy(wf.reason, wf.detail), severity: 'warn', view: 'workflows' }]),
@@ -665,12 +675,12 @@ app.get('/api/summary', auth, async (_req, res) => {
     // waiting job, and a failed run turns one trace red. Idle has to LOOK
     // idle, so nothing here is padded to keep the board busy.
     model: {
-      running: (cc.up ? Number(cc.running) || 0 : 0)
+      running: (cc.up ? Number(cc.running) || 0 : 0) + (as.up ? as.working : 0)
         + execs.filter((e) => e.status === 'running').length,
-      queued: (cc.up ? Number(cc.waiting) || 0 : 0)
+      queued: (cc.up ? Number(cc.waiting) || 0 : 0) + (as.up ? as.waiting.length : 0)
         + execs.filter((e) => e.status === 'waiting' || e.status === 'new').length,
       failed: failed.length,
-      idle: !(cc.up && Number(cc.running) > 0) && !execs.some((e) => e.status === 'running'),
+      idle: !(cc.up && Number(cc.running) > 0) && !(as.up && as.working) && !execs.some((e) => e.status === 'running'),
     },
   });
 });
