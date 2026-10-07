@@ -7,10 +7,14 @@
    nothing has to be chosen first, Enter sends, and the answer
    streams in place.
 
-     no conversation  a box, three things to ask, and the most
-                      recent conversations to pick up again
+     no conversation  a quiet, empty history and the box under it;
+                      earlier conversations sit behind Recent
      a conversation   the transcript — the same one the full view
                       draws — and the box under it
+
+   One fixed size either way: the history scrolls inside it and the
+   box stays pinned at the bottom, so the dialog never grows down the
+   page as a reply comes in.
 
    Closing does not stop anything: the reply keeps going on HP, and
    reopening within a while lands back in the same conversation,
@@ -111,7 +115,8 @@ export async function mountAssistantModal(host, context) {
   // A new quick chat is just the composer: no suggestions, no list in the
   // way. Earlier conversations stay one click away behind the Recent button.
   function hero() {
-    return el('div', { class: 'ag-qc-hero ag-qc-hero--empty' });
+    return el('div', { class: 'ag-qc-hero ag-qc-hero--empty' },
+      el('p', { class: 'ag-qc-quiet' }, 'A new conversation'));
   }
 
   function paintHead() {
@@ -124,7 +129,9 @@ export async function mountAssistantModal(host, context) {
       : [el('span', {}, S.online === false ? 'OpenCode is not answering' : 'on HP · Enter sends · Esc closes')]).filter(Boolean));
     btnOpen.title = s ? 'Open this conversation in Agent → Assistant' : 'Open Agent → Assistant';
     btnNew.hidden = !s;
-    wrap.classList.toggle('is-convo', !!s);
+    // Not `is-convo`: the console's frame used to grow to a taller height on
+    // that class. The quick chat now keeps one fixed size and sizes itself.
+    wrap.classList.toggle('ag-qc--convo', !!s);
   }
 
   function setSession(id, { keepText = false } = {}) {
