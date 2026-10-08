@@ -10,6 +10,12 @@
  * unless you turn it on, because unattended work finishing is the normal case.
  */
 
+const { inQuiet } = require('./notify-policy');
+
+/** The id each kind has in the console's catalogue (Settings → Notifications). */
+const typeId = (kind) => `agent.claude-${String(kind).replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
+const SEVERITY = { needsInput: 'warn', blocked: 'warn', error: 'warn', stalled: 'warn', allLimited: 'warn', needsLogin: 'warn', modelFallback: 'info', accountSwitch: 'info', done: 'info' };
+
 const COLORS = {
   needsInput: 0x4f8cff,
   blocked: 0xffb020,
@@ -35,7 +41,15 @@ const TITLES = {
 };
 
 class Notifier {
-  constructor({ webhook, consoleUrl = '', settings, fetchImpl = fetch, now = Date.now, cooldownMs = 10 * 60_000, log = () => {} }) {
+  /**
+   * @param {Function} o.emit          (event) => void — the `notify` event on /api/events,
+   *                                   which the Agent module relays to the console
+   * @param {Function} o.consolePrefs  () => { quiet, tz, types } pushed from the console, or null
+   */
+  constructor({ webhook, consoleUrl = '', settings, fetchImpl = fetch, now = Date.now, cooldownMs = 10 * 60_000, log = () => {}, emit = () => {}, consolePrefs = () => null, deviceLabel = '' }) {
+    this.emit = emit;
+    this.consolePrefs = consolePrefs;
+    this.deviceLabel = deviceLabel;
     this.webhook = webhook || '';
     this.consoleUrl = consoleUrl;
     this.settings = settings; // () => current settings
@@ -62,13 +76,25 @@ class Notifier {
    * @param {string} [o.title]  overrides the generated title
    * @param {string} [o.tag]    dedupe key; defaults to kind + session
    */
-  async send(kind, { session = null, text = '', title = null, tag = null, force = false } = {}) {
+  async send(kind, { session = null, text = '', title = null, tag = null, force = false, test = false } = {}) {
     const s = this.settings();
-    if (!force && s.notify && s.notify[kind] === false) return false;
+    // The console's choices win once it has sent any; until then, the old
+    // per-kind switches in the runner's own settings.
+    const cp = this.consolePrefs();
+    const t = cp && cp.types ? cp.types[typeId(kind)] : null;
+    let discordOn = true;
+    let cooldown = this.cooldownMs;
+    if (t) {
+      if (!force && !t.app && !t.discord) return false;
+      discordOn = force || !!t.discord;
+      if (Number.isFinite(t.cooldownMin)) cooldown = t.cooldownMin * 60_000;
+    } else if (!force && s.notify && s.notify[kind] === false) return false;
     const key = tag || `${kind}:${session?.id || '-'}`;
     const last = this.last.get(key) || 0;
-    if (!force && this.now() - last < this.cooldownMs) return false;
+    if (!force && this.now() - last < cooldown) return false;
     this.last.set(key, this.now());
+    const severity = SEVERITY[kind] || 'info';
+    const quiet = !force && cp && inQuiet(cp.quiet, this.now(), cp.tz) && !(severity === 'critical' && cp.quiet.critical);
 
     const name = session ? (session.title || session.id.slice(0, 8)) : 'Claude';
     const heading = title || `${name} ${TITLES[kind] || kind}`;
@@ -81,9 +107,24 @@ class Notifier {
     }
     const url = this.link(session);
 
-    this.recent.unshift({ kind, title: heading, text: detail, session: session?.id || null, at: this.now(), sent: this.enabled });
+    const sending = this.enabled && discordOn && !quiet;
+    this.recent.unshift({ kind, title: heading, text: detail, session: session?.id || null, at: this.now(), sent: sending });
     this.recent.length = Math.min(this.recent.length, 50);
-    if (!this.enabled) return false;
+    // The app channel: the console decides (and applies quiet hours itself).
+    if (!test) {
+      try {
+        this.emit({
+          id: typeId(kind),
+          title: this.deviceLabel ? `${heading} (${this.deviceLabel})` : heading,
+          body: detail.slice(0, 600),
+          tag: key,
+          severity,
+          route: session ? `#/agent/claude/${session.id}` : '#/agent/claude',
+          at: this.now(),
+        });
+      } catch { /* a stream that broke must not stop the ping */ }
+    }
+    if (!sending) return false;
 
     try {
       const res = await this.fetch(this.webhook, {
@@ -110,4 +151,4 @@ class Notifier {
   }
 }
 
-module.exports = { Notifier, TITLES };
+module.exports = { Notifier, TITLES, typeId, SEVERITY };

@@ -1720,7 +1720,12 @@ function paintSettings() {
       notify?.enabled
         ? el('p', { class: 'meta' }, 'Sent to the Claude webhook (CLAUDE_DISCORD_WEBHOOK) — separate from fleet\'s.')
         : el('div', { class: 'alert alert--warn' }, el('b', {}, 'No webhook'), el('span', {}, `Set CLAUDE_DISCORD_WEBHOOK in ~/.config/ojee-claude/env on ${multi() ? d.label : 'the host'} and restart the runner. Until then pings are only listed below.`)),
-      el('div', { class: 'ag-cl-toggles' }, NOTIFY.map(([k, label, detail]) => toggleRow(k, label, '', { notify: true, detail }))),
+      // Which pings go where (app, Discord, quiet hours, cooldowns) is set
+      // with every other module's in the console; only excerpts stay here.
+      el('p', { class: 'meta' }, 'Which pings are sent — to the app and to Discord — and quiet hours are set in ',
+        el('a', { href: '#/settings/notifications', class: 'ag-link' }, 'Settings → Notifications'),
+        notify?.console ? `. This runner last received them ${at(notify.console.at)}.` : '. This runner has not received them yet; until it does, the defaults apply.'),
+      el('div', { class: 'ag-cl-toggles' }, NOTIFY.filter(([k]) => k === 'excerpts').map(([k, label, detail]) => toggleRow(k, label, '', { notify: true, detail }))),
       (notify?.recent || []).length ? el('details', {},
         el('summary', { class: 'meta' }, 'Recent pings'),
         el('div', { class: 'ag-cl-list' }, notify.recent.map((n) => el('div', { class: 'ag-cl-row ag-cl-ping' },

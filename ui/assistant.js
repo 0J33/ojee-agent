@@ -749,12 +749,10 @@ function paintSettings() {
       el('div', { class: 'ag-panel-head' }, el('h3', { class: 'h3' }, 'Pings'),
         el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => act('test', () => api('/notify/test', { method: 'POST', body: '{}' }), 'Test ping sent') }, 'Send a test')),
       S.cfg.webhook
-        ? el('p', { class: 'meta' }, 'Sent to Discord (ASSISTANT_DISCORD_WEBHOOK) and to the console app.')
-        : el('div', { class: 'alert alert--info' }, el('b', {}, 'App only'), el('span', {}, 'Pings reach the console phone app. Set ASSISTANT_DISCORD_WEBHOOK in the agent module’s environment to send them to Discord too.')),
-      el('div', { class: 'ag-as-toggles' },
-        toggleRow(set.notify.needsYou, 'Needs you', 'a tool waiting for approval, or a question', (v) => save({ notify: { needsYou: v } })),
-        toggleRow(set.notify.errors, 'Failed', 'every model refused, or the turn broke', (v) => save({ notify: { errors: v } })),
-        toggleRow(set.notify.done, 'Replied', 'a reply finished — with its first lines', (v) => save({ notify: { done: v } }))),
+        ? el('p', { class: 'meta' }, 'The console routes these. ASSISTANT_DISCORD_WEBHOOK is only used when the console is not listening.')
+        : null,
+      el('p', { class: 'meta' }, 'Which pings are sent (needs you, failed, replied) and where — the app, Discord — is set in ',
+        el('a', { href: '#/settings/notifications' }, 'Settings → Notifications'), ', beside every other module’s.'),
       (S.cfg.pings || []).length ? el('details', {}, el('summary', { class: 'meta' }, 'Recent pings'),
         el('div', { class: 'ag-as-list' }, S.cfg.pings.map((n) => el('div', { class: 'ag-as-row ag-as-ping' },
           el('span', { class: 'meta' }, relTime(n.at)), el('span', { class: 'ag-as-row-title' }, n.title), el('span', { class: 'meta' }, n.discord ? 'discord + app' : 'app'))))) : null),

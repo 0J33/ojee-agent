@@ -130,10 +130,22 @@ function createRunner(overrides = {}) {
   delete tmuxEnv.TMUX_PANE;
   const tmux = new Tmux({ bin: config.TMUX_BIN, socket: config.TMUX_SOCKET, conf: FILES.tmuxConf, env: tmuxEnv });
   const accounts = new Accounts({ config, store, log });
+  // Pings: Discord from here (so they arrive when HP is down), and a
+  // `notify` event on /api/events for the console's app channel. Kept for a
+  // while so the Agent module, reconnecting, can ask for what it missed.
+  const recentNotify = [];
+  let emitNotify = () => {};
   const notifier = new Notifier({
     webhook: config.DISCORD_WEBHOOK,
     consoleUrl: config.CONSOLE_URL,
     settings: () => store.settings,
+    consolePrefs: () => store.data.consoleNotify,
+    deviceLabel: config.DEVICE_LABEL,
+    emit: (n) => {
+      recentNotify.push(n);
+      while (recentNotify.length > 50) recentNotify.shift();
+      emitNotify(n);
+    },
     log,
   });
   const sessions = new Sessions({ config, store, tmux, accounts, notifier, files: FILES, log });
@@ -180,7 +192,7 @@ function createRunner(overrides = {}) {
     accounts: accountsView(),
     settings: store.settings,
     models: config.MODELS,
-    notify: { enabled: notifier.enabled, recent: notifier.recent.slice(0, 20) },
+    notify: { enabled: notifier.enabled, recent: notifier.recent.slice(0, 20), console: store.data.consoleNotify ? { at: store.data.consoleNotify.at } : null },
     runner: { tmux: runtime.tmux, claude: runtime.claude, host: config.HOST, port: config.PORT, stackDir: config.STACK_DIR, home: config.HOME, defaultCwd: config.DEFAULT_CWD },
     governor: governor ? governor.view() : { active: false, reason: 'only when sessions run in ojee-claude-tmux.service' },
   });
@@ -216,6 +228,7 @@ function createRunner(overrides = {}) {
     const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const res of streams) { try { res.write(frame); } catch { /* closed */ } }
   };
+  emitNotify = (n) => broadcast('notify', n);
   sessions.on('change', (s) => broadcast('session', sessions.view(s)));
   sessions.on('removed', (id) => broadcast('removed', { id }));
   sessions.on('accounts', () => broadcast('accounts', { accounts: accountsView(), settings: store.settings }));
@@ -227,6 +240,8 @@ function createRunner(overrides = {}) {
     res.setHeader('x-accel-buffering', 'no');
     res.flushHeaders?.();
     res.write(`event: state\ndata: ${JSON.stringify(stateView())}\n\n`);
+    const since = Number(req.query.since);
+    if (since > 0) for (const n of recentNotify) if (n.at > since && Date.now() - n.at < 30 * 60_000) res.write(`event: notify\ndata: ${JSON.stringify(n)}\n\n`);
     streams.add(res);
     const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 20_000);
     // The RESPONSE closing is the client leaving. The request's own 'close'
@@ -625,9 +640,18 @@ function createRunner(overrides = {}) {
 
   app.post('/api/notify/test', auth, wrap(async (_req, res) => {
     if (!notifier.enabled) return res.status(409).json({ error: 'No webhook — set CLAUDE_DISCORD_WEBHOOK in the runner\'s env file.' });
-    const ok = await notifier.send('done', { title: 'Test from the Claude runner', text: 'If you can read this, pings work.', force: true, tag: `test:${Date.now()}` });
-    res.json({ ok });
+    const ok = await notifier.send('done', { title: `Test from the Claude runner on ${config.DEVICE_LABEL}`, text: 'This is a test from Settings → Notifications. If you can read this, pings from this runner work.', force: true, test: true, tag: `test:${Date.now()}` });
+    res.json({ ok, device: config.DEVICE_LABEL });
   }));
+
+  /** The console's notification choices, relayed by the Agent module. */
+  app.put('/api/notify-prefs', auth, (req, res) => {
+    const b = req.body || {};
+    if (!b.types || typeof b.types !== 'object') return res.status(400).json({ error: 'types is required' });
+    store.data.consoleNotify = { quiet: b.quiet || null, tz: typeof b.tz === 'string' ? b.tz : null, types: b.types, at: Date.now() };
+    store.save();
+    res.json({ ok: true });
+  });
 
   /* ── the hook socket ──────────────────────────────────────────────── */
 

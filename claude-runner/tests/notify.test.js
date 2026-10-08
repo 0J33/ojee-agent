@@ -60,3 +60,36 @@ test('a webhook that is down never throws', async () => {
   const n = new Notifier({ webhook: 'https://x.invalid', settings: () => ({ notify: {} }), fetchImpl: async () => { throw new Error('ECONNREFUSED'); } });
   assert.equal(await n.send('error', { text: 'boom' }), false);
 });
+
+test('console prefs: a type off is off, Discord off still tells the app, quiet hours hold Discord back', async () => {
+  const sent = []; const events = [];
+  let prefs = { quiet: { on: false }, tz: 'UTC', types: { 'agent.claude-needs-input': { app: true, discord: false, cooldownMin: 10 }, 'agent.claude-error': { app: false, discord: false } } };
+  const n = new Notifier({
+    webhook: 'https://discord.invalid/hook', deviceLabel: 'LOQ',
+    settings: () => ({ notify: { needsInput: true, error: true } }),
+    consolePrefs: () => prefs,
+    emit: (e) => events.push(e),
+    fetchImpl: async (url, opts) => { sent.push(JSON.parse(opts.body)); return { ok: true }; },
+    now: () => Date.parse('2026-10-08T23:30:00Z'),
+  });
+  assert.equal(await n.send('needsInput', { session, text: 'Which?' }), false);
+  assert.equal(sent.length, 0);
+  assert.equal(events[0].id, 'agent.claude-needs-input');
+  assert.equal(events[0].title, 'Port the parser needs your input (LOQ)');
+  assert.equal(events[0].route, '#/agent/claude/0123abcd-0000-0000-0000-000000000000');
+  assert.equal(await n.send('error', { session, text: 'boom' }), false);
+  assert.equal(events.length, 1, 'a type switched off says nothing at all');
+  prefs = { quiet: { on: true, from: '23:00', to: '07:00' }, tz: 'UTC', types: { 'agent.claude-blocked': { app: true, discord: true } } };
+  assert.equal(await n.send('blocked', { session, text: 'x' }), false, 'quiet hours: no Discord');
+  assert.equal(events.length, 2, 'the console still hears it (and applies quiet hours itself)');
+  prefs = { quiet: { on: false }, tz: 'UTC', types: { 'agent.claude-stalled': { app: false, discord: true } } };
+  assert.equal(await n.send('stalled', { session, text: 'x' }), true);
+  assert.equal(sent.length, 1);
+});
+
+test('the test ping is not relayed to the app', async () => {
+  const events = [];
+  const n = new Notifier({ webhook: 'https://x.invalid', settings: () => ({ notify: {} }), emit: (e) => events.push(e), fetchImpl: async () => ({ ok: true }) });
+  assert.equal(await n.send('done', { title: 'Test', force: true, test: true }), true);
+  assert.equal(events.length, 0);
+});

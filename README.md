@@ -169,9 +169,18 @@ the Accounts view runs the login in a terminal and shows the sign-in link and a 
 
 ### Pings
 
-To `CLAUDE_DISCORD_WEBHOOK` — its own webhook, not fleet's. On by default: needs your input,
-blocked, errors, gone quiet, model switched, account switched, all accounts out, needs login. Off by
-default: finished. Each can be switched in Settings; each links to the session.
+To `CLAUDE_DISCORD_WEBHOOK` — its own webhook, not fleet's — sent by the runner itself, so a
+session on the laptop still reaches you when HP is down. Which kinds are sent, to the app and/or
+Discord, quiet hours and cooldowns are chosen in the console's Settings → Notifications (types
+`agent.claude-*`); the console pushes those choices to this module (`POST /api/notify/prefs`),
+which hands them to every runner (`PUT /api/notify-prefs`, kept in the runner's store, re-sent
+when a runner comes back). Each ping is also a `notify` event on the runner's `/api/events`, which
+this module relays onto its own `/api/events` for the console's app channel. Until a runner has
+received the console's choices, its old per-kind switches apply. Defaults: needs your input,
+blocked, errors, gone quiet, all accounts out, needs login → app + Discord; model/account switched
+→ Discord; finished → off. Each links to the session. The Assistant's pings (`agent.assistant-*`)
+are routed by the console the same way; `ASSISTANT_DISCORD_WEBHOOK` is only used when no console
+is listening.
 
 ### Guard
 

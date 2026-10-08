@@ -89,6 +89,26 @@ function readRunners(env) {
 
 const runnerById = (id) => RUNNERS.find((r) => r.id === id) || null;
 
+/* ── notifications ────────────────────────────────────────────────────── */
+
+const claudeType = (kind, label, description, channels, severity = 'warn') => ({
+  id: `agent.claude-${kind}`, label: `Claude: ${label}`, description, severity, defaultChannels: channels, view: 'claude', discordBy: 'module', cooldownMin: 10,
+});
+const NOTIFY_TYPES = [
+  claudeType('needs-input', 'needs your input', 'A session asked a question or wants a tool approved.', ['app', 'discord']),
+  claudeType('blocked', 'blocked', 'A session cannot go on without you (a guard stopped it, a prompt it cannot answer).', ['app', 'discord']),
+  claudeType('error', 'hit an error', 'A session failed to start, crashed, or kept failing after retries.', ['app', 'discord']),
+  claudeType('stalled', 'gone quiet', 'A session working with no output for longer than the stall time.', ['app', 'discord']),
+  claudeType('all-limited', 'every account out', 'All Claude accounts hit their limits; sessions are paused until one resets.', ['app', 'discord']),
+  claudeType('needs-login', 'lost its login', 'An account needs signing in again.', ['app', 'discord']),
+  claudeType('model-fallback', 'switched model', 'A model hit its limit and the session moved to the fallback.', ['discord'], 'info'),
+  claudeType('account-switch', 'switched account', 'An account ran out and sessions moved to another.', ['discord'], 'info'),
+  claudeType('done', 'finished', 'A session finished its turn (off by default: unattended work finishing is the normal case). A session set to ping when done always does.', [], 'info'),
+  { id: 'agent.assistant-needs-you', label: 'Assistant: needs you', description: 'The Assistant wants to use a tool that asks first, or has a question.', severity: 'warn', defaultChannels: ['app'], view: 'assistant' },
+  { id: 'agent.assistant-failed', label: 'Assistant: could not answer', description: 'Every model refused, or the turn broke.', severity: 'warn', defaultChannels: ['app'], view: 'assistant' },
+  { id: 'agent.assistant-replied', label: 'Assistant: replied', description: 'A reply finished, with its first lines.', severity: 'info', defaultChannels: [], view: 'assistant' },
+];
+
 /**
  * How far back "recent runs" goes.
  *
@@ -157,7 +177,12 @@ app.get('/module.json', (_req, res) => res.json({
   // straight into a dialog — so it is advertised on its own.
   assistant: '/ui/assistant.js',
   health: '/api/health',
-  capabilities: ['summary', 'sse'],
+  capabilities: ['summary', 'sse', 'notify'],
+  // For the console's Settings → Notifications. The Claude runners send
+  // their own Discord pings (so a laptop session still reaches you when HP is
+  // down) using the choices made there; everything else is routed by the console.
+  notifications: NOTIFY_TYPES,
+  notifyTest: CLAUDE_CONFIGURED ? ['discord'] : [],
 }));
 
 app.get('/api/config', (_req, res) => res.json({
@@ -692,6 +717,100 @@ app.get('/api/summary', auth, async (_req, res) => {
 for (const parts of [['@xterm', 'xterm', 'lib'], ['@xterm', 'xterm', 'css'], ['@xterm', 'addon-fit', 'lib'], ['@xterm', 'addon-clipboard', 'lib']]) {
   app.use('/vendor', express.static(path.join(__dirname, '..', 'node_modules', ...parts), { maxAge: '1h' }));
 }
+
+/** The console's choices for this module's notifications. The runners get
+    theirs (the Claude types, quiet hours) now and whenever they come back. */
+let notifyPrefs = null;
+const runnerPrefs = () => (notifyPrefs ? {
+  quiet: notifyPrefs.quiet, tz: notifyPrefs.tz || null,
+  types: Object.fromEntries(Object.entries(notifyPrefs.types || {}).filter(([k]) => k.startsWith('agent.claude-'))),
+} : null);
+async function pushRunnerPrefs(runner) {
+  const body = runnerPrefs();
+  if (!body) return;
+  try {
+    await fetch(`${runner.url}/api/notify-prefs`, { method: 'PUT', timeout: 6000, headers: { 'content-type': 'application/json', authorization: `Bearer ${runner.token}` }, body: JSON.stringify(body) });
+  } catch { /* asleep; sent again when it reconnects */ }
+}
+
+app.post('/api/notify/prefs', auth, (req, res) => {
+  const b = req.body || {};
+  if (!b.types || typeof b.types !== 'object') return res.status(400).json({ error: 'types is required' });
+  notifyPrefs = { quiet: b.quiet || null, tz: b.tz || null, types: b.types };
+  assistantModule.setConsolePrefs(notifyPrefs);
+  for (const r of RUNNERS) pushRunnerPrefs(r);
+  res.json({ ok: true });
+});
+
+/** "Test its Discord": every runner posts a test to its own webhook. */
+app.post('/api/notify/test', auth, async (_req, res) => {
+  const out = await Promise.all(RUNNERS.map(async (r) => {
+    try {
+      const x = await fetch(`${r.url}/api/notify/test`, { method: 'POST', timeout: 10_000, headers: { 'content-type': 'application/json', authorization: `Bearer ${r.token}` }, body: '{}' });
+      const j = await x.json().catch(() => ({}));
+      return { device: r.label, ok: x.ok && j.ok !== false, error: x.ok ? null : (j.error || `HTTP ${x.status}`) };
+    } catch (e) {
+      return { device: r.label, ok: false, error: r.sleeps ? 'offline' : (e.code || e.message) };
+    }
+  }));
+  const ok = out.some((x) => x.ok);
+  res.status(ok ? 200 : 502).json({ ok, detail: out.map((x) => `${x.device}: ${x.ok ? 'sent' : x.error}`).join(' · '), runners: out, error: ok ? null : out.map((x) => `${x.device}: ${x.error}`).join(' · ') });
+});
+
+/**
+ * One standing subscription per runner: its `notify` events are relayed onto
+ * this module's /api/events, where the console picks them up. Resumes with
+ * ?since= so a reconnect does not lose a ping; a runner coming back is sent
+ * the console's notification choices again.
+ */
+function relayRunner(runner) {
+  let lastAt = Date.now();
+  let attempt = 0;
+  const connect = () => {
+    const target = new URL(`/api/events?since=${lastAt}`, runner.url);
+    let buf = '';
+    let idle = null;
+    const up = http.request({ hostname: target.hostname, port: target.port, path: target.pathname + target.search, method: 'GET', headers: { accept: 'text/event-stream', authorization: `Bearer ${runner.token}` } });
+    const retry = () => {
+      clearTimeout(idle);
+      up.destroy();
+      const wait = Math.min(120_000, 5000 * 2 ** attempt);
+      attempt += 1;
+      setTimeout(connect, wait).unref?.();
+    };
+    const alive = () => { clearTimeout(idle); idle = setTimeout(retry, 60_000); };
+    up.on('response', (r) => {
+      if (r.statusCode !== 200) { r.resume(); retry(); return; }
+      attempt = 0;
+      alive();
+      pushRunnerPrefs(runner);
+      r.setEncoding('utf8');
+      r.on('data', (chunk) => {
+        alive();
+        buf += chunk;
+        let at;
+        while ((at = buf.indexOf('\n\n')) >= 0) {
+          const frame = buf.slice(0, at);
+          buf = buf.slice(at + 2);
+          if (!/^event: notify$/m.test(frame)) continue;
+          const data = frame.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).replace(/^ /, '')).join('\n');
+          try {
+            const n = JSON.parse(data);
+            if (typeof n.id !== 'string' || !n.id.startsWith('agent.claude-')) continue;
+            lastAt = Math.max(lastAt, Number(n.at) || Date.now());
+            assistantModule.emitNotify(n);
+          } catch { /* not ours */ }
+        }
+      });
+      r.on('end', retry);
+      r.on('error', retry);
+    });
+    up.on('error', retry);
+    up.end();
+  };
+  connect();
+}
+for (const r of RUNNERS) relayRunner(r);
 
 assistantModule.mount(app, auth);
 

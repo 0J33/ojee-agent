@@ -37,6 +37,8 @@ class Store {
       settings: merge(clone(defaults.settings), loaded.settings || {}),
       accounts: loaded.accounts?.length ? loaded.accounts : clone(defaults.accounts),
       sessions: loaded.sessions || {},
+      // The console's notification choices, pushed through the Agent module.
+      consoleNotify: loaded.consoleNotify || null,
     };
   }
 

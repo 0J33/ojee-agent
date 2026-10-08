@@ -303,7 +303,7 @@ function finishFailed(turn, error) {
   H.failed.set(turn.sessionID, f);
   broadcast('turn', { sessionID: turn.sessionID, phase: 'failed', ...f });
   const s = H.sessions.get(turn.sessionID);
-  if (settings.notify.errors) {
+  {
     notify('The Assistant could not answer', `${s?.title || 'A conversation'}: ${f.error}`, `assistant:err:${turn.sessionID}`, turn.sessionID);
   }
 }
@@ -351,7 +351,7 @@ async function settle(sessionID) {
       return;
     }
     broadcast('turn', { sessionID, phase: 'done', model: model ? L.key(model) : null, fellBack: turn.i > 0 });
-    if (settings.notify.done) {
+    {
       const s = H.sessions.get(sessionID);
       const said = [...turn.texts.values()].join(' ').replace(/\s+/g, ' ').trim();
       notify(`Assistant: ${s?.title || 'reply ready'}`, said.slice(0, 300) || 'Finished.', `assistant:done:${sessionID}`, sessionID);
@@ -430,7 +430,7 @@ function onEvent(ev) {
       break;
     case 'permission.asked': {
       H.perms.set(p.id, p);
-      if (settings.notify.needsYou) {
+      {
         const s = H.sessions.get(p.sessionID);
         notify('The Assistant is asking', `${s?.title || 'A conversation'} wants to use ${p.permission}${p.patterns?.[0] && p.patterns[0] !== '*' ? `: ${p.patterns[0]}` : ''}`, `assistant:ask:${p.sessionID}`, p.sessionID);
       }
@@ -439,7 +439,7 @@ function onEvent(ev) {
     case 'permission.replied': H.perms.delete(p.requestID); break;
     case 'question.asked':
       H.questions.set(p.id, p);
-      if (settings.notify.needsYou) notify('The Assistant has a question', p.questions?.[0]?.question || '', `assistant:ask:${p.sessionID}`, p.sessionID);
+      notify('The Assistant has a question', p.questions?.[0]?.question || '', `assistant:ask:${p.sessionID}`, p.sessionID);
       break;
     case 'question.replied':
     case 'question.rejected': H.questions.delete(p.requestID); break;
@@ -537,14 +537,41 @@ async function refreshPending() {
 
 /* ── pings ────────────────────────────────────────────────────────────── */
 
+/*
+ * Everything this module can say lands on /api/events as `notify` with an id
+ * from the catalogue in server.js; the console routes it (Settings →
+ * Notifications). The Claude runners' own pings are relayed onto the same
+ * stream. Kept half an hour so a console that reconnects (?since=) catches up.
+ */
+const recentNotify = [];
+const routers = new Set();
+let routerGoneAt = Date.now();
+let consolePrefs = null;
+
+function emitNotify(n) {
+  recentNotify.push(n);
+  while (recentNotify.length > 50) recentNotify.shift();
+  const frame = `event: notify\ndata: ${JSON.stringify(n)}\n\n`;
+  for (const res of H.pings) { try { res.write(frame); } catch { /* closed */ } }
+}
+
+/** assistant:<kind>:… -> [catalogue id, the old switch, severity]. */
+const KINDS = { ask: ['agent.assistant-needs-you', 'needsYou', 'warn'], err: ['agent.assistant-failed', 'errors', 'warn'], done: ['agent.assistant-replied', 'done', 'info'], test: ['agent.assistant-replied', null, 'info'] };
+
 function notify(title, body, tag, sessionID) {
+  const kind = String(tag).split(':')[1] || 'done';
+  const [id, legacy, severity] = KINDS[kind] || KINDS.done;
+  // Before the console has sent its choices, the Assistant's own switches.
+  if (!consolePrefs && legacy && !settings.notify[legacy]) return;
   const n = { title, body, tag, sessionID: sessionID || null, at: Date.now(), discord: !!WEBHOOK };
   H.recentPings.unshift(n);
   H.recentPings.length = Math.min(H.recentPings.length, 20);
-  const frame = `event: notify\ndata: ${JSON.stringify({ title, body, tag, view: 'assistant', id: sessionID || null })}\n\n`;
-  for (const res of H.pings) res.write(frame);
+  emitNotify({ id, title, body: String(body || '').slice(0, 600), tag, severity, view: 'assistant', at: n.at });
   broadcast('notify', n);
-  if (WEBHOOK) {
+  // Its own webhook only when no console has been listening for two minutes.
+  const routed = routers.size > 0 || Date.now() - routerGoneAt < 120_000;
+  const wanted = consolePrefs ? consolePrefs.types?.[id]?.discord === true : true;
+  if (WEBHOOK && !routed && wanted) {
     fetch(WEBHOOK, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -830,10 +857,17 @@ function mount(app, auth) {
     res.setHeader('cache-control', 'no-cache');
     res.setHeader('x-accel-buffering', 'no');
     res.flushHeaders();
+    const since = Number(req.query.since);
+    if (since > 0) for (const n of recentNotify) if (n.at > since && Date.now() - n.at < 30 * 60_000) res.write(`event: notify\ndata: ${JSON.stringify(n)}\n\n`);
     H.pings.add(res);
-    connect();
+    if (req.query.router === '1') routers.add(res);
+    if (configured()) connect();
     const ping = setInterval(() => res.write(': ping\n\n'), 20000);
-    req.on('close', () => { clearInterval(ping); H.pings.delete(res); });
+    req.on('close', () => {
+      clearInterval(ping);
+      H.pings.delete(res);
+      if (routers.delete(res) && !routers.size) routerGoneAt = Date.now();
+    });
   });
 
   // Watch from the start: a turn must be supervised whether or not a page is open.
@@ -858,4 +892,8 @@ async function summary() {
   };
 }
 
-module.exports = { mount, configured, summary, url: OPENCODE_URL };
+module.exports = {
+  mount, configured, summary, url: OPENCODE_URL,
+  emitNotify,
+  setConsolePrefs: (p) => { consolePrefs = p; },
+};
