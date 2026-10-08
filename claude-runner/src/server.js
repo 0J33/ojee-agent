@@ -664,6 +664,8 @@ function createRunner(overrides = {}) {
         ws.close();
         return;
       }
+      // A pane left in tmux's history mode looks blank and ignores keys.
+      await tmux.leaveHistory(name);
       bridge(ws, { argv: tmux.attachArgv(name), cols: url.searchParams.get('cols'), rows: url.searchParams.get('rows'), cwd });
     });
   }

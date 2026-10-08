@@ -104,12 +104,28 @@ class Tmux {
 
   target(name) { return `=${name}:`; }
 
+  /**
+   * Out of tmux's history (copy) mode, if a pane is in it. `mouse on` puts a
+   * pane there on a wheel scroll; Claude's fullscreen view keeps nothing in
+   * tmux's history, so the pane then shows an empty page with "[n/n]" in the
+   * corner and every key goes to tmux, not Claude — a session that looks
+   * dead from the console. Run before attaching and before typing.
+   */
+  async leaveHistory(name) {
+    try {
+      const inMode = (await this.run(['display-message', '-p', '-t', this.target(name), '#{pane_in_mode}'])).trim();
+      if (inMode === '1') await this.run(['send-keys', '-t', this.target(name), '-X', 'cancel']);
+    } catch { /* no such session, or tmux busy: attaching will say so */ }
+  }
+
   async keys(name, ...keys) {
+    await this.leaveHistory(name);
     await this.run(['send-keys', '-t', this.target(name), ...keys]);
   }
 
   /** Type text literally. Newlines become Ctrl+J (a new line, not a submit). */
   async type(name, text, { chunk = 400 } = {}) {
+    await this.leaveHistory(name);
     const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
     for (let i = 0; i < lines.length; i++) {
       if (i > 0) await this.keys(name, 'C-j');
