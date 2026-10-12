@@ -771,7 +771,12 @@ function relayRunner(runner) {
     let buf = '';
     let idle = null;
     const up = http.request({ hostname: target.hostname, port: target.port, path: target.pathname + target.search, method: 'GET', headers: { accept: 'text/event-stream', authorization: `Bearer ${runner.token}` } });
+    // end, error and the idle timer can all fire for one dropped stream; only
+    // the first may schedule a reconnect, or every drop doubles the chains.
+    let done = false;
     const retry = () => {
+      if (done) return;
+      done = true;
       clearTimeout(idle);
       up.destroy();
       const wait = Math.min(120_000, 5000 * 2 ** attempt);
