@@ -16,6 +16,10 @@ After=network-online.target
 Type=simple
 Environment=PATH=%h/.local/bin:@NODEDIR@:/usr/local/bin:/usr/bin:/bin
 Environment=LANG=C.UTF-8
+# A server already on the socket when this unit starts is a stray (the unit's
+# own died with it), and with it there `tmux -D` fails "not a terminal" and
+# the unit loops for ever. Clear it first.
+ExecStartPre=-@TMUX@ -L ojee-claude kill-server
 ExecStart=@TMUX@ -L ojee-claude -f @ROOT@/deploy/tmux.conf -D
 ExecStop=@TMUX@ -L ojee-claude kill-server
 Restart=on-failure

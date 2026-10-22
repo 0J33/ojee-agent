@@ -20,8 +20,10 @@
 const { execFile } = require('child_process');
 
 class Tmux {
-  constructor({ bin, socket, conf, env = process.env }) {
+  constructor({ bin, socket, conf, env = process.env, mode = 'self', unit = 'ojee-claude-tmux.service' }) {
     this.bin = bin;
+    this.mode = mode;
+    this.unit = unit;
     this.socket = socket;
     this.conf = conf;
     // The server inherits the environment of whoever starts it, and every
@@ -68,6 +70,19 @@ class Tmux {
     return this.serverUp();
   }
 
+  /** Start the systemd unit that owns the server, and wait for it. */
+  async startHost(timeoutMs = 15000) {
+    await new Promise((resolve) => {
+      execFile('systemctl', ['--user', 'start', '--no-block', this.unit], { timeout: 8000 }, () => resolve());
+    });
+    const until = Date.now() + timeoutMs;
+    while (Date.now() < until) {
+      if (await this.serverUp()) return true;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    throw new Error(`the session host (${this.unit}) is not running and did not start`);
+  }
+
   async has(name) {
     return this.ok(['has-session', '-t', `=${name}`]);
   }
@@ -92,6 +107,14 @@ class Tmux {
    * @param {object} o.env      extra environment for this session only
    */
   async create({ name, cwd, argv, env = {}, cols = 200, rows = 50 }) {
+    // `new-session` STARTS a server when none is running. Under systemd that
+    // server would live in the runner's cgroup, not the host unit's: the unit
+    // then cannot start (its `tmux -D` finds the socket taken and fails "not
+    // a terminal", 209 restarts on 2026-10-22), and every session sits in the
+    // runner, where the next runner restart or OOM kill takes them all. So
+    // with the host down, start the host and wait for it; never start a
+    // server here.
+    if (this.mode === 'systemd' && !(await this.serverUp())) await this.startHost();
     const args = ['new-session', '-d', '-s', name, '-x', String(cols), '-y', String(rows), '-c', cwd];
     for (const [k, v] of Object.entries(env)) args.push('-e', `${k}=${v}`);
     args.push('--', ...argv);

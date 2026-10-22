@@ -128,7 +128,7 @@ function createRunner(overrides = {}) {
   const tmuxEnv = cleanEnv(process.env);
   delete tmuxEnv.TMUX;
   delete tmuxEnv.TMUX_PANE;
-  const tmux = new Tmux({ bin: config.TMUX_BIN, socket: config.TMUX_SOCKET, conf: FILES.tmuxConf, env: tmuxEnv });
+  const tmux = new Tmux({ bin: config.TMUX_BIN, socket: config.TMUX_SOCKET, conf: FILES.tmuxConf, env: tmuxEnv, mode: config.TMUX_MODE });
   const accounts = new Accounts({ config, store, log });
   // Pings: Discord from here (so they arrive when HP is down), and a
   // `notify` event on /api/events for the console's app channel. Kept for a
