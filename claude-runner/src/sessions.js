@@ -1079,6 +1079,17 @@ class Sessions extends EventEmitter {
 
   /* ── the periodic pass ──────────────────────────────────────────────── */
 
+  /** May a killed session be brought back by itself? At most three times an
+      hour each, so one that keeps dying stops in the error state where it can
+      be seen instead of looping. */
+  autoResume(s, now = Date.now()) {
+    if (!this.settings.resumeInterrupted) return false;
+    const recent = (s.autoResumes || []).filter((t) => now - t < 3600_000);
+    if (recent.length >= 3) return false;
+    s.autoResumes = [...recent, now];
+    return true;
+  }
+
   async tick() {
     const now = Date.now();
     if (this.accounts.expire(now)) this.emit('accounts');
@@ -1103,6 +1114,17 @@ class Sessions extends EventEmitter {
           this.setState(s, 'stopped', 'Ended');
         } else if (code === 0 || code == null) {
           this.setState(s, 'stopped', 'Claude exited');
+        } else if ((code === 143 || code === 137) && this.autoResume(s, now)) {
+          // Killed from outside, not failing: SIGTERM/SIGKILL is what every
+          // session gets when the session host goes down under it (systemd-oomd
+          // killed the whole tmux unit twice on 2026-10-22 and every session
+          // showed "exited with code 143"). Same answer as after a reboot: a
+          // session that was working carries on, an idle one comes back idle.
+          const wasWorking = s.state === 'running' || s.state === 'starting';
+          this.log('reconcile', `${s.id.slice(0, 8)} was killed (code ${code}) — resuming`);
+          await this.start(s, wasWorking
+            ? { prompt: continueText('This session was interrupted: its process was killed (the machine ran short of memory or its session host restarted).') }
+            : { prompt: '' }).catch((e) => this.setState(s, 'error', `Killed (code ${code}); resuming failed: ${e.message}`));
         } else {
           this.setState(s, 'error', `Claude exited with code ${code}`);
           this.notifier.send('error', { session: s, text: `Claude exited unexpectedly (code ${code}). The conversation is kept; resume it from the console.` });
