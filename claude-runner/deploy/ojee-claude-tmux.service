@@ -20,8 +20,14 @@ ExecStart=@TMUX@ -L ojee-claude -f @ROOT@/deploy/tmux.conf -D
 ExecStop=@TMUX@ -L ojee-claude kill-server
 Restart=on-failure
 RestartSec=5
-MemoryHigh=8G
+# No MemoryHigh: throttling at a soft limit stalls the sessions on reclaim,
+# and that stall is memory pressure, which is exactly what systemd-oomd acts
+# on -- by killing this whole unit, every session in it (2026-10-22, twice).
+# The hard cap stays: past it the kernel kills the one biggest process.
 MemoryMax=10G
+# Ask oomd to pick something else (honoured where systemd supports it for
+# user units).
+ManagedOOMPreference=avoid
 CPUWeight=50
 TasksMax=4096
 
