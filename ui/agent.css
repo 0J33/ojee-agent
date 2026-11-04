@@ -440,3 +440,24 @@
 @media (pointer: coarse), (hover: none), (max-width: 560px) {
   .ag-cl-in, .ag-as-in { font-size: 16px; }
 }
+
+/* Work tab containment (4 Nov): the column never grows past the screen;
+   one-line titles cut short inside it instead of widening the page. */
+.wk { grid-template-columns: minmax(0, 1fr); min-width: 0; max-width: 100%; }
+.wk > *, .wk-section, .wk-msgs, .wk-msg, .wk-upcoming, .wk-people, .wk-tiles { min-width: 0; max-width: 100%; }
+.wk-msg > summary, .wk-up { min-width: 0; }
+.wk-h-row { flex-wrap: wrap; min-width: 0; }
+@media (max-width: 600px) {
+  .wk { gap: var(--s-3); }
+  .wk-headline { font-size: 0.95rem; }
+  .wk-tile { padding: 12px; }
+  .wk-tile-value { font-size: 1.6rem; }
+  .wk-people { grid-template-columns: minmax(0, 1fr); }
+  .wk-person { padding: 12px; }
+  .wk-msg > summary { padding: 10px 12px; }
+  .wk-msg-at { display: none; }
+  .wk-msg-body { padding: 0 12px 12px 28px; }
+  .wk-h-row .btn { padding-inline: 10px; }
+  .wk-foot { gap: var(--s-2); }
+  .wk-foot-actions { width: 100%; }
+}
