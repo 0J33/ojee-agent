@@ -758,6 +758,8 @@ function popMenu(anchor, items, label) {
     },
   };
   menu.querySelector('.ag-cl-pop-item:not([disabled])')?.focus({ preventScroll: true });
+  // On a phone the menu can open past the screen's edge: bring all of it into view.
+  requestAnimationFrame(() => menu.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
 }
 
 /**
@@ -809,6 +811,12 @@ function compactBar(s) {
 function paintTopBar(s) {
   const bar = root?.querySelector('.ag-cl-maxbar');
   if (!bar || (openPop && bar.contains(openPop.anchor))) return;
+  // Rebuild only on a change: a rebuild on every state tick swallowed taps
+  // on its buttons (the switcher, "more", Resume) mid-press.
+  const sig = JSON.stringify([S.max, s.id, s.state, s.alive, s.background, s.title, online(s.device),
+    switchable(s).map((x) => [x.id, x.title, x.state, online(x.device), x.background])]);
+  if (bar.dataset.sig === sig && bar.firstChild) return;
+  bar.dataset.sig = sig;
   const strip = el('div', { class: 'ag-cl-switch', role: 'group', 'aria-label': 'Sessions' },
     switchable(s).map((x) => el('button', {
       class: `ag-cl-switch-item${x.id === s.id ? ' is-current' : ''}${online(x.device) && ['waiting', 'blocked', 'error'].includes(x.state) ? ' is-needs' : ''}`,
@@ -1322,15 +1330,22 @@ function paintAgentBar(s) {
   const list = A.id === s.id ? A.list || [] : [];
   if (cap(s.device).agents === false) {
     const has = (s.background?.subagents || 0) > 0 || S.transcript.view?.hasAgents?.();
+    delete bar.dataset.sig;
     bar.replaceChildren(...(has ? [el('div', { class: 'ag-cl-agentnote' }, svg('info'),
       el('span', {}, `Subagent transcripts need a newer Claude runner on ${devLabel(s.device)}. Restart ojee-claude there to switch to them here.`))] : []));
     requestAnimationFrame(sizeTerminal);
     return;
   }
-  if (!list.length && !A.viewing) { if (bar.firstChild) { bar.replaceChildren(); requestAnimationFrame(sizeTerminal); } return; }
+  if (!list.length && !A.viewing) { delete bar.dataset.sig; if (bar.firstChild) { bar.replaceChildren(); requestAnimationFrame(sizeTerminal); } return; }
   const viewing = A.viewing ? list.find((a) => a.id === A.viewing) || { id: A.viewing, description: A.viewing } : null;
   const running = list.filter((a) => a.running).length;
   const name = (a) => a.description || a.type || a.id;
+  // Rebuild only when what the bar shows changed. It was rebuilt on every
+  // transcript poll (every 2 s while a session works), so a tap that landed
+  // mid-rebuild hit a button that was already gone and the menu never opened.
+  const sig = JSON.stringify([s.id, A.viewing, viewing?.running, list.map((a) => [a.id, a.running, name(a)])]);
+  if (bar.dataset.sig === sig && bar.firstChild) return;
+  bar.dataset.sig = sig;
   const pick = el('button', {
     class: 'ag-cl-agentpick',
     type: 'button',
