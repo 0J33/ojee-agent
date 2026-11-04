@@ -413,3 +413,22 @@
   .wk-foot-actions { margin-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .wk-tile, .wk-person { transition: none; } }
+/* From Claude: the owner's message feed (replaces the Discord webhook). */
+.wk-h-actions { display: inline-flex; gap: var(--s-2); }
+.wk-unread { margin-left: 8px; padding: 1px 6px; border: 1px solid var(--ink); color: var(--ink); letter-spacing: 0.08em; }
+.wk-msgs { display: grid; border: 1px solid var(--line-2); }
+.wk-msg { border-bottom: 1px solid var(--line-2); }
+.wk-msg:last-child { border-bottom: 0; }
+.wk-msg > summary { display: flex; align-items: center; gap: var(--s-2); padding: 10px var(--s-3); cursor: pointer; list-style: none; }
+.wk-msg > summary::-webkit-details-marker { display: none; }
+.wk-msg-dot { flex: none; width: 8px; height: 8px; border: 1px solid var(--line-strong); }
+.wk-msg.is-unread .wk-msg-dot { background: var(--ink); border-color: var(--ink); }
+.wk-msg.is-warn .wk-msg-dot { border-color: var(--warn); }
+.wk-msg.is-warn.is-unread .wk-msg-dot { background: var(--warn); }
+.wk-msg-title { flex: 1; min-width: 0; font-size: 0.82rem; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-msg.is-unread .wk-msg-title { color: var(--ink); font-weight: 700; }
+.wk-msg[open] .wk-msg-title { white-space: normal; }
+.wk-msg-at { flex: none; font-size: 0.68rem; color: var(--dim); white-space: nowrap; }
+.wk-msg-body { padding: 0 var(--s-3) var(--s-3) calc(var(--s-3) + 16px); font-size: 0.8rem; color: var(--ink-2); display: grid; gap: 6px; }
+.wk-msg-body p { margin: 0; overflow-wrap: anywhere; }
+.wk-panel .wk-msgs, .wk-panel .wk-msg > summary { padding-left: 0; padding-right: 0; }

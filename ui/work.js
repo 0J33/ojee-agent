@@ -58,6 +58,10 @@ let loading = false;
 let sweepMsg = null;
 let panel = null;          // { title, sub, groups: [{label, items | nodes, hint}] } or null
 let rerenderRef = () => {};
+let messages = [];        // Claude's messages to the owner, newest first
+const SEEN_KEY = 'ojee-work-seen';
+const seenAt = () => { try { return Number(localStorage.getItem(SEEN_KEY)) || 0; } catch { return 0; } };
+const markSeen = () => { try { localStorage.setItem(SEEN_KEY, String(Date.now())); } catch { /* private window */ } };
 
 // ClickUp gives "deployed to dev" the done status TYPE, so only these names and the closed type count as finished.
 const isDone = (t) => DONE.has(String(t.status).toLowerCase()) || t.stype === 'closed';
@@ -380,12 +384,41 @@ function footer(api) {
       }, 'Sweep now')));
 }
 
+function msgLine(x, unread) {
+  return el('details', { class: `wk-msg ${unread ? 'is-unread' : ''} ${x.severity === 'warn' ? 'is-warn' : ''}` },
+    el('summary', {},
+      el('span', { class: 'wk-msg-dot', 'aria-hidden': 'true' }),
+      el('span', { class: 'wk-msg-title' }, x.title),
+      el('span', { class: 'wk-msg-at' }, agoMs(Date.now() - x.at))),
+    el('div', { class: 'wk-msg-body' },
+      x.body ? x.body.split(/\n+/).map((line) => el('p', {}, line)) : null,
+      x.link ? el('a', { class: 'wk-open', href: x.link, target: '_blank', rel: 'noopener' }, 'Open') : null));
+}
+
+function fromClaude() {
+  const seen = seenAt();
+  const unread = messages.filter((x) => x.at > seen).length;
+  return el('section', { class: 'wk-section' },
+    el('div', { class: 'wk-h-row' },
+      el('h3', { class: 'wk-h' }, 'From Claude', unread ? el('span', { class: 'wk-unread' }, `${unread} new`) : null),
+      el('span', { class: 'wk-h-actions' },
+        unread ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => { markSeen(); rerenderRef(); } }, 'Mark all read') : null,
+        messages.length > 3 ? el('button', {
+          class: 'btn btn--ghost btn--sm', type: 'button',
+          onclick: () => openPanel({ title: 'From Claude', sub: `${messages.length} messages, newest first`, groups: [{ label: 'Messages', nodes: messages.map((x) => msgLine(x, x.at > seen)) }] }),
+        }, `All ${messages.length}`) : null)),
+    messages.length ? el('div', { class: 'wk-msgs' }, messages.slice(0, 3).map((x) => msgLine(x, x.at > seen)))
+      : el('p', { class: 'meta' }, 'No messages yet. Releases, moved deadlines and decisions show up here.'));
+}
+
 function headline(m) {
   const pr = m.problems;
   const bad = pr.failing.length + pr.late.length + pr.fixing.length;
   const parts = [];
   const nOwner = (m.notes.owner || []).length;
   if (nOwner) parts.push(nOwner === 1 ? '1 thing needs you' : `${nOwner} things need you`);
+  const nNew = messages.filter((x) => x.at > seenAt()).length;
+  if (nNew) parts.push(nNew === 1 ? '1 new message from Claude' : `${nNew} new messages from Claude`);
   if (m.soon.length) parts.push(`${m.soon.length} due within 48 hours`);
   if (bad) parts.push(plural(bad, 'problem'));
   const text = parts.length ? `${parts.join(', ')}.` : 'All clear: nothing needs you and nothing is late.';
@@ -402,8 +435,9 @@ export async function loadWork(api) {
   if (loading) return;
   loading = true;
   try {
-    const [d] = await Promise.all([api('/work'), loadSession(api)]);
+    const [d, msg] = await Promise.all([api('/work'), api('/work/messages').catch(() => null), loadSession(api)]);
     data = d;
+    if (msg && Array.isArray(msg.messages)) messages = msg.messages;
   } catch (e) {
     data = { error: e.message };
   } finally {
@@ -431,5 +465,5 @@ export function viewWork(api, rerender) {
   }
   const m = model(data);
   return el('div', { class: 'wk' },
-    headline(m), tiles(m), people(m), upcoming(m), lists(m), footer(api), viewPanel(m));
+    headline(m), tiles(m), fromClaude(), people(m), upcoming(m), lists(m), footer(api), viewPanel(m));
 }

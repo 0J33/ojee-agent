@@ -105,6 +105,9 @@ const NOTIFY_TYPES = [
   claudeType('model-fallback', 'switched model', 'A model hit its limit and the session moved to the fallback.', ['discord'], 'info'),
   claudeType('account-switch', 'switched account', 'An account ran out and sessions moved to another.', ['discord'], 'info'),
   claudeType('done', 'finished', 'A session finished its turn (off by default: unattended work finishing is the normal case). A session set to ping when done always does.', [], 'info'),
+  // Claude's messages to the owner about the Forsa work (src/work.js): what used to go to a Discord webhook.
+  { id: 'agent.work-update', label: 'Work: message from Claude', description: 'Claude reports something about the Forsa work: a release, a moved deadline, a decision taken, a problem.', severity: 'info', defaultChannels: ['app'], view: 'work' },
+  { id: 'agent.work-alert', label: 'Work: needs your attention', description: 'Claude hit something only you can unblock.', severity: 'warn', defaultChannels: ['app'], view: 'work' },
   { id: 'agent.assistant-needs-you', label: 'Assistant: needs you', description: 'The Assistant wants to use a tool that asks first, or has a question.', severity: 'warn', defaultChannels: ['app'], view: 'assistant' },
   { id: 'agent.assistant-failed', label: 'Assistant: could not answer', description: 'Every model refused, or the turn broke.', severity: 'warn', defaultChannels: ['app'], view: 'assistant' },
   { id: 'agent.assistant-replied', label: 'Assistant: replied', description: 'A reply finished, with its first lines.', severity: 'info', defaultChannels: [], view: 'assistant' },
@@ -361,7 +364,7 @@ app.get('/api/odysseus', auth, async (_req, res) => res.json(await odysseus()));
 
 /* ── Work: the Forsa work picture (src/work.js) ──────────────────────── */
 
-mountWork(app, auth, RUNNERS);
+mountWork(app, auth, RUNNERS, (n) => assistantModule.emitNotify(n));
 
 /* ── the Claude runners ───────────────────────────────────────────────── */
 

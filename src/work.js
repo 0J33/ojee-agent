@@ -12,6 +12,8 @@
 
 const fs = require('fs');
 const fetch = require('node-fetch');
+const express = require('express');
+const express_json = express.json({ limit: '64kb' });
 
 const WORK_FILE = process.env.WORK_FILE || '/host/home/ojee/.local/share/forsa-work/work.json';
 const PROMPT_FILE = process.env.WORK_PROMPT_FILE || '/host/home/ojee/.local/share/forsa-work/sweep-prompt.txt';
@@ -67,7 +69,26 @@ async function findSession(runners) {
   };
 }
 
-module.exports = function mountWork(app, auth, runners) {
+const NOTES_FILE = process.env.WORK_NOTES_FILE || '/app/data/work-messages.json';
+const readNotes = () => { try { return JSON.parse(fs.readFileSync(NOTES_FILE, 'utf8')); } catch { return []; } };
+const writeNotes = (list) => { try { fs.writeFileSync(NOTES_FILE, JSON.stringify(list.slice(0, 200))); } catch { /* best effort */ } };
+const clip = (v, n) => String(v || '').replace(/\s+$/, '').slice(0, n);
+
+module.exports = function mountWork(app, auth, runners, emitNotify = () => {}) {
+  // Messages from Claude to the owner: kept here (the Work tab's feed) and
+  // pushed to the console's notifications. They replace the Discord webhook.
+  app.get('/api/work/messages', auth, (_req, res) => res.json({ messages: readNotes() }));
+  app.post('/api/work/messages', auth, express_json, (req, res) => {
+    const b = req.body || {};
+    const title = clip(b.title, 200);
+    if (!title) return res.status(400).json({ error: 'A message needs a title.' });
+    const severity = b.severity === 'warn' ? 'warn' : 'info';
+    const m = { id: `w${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, title, body: clip(b.body, 4000), severity, link: clip(b.link, 500) || null, at: Date.now() };
+    writeNotes([m, ...readNotes()]);
+    emitNotify({ id: severity === 'warn' ? 'agent.work-alert' : 'agent.work-update', title: m.title, body: m.body.slice(0, 600), tag: `work:${m.id}`, severity, view: 'work', at: m.at });
+    res.json({ ok: true, message: m });
+  });
+
   app.get('/api/work', auth, (_req, res) => res.json(readWork()));
 
   app.get('/api/work/session', auth, async (_req, res) => {
