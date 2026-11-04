@@ -1574,7 +1574,23 @@ function paintLogin(update) {
   const L = S.login;
   const a = dataOf(L.dev)?.accounts?.find((x) => x.id === L.id);
   const st = S.login.state || {};
-  const code = el('input', { class: 'input', placeholder: 'Paste the code from the sign-in page', spellcheck: 'false', autocomplete: 'off' });
+  // One code box for the whole login. The panel is rebuilt on every poll
+  // (every 2 s while the login runs); a fresh <input> each time wiped a
+  // pasted code and took the focus away mid-paste. Reusing the node keeps
+  // its value; focus and selection are put back after it is re-attached.
+  if (!L.codeEl) {
+    L.codeEl = el('input', { class: 'input', placeholder: 'Paste the code from the sign-in page', spellcheck: 'false', autocomplete: 'off' });
+    L.codeEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); L.submitCode?.(); } });
+  }
+  const code = L.codeEl;
+  const hadFocus = document.activeElement === code;
+  const sel = hadFocus ? [code.selectionStart, code.selectionEnd] : null;
+  const refocus = () => { if (hadFocus && code.isConnected) { code.focus(); try { code.setSelectionRange(sel[0], sel[1]); } catch { /* not a text field */ } } };
+  L.submitCode = async () => {
+    if (!code.value.trim()) return;
+    const ok = await act('code', () => post(L.dev, `/accounts/${L.id}/login/code`, { code: code.value.trim() }), 'Code sent');
+    if (ok) { code.value = ''; pollLogin(); }
+  };
   const status = !S.login.state ? 'Starting the login…'
     : st.finished ? 'Logged in.'
       : st.failed ? `Login failed: ${st.error}. Start again and paste the whole code — it ends with a # part — from the page that link opens, not an older one.`
@@ -1601,11 +1617,7 @@ function paintLogin(update) {
       el('button', {
         class: 'btn btn--sm',
         type: 'button',
-        onclick: async () => {
-          if (!code.value.trim()) return;
-          const ok = await act('code', () => post(L.dev, `/accounts/${L.id}/login/code`, { code: code.value.trim() }), 'Code sent');
-          if (ok) { code.value = ''; pollLogin(); }
-        },
+        onclick: () => L.submitCode(),
       }, 'Submit')) : null,
     el('div', { class: 'ag-cl-login-actions' },
       el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => { S.login.showTerm = !S.login.showTerm; paintLogin(); } }, svg('terminal'), S.login.showTerm ? 'Hide terminal' : 'Show terminal'),
@@ -1620,11 +1632,13 @@ function paintLogin(update) {
     const old = host.querySelector('.ag-cl-login-term');
     panel.querySelector('.ag-cl-login-term').replaceWith(old);
     host.replaceChildren(panel);
+    refocus();
     return;
   }
   S.login.term?.teardown();
   S.login.term = null;
   host.replaceChildren(panel);
+  refocus();
   if (S.login.showTerm && st.running) {
     S.login.term = startTerminal({ host: panel.querySelector('.ag-cl-login-term'), ctx, path: `/d/${encodeURIComponent(L.dev)}/accounts/${L.id}/terminal` });
   }
