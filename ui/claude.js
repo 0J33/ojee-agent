@@ -1238,6 +1238,7 @@ function mountTranscript(s, body) {
       } else view.append(r.messages || []);
       T.cursor = r.cursor;
       view.error(null);
+      if (!agent) paintQueued(session(s.id) || s);
       paintLive(session(s.id) || s);
       paintAgentBar(session(s.id) || s);
     } catch (e) {
@@ -1286,6 +1287,20 @@ function watchAgents(s) {
 }
 
 /** Show a subagent's transcript, or the session's own (null). */
+// Messages sent while the session was mid-turn, kept until they show up in
+// the transcript (sessionStorage, so a reload does not lose them).
+const QUEUE_KEY = 'ag-cl-queued:';
+function queued(id) { try { return JSON.parse(sessionStorage.getItem(QUEUE_KEY + id) || '[]'); } catch { return []; } }
+function setQueued(id, list) { try { if (list.length) sessionStorage.setItem(QUEUE_KEY + id, JSON.stringify(list)); else sessionStorage.removeItem(QUEUE_KEY + id); } catch { /* private window */ } }
+/** Drop the queued messages that have arrived (or are two hours old), then draw the rest. */
+function paintQueued(s) {
+  const view = S.transcript.id === s.id && !S.agents.viewing ? S.transcript.view : null;
+  let list = queued(s.id).filter((q) => Date.now() - q.at < 7200000);
+  if (view) list = list.filter((q) => !view.hasUserText(q.text, q.at));
+  setQueued(s.id, list);
+  view?.setPending(list);
+}
+
 const AGENT_KEY = 'ag-cl-agent:';
 function savedAgent(id) { try { return sessionStorage.getItem(AGENT_KEY + id) || null; } catch { return null; } }
 function saveAgent(id, agent) { try { if (agent) sessionStorage.setItem(AGENT_KEY + id, agent); else sessionStorage.removeItem(AGENT_KEY + id); } catch { /* private window */ } }
@@ -1327,7 +1342,8 @@ function paintAgentBar(s) {
   const bar = root?.querySelector('.ag-cl-agentbar');
   if (!bar || !s || openPop?.anchor && bar.contains(openPop.anchor)) return;
   const A = S.agents;
-  const list = A.id === s.id ? A.list || [] : [];
+  // Running subagents only (owner, 4 Nov); the one being read stays listed after it finishes.
+  const list = (A.id === s.id ? A.list || [] : []).filter((a) => a.running || a.id === A.viewing);
   if (cap(s.device).agents === false) {
     const has = (s.background?.subagents || 0) > 0 || S.transcript.view?.hasAgents?.();
     delete bar.dataset.sig;
@@ -1365,7 +1381,7 @@ function paintAgentBar(s) {
   },
   viewing ? el('span', { class: viewing.running ? 'dot dot--live' : 'dot dot--ok' }) : svg('terminal'),
   el('span', { class: 'ag-cl-agentpick-label' }, viewing ? `Subagent: ${name(viewing)}` : 'Main session'),
-  el('span', { class: 'ag-cl-agentpick-count' }, `${list.length} subagent${list.length === 1 ? '' : 's'}${running ? ` · ${running} running` : ''}`),
+  el('span', { class: 'ag-cl-agentpick-count' }, `${running} running`),
   svg('chevron', 'ic ag-cl-mx-chev'));
   bar.replaceChildren(...[pick,
     viewing ? el('button', { class: 'btn btn--ghost btn--sm ag-cl-agentback', type: 'button', title: 'Back to the main session', onclick: () => viewAgent(s, null) }, svg('back'), lbl('Main')) : null].filter(Boolean));
@@ -1444,11 +1460,16 @@ function paintLive(s) {
     sub = ONE_LINE(s.detail || (s.lastActivityAt ? `last activity ${ago(s.lastActivityAt)}` : ''));
   }
   const agents = p?.agents || [];
+  // Rebuild only on a change, and keep the agents list open across rebuilds:
+  // it folded shut every two seconds while a session worked.
+  const sig = JSON.stringify([state, main, sub, agents, p?.mode, p?.draft]);
+  if (box.dataset.sig === sig && box.firstChild) return;
+  box.dataset.sig = sig;
   box.replaceChildren(...[
     el('span', { class: `ag-cl-live-dot ag-cl-live-dot--${state}` }),
     el('span', { class: 'ag-cl-live-main', title: String(main || '') }, main),
     sub ? el('span', { class: 'ag-cl-live-sub', title: sub }, sub) : null,
-    agents.length ? el('details', { class: 'ag-cl-live-agents' },
+    agents.length ? el('details', { class: 'ag-cl-live-agents', open: S.liveAgentsOpen || false, ontoggle: (e) => { S.liveAgentsOpen = e.currentTarget.open; } },
       el('summary', { title: agents.map((a) => `${a.name}: ${a.doing}`).join('\n') }, `${agents.length} agent${agents.length === 1 ? '' : 's'}`),
       el('div', { class: 'ag-cl-live-agentlist' }, agents.map((a) => el('div', { title: `${a.name}: ${a.doing}${a.meta ? ` · ${a.meta}` : ''}` }, el('b', {}, a.name), ` ${a.doing}`, a.meta ? el('span', { class: 'meta' }, ` · ${a.meta}`) : null)))) : null,
     p?.mode ? el('span', { class: 'ag-cl-live-mode', title: 'Permission mode (Shift+Tab switches it)' }, p.mode) : null,
@@ -1792,6 +1813,7 @@ async function send(id) {
   // model switch, into a session that is running. Everything else goes as a
   // message, which also resumes a stopped session and answers a question.
   const raw = /^[/!#]/.test(text) && s.alive && cap(dev).keys !== false;
+  const busyNow = s.alive && ['running', 'starting'].includes(s.state);
   const r = await act(`send:${id}`, async () => {
     if (raw) {
       try { return await keysApi(s, { text, enter: true }); } catch (e) { if (!e.old) throw e; }
@@ -1801,6 +1823,7 @@ async function send(id) {
   if (r) {
     input.value = '';
     input.style.height = '';
+    if (busyNow && !raw) { setQueued(id, [...queued(id), { text, at: Date.now() }]); paintQueued(s); }
     if (S.transcript.id === id) S.transcript.view?.follow();
     upsert(dev, r);
     paint('session');

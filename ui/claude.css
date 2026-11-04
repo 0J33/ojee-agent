@@ -792,3 +792,9 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 @media (prefers-reduced-motion: reduce) { .ag-cl-tjump { transition: none; } }
 
 @media (max-width: 560px) { .ag-cl-transcript { padding: 10px 50px 16px 10px; } }
+
+/* Queued messages: sent while Claude was mid-turn, shown until they arrive. */
+.ag-cl-t-pending { display: grid; gap: 4px; margin-top: 4px; }
+.ag-cl-t-pending:empty { display: none; }
+.ag-cl-t-user.is-pending { opacity: 0.6; border-style: dashed; }
+.ag-cl-t-queued { font-family: var(--hud, var(--mono)); font-size: 0.55rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--warn); }

@@ -343,7 +343,10 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier, onAgen
     else if (e.key === 'End') { e.preventDefault(); toBottom(true); }
   });
   const wrap = el('div', { class: 'ag-cl-txwrap' }, scroll, jumps, jump);
-  scroll.append(top, list);
+  // Messages sent while Claude was mid-turn: shown faded at the end until
+  // they turn up in the conversation as real turns.
+  const pendingBox = el('div', { class: 'ag-cl-t-pending' });
+  scroll.append(top, list, pendingBox);
 
   // items: every message loaded, tool results folded into their call.
   // first: the index of the oldest item drawn.
@@ -531,6 +534,24 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier, onAgen
       return null;
     },
     count: () => items.length,
+    /** Whether a turn of yours with this text has arrived since `since` (ms). */
+    hasUserText(text, since) {
+      const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
+      const want = norm(text);
+      return items.some((m) => {
+        if (m.role !== 'user' || norm(m.text) !== want) return false;
+        const at = typeof m.at === 'number' ? m.at : Date.parse(m.at);
+        return !Number.isFinite(at) || at >= since - 120000;
+      });
+    },
+    /** Draw the queued messages (newest last), or none. */
+    setPending(queued) {
+      const stick = follow || nearBottom();
+      pendingBox.replaceChildren(...(queued || []).map((q) => el('div', { class: 'ag-cl-t-user is-pending' },
+        el('div', { class: 'ag-cl-t-head' }, el('span', { class: 'ag-cl-t-who' }, 'You'), el('span', { class: 'ag-cl-t-queued' }, 'Queued: sends when Claude finishes this step'), el('span', { class: 'ag-cl-t-time' }, time(q.at))),
+        el('div', { class: 'ag-cl-t-text' }, q.text))));
+      if (stick) toBottom(true);
+    },
     /** Whether this conversation launched any subagents. */
     hasAgents: () => items.some((m) => m.role === 'tool' && (m.tool === 'Agent' || m.tool === 'Task')),
     /** What the reader sent goes to the bottom with them. */
