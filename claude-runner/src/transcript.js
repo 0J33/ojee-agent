@@ -187,6 +187,29 @@ function toMessages(entries, { detail = false, sidechain = false } = {}) {
       continue;
     }
 
+    // A message sent while Claude was mid-turn is not a `user` entry: Claude
+    // Code records it as a queued_command attachment when it reaches the turn.
+    // Yours (origin human) are messages like any other; another session's
+    // (peer) is a note; task notifications stay out, as above.
+    if (e.type === 'attachment' && e.attachment?.type === 'queued_command') {
+      const a = e.attachment;
+      const kind = a.origin?.kind || (a.commandMode === 'task-notification' ? 'task-notification' : a.humanTurn ? 'human' : null);
+      const p = a.prompt;
+      const text = typeof p === 'string' ? p
+        : Array.isArray(p) ? p.filter((b) => b && b.type === 'text').map((b) => b.text).join('\n') : '';
+      const when = a.timestamp || at;
+      if (kind === 'human' && text.trim()) {
+        const m = { role: 'user', text, at: when, uuid: e.uuid, midTurn: true };
+        if (detail && Array.isArray(p)) { const n = p.filter((b) => b && b.type === 'image').length; if (n) m.images = n; }
+        out.push(m);
+      } else if (kind === 'peer' && detail && text.trim()) {
+        const from = /from-name="([^"]+)"/.exec(text)?.[1] || 'another session';
+        const body = text.replace(/<\/?cross-session-message[^>]*>/g, '').trim();
+        out.push({ role: 'note', kind: 'peer', text: clip(`From ${from}: ${body}`, 600), at: when, uuid: e.uuid });
+      }
+      continue;
+    }
+
     if (e.type === 'system' && e.subtype === 'compact_boundary') {
       out.push({ role: 'note', text: 'Conversation compacted', at, uuid: e.uuid });
     } else if (detail && e.type === 'system') {
@@ -195,7 +218,18 @@ function toMessages(entries, { detail = false, sidechain = false } = {}) {
       else if (e.subtype === 'scheduled_task_fire' && e.content) out.push({ role: 'note', kind: 'schedule', text: clip(e.content, 300), at, uuid: e.uuid });
     }
   }
-  return out;
+  // The same words twice in a row within a minute are one message recorded
+  // two ways (queued, then delivered as a turn): show it once.
+  return out.filter((m, i) => {
+    if (m.role !== 'user') return true;
+    for (let j = i - 1; j >= 0 && j >= i - 6; j--) {
+      const o = out[j];
+      if (o.role !== 'user') continue;
+      if (o.text.trim() === m.text.trim() && Math.abs(Date.parse(m.at) - Date.parse(o.at)) < 60000) return false;
+      break;
+    }
+    return true;
+  });
 }
 
 /**

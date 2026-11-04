@@ -61,3 +61,21 @@ test('describe reads cwd, title and first prompt', () => {
   assert.equal(d.title, 'Parser refactor');
   assert.equal(d.firstPrompt, 'refactor the parser');
 });
+
+test('toMessages shows messages sent mid-turn (queued_command attachments), once', () => {
+  const at = '2026-11-04T21:00:00.000Z';
+  const later = '2026-11-04T21:00:20.000Z';
+  const msgs = toMessages([
+    { type: 'attachment', uuid: 'a1', timestamp: at, attachment: { type: 'queued_command', prompt: 'also use full width of chat', commandMode: 'prompt', origin: { kind: 'human' }, humanTurn: true, timestamp: at } },
+    { type: 'attachment', uuid: 'a2', timestamp: at, attachment: { type: 'queued_command', prompt: '<task-notification><summary>done</summary></task-notification>', commandMode: 'task-notification', origin: { kind: 'task-notification' } } },
+    { type: 'attachment', uuid: 'a3', timestamp: at, attachment: { type: 'queued_command', prompt: '<cross-session-message from="x" from-name="Team">hi</cross-session-message>', commandMode: 'prompt', origin: { kind: 'peer', from: 'x' } } },
+    { type: 'user', uuid: 'u1', timestamp: later, message: { role: 'user', content: 'also use full width of chat' } },
+    { type: 'user', uuid: 'u2', timestamp: later, message: { role: 'user', content: 'a different message' } },
+  ], { detail: true });
+  const users = msgs.filter((m) => m.role === 'user');
+  assert.deepEqual(users.map((m) => m.text), ['also use full width of chat', 'a different message']);
+  assert.equal(users[0].midTurn, true, 'the mid-turn message is kept, the duplicate dropped');
+  assert.ok(!msgs.some((m) => m.role === 'user' && /task-notification/.test(m.text)), 'task notices are not your messages');
+  const peer = msgs.find((m) => m.kind === 'peer');
+  assert.ok(peer && /From Team: hi/.test(peer.text), 'a peer message is a labelled note');
+});
