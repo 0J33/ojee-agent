@@ -16,7 +16,7 @@ import { copyText } from './claude-term.js';
 
 const STEP = 120;
 
-export function createTranscript({ el, svg, modelLabel, toast, onEarlier }) {
+export function createTranscript({ el, svg, modelLabel, toast, onEarlier, onAgent }) {
   /* ── Markdown ─────────────────────────────────────────────── */
 
   const INLINE = /`([^`\n]+)`|\*\*([^*\n]+?)\*\*|(?<![\w*])\*([^*\s][^*\n]*?)\*(?![\w*])|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"`])/g;
@@ -185,6 +185,7 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier }) {
       case 'Read': return el('div', { class: 'ag-cl-t-in' }, el('div', { class: 'ag-cl-t-path' }, i.file_path, i.offset || i.limit ? ` (lines ${i.offset || 1} to ${(i.offset || 1) + (i.limit || 0)})` : ''));
       case 'TodoWrite': return el('div', { class: 'ag-cl-t-in ag-cl-todos' }, (i.todos || []).map((t) => el('div', { class: `ag-cl-todo is-${t.status}` }, el('span', {}, TODO[t.status] || '☐'), el('span', {}, t.content))));
       case 'Task': case 'Agent': return el('div', { class: 'ag-cl-t-in' },
+        onAgent && m.id ? el('button', { class: 'btn btn--ghost btn--sm ag-cl-t-agentbtn', type: 'button', onclick: (e) => { e.preventDefault(); onAgent(m.id); } }, svg('log'), 'Open its transcript') : null,
         el('div', { class: 'ag-cl-t-desc' }, [i.subagent_type, i.description].filter(Boolean).join(': ')),
         i.prompt ? clamp(el('div', { class: 'ag-cl-t-prose' }, md(i.prompt)), lineCount(i.prompt), 12) : null);
       default: return i.json && i.json !== '{}' ? el('div', { class: 'ag-cl-t-in' }, clamp(pre(i.json), lineCount(i.json), 20)) : null;
@@ -204,6 +205,10 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier }) {
     }
     return [el('span', {}, m.text || '')];
   }
+
+  // A summary's content sits in a span: Safari does not lay out a <summary>
+  // itself as grid or flex, and the row then ran past the edge.
+  const sum = (...kids) => el('summary', { class: 'ag-cl-t-sum' }, el('span', { class: 'ag-cl-t-sumrow' }, ...kids));
 
   function toolMeta(m) {
     const r = m.result;
@@ -228,7 +233,7 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier }) {
           r.text ? copyBtn(() => r.text, 'Copy output') : null),
         r.text?.trim() ? clamp(pre(r.text, r.error ? 'is-err' : ''), lineCount(r.text), 24) : el('div', { class: 'ag-cl-t-dim' }, '(no output)')) : null;
       d.replaceChildren(
-        el('summary', { class: 'ag-cl-t-sum' },
+        sum(
           el('span', { class: 'ag-cl-t-chev' }, svg('chevron')),
           el('span', { class: 'ag-cl-t-name' }, m.tool),
           el('span', { class: 'ag-cl-t-what' }, ...toolLine(m)),
@@ -245,7 +250,7 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier }) {
       fill();
       d.open = true;
     };
-    d.replaceChildren(el('summary', { class: 'ag-cl-t-sum' },
+    d.replaceChildren(sum(
       el('span', { class: 'ag-cl-t-chev' }, svg('chevron')),
       el('span', { class: 'ag-cl-t-name' }, m.tool),
       el('span', { class: 'ag-cl-t-what' }, ...toolLine(m)),
@@ -277,15 +282,15 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier }) {
             copyBtn(() => m.text, 'Copy reply')),
           md(m.text));
       case 'thinking':
-        if (!m.text?.trim()) return el('div', { class: 'ag-cl-t-think is-empty', title: 'The model thought here; it does not save the text' }, el('span', { class: 'ag-cl-t-thinkmark' }, '∴'), 'Thought');
+        if (!m.text?.trim()) return el('div', { class: 'ag-cl-t-think is-empty', title: 'The model thought here; it does not save the text' }, el('span', { class: 'ag-cl-t-thinkmark' }, '∴'), el('span', {}, 'Thought'));
         return el('details', { class: 'ag-cl-t-think' },
-          el('summary', {}, el('span', { class: 'ag-cl-t-thinkmark' }, '∴'), 'Thinking', el('span', { class: 'ag-cl-t-thinkprev' }, m.text.replace(/\s+/g, ' ').slice(0, 140))),
+          el('summary', { class: 'ag-cl-t-thinksum' }, el('span', { class: 'ag-cl-t-thinkrow' }, el('span', { class: 'ag-cl-t-thinkmark' }, '∴'), el('span', {}, 'Thinking'), el('span', { class: 'ag-cl-t-thinkprev' }, m.text.replace(/\s+/g, ' ').slice(0, 140)))),
           el('div', { class: 'ag-cl-t-thinkbody' }, md(m.text)));
       case 'tool': return toolRow(m);
       case 'result': {
         const first = String(m.text || '').split('\n')[0];
         return el('details', { class: `ag-cl-t-tool${m.error ? ' is-bad' : ''}` },
-          el('summary', { class: 'ag-cl-t-sum' }, el('span', { class: 'ag-cl-t-chev' }, svg('chevron')), el('span', { class: 'ag-cl-t-name' }, 'Output'), el('span', { class: 'ag-cl-t-what' }, first || '(no output)')),
+          sum( el('span', { class: 'ag-cl-t-chev' }, svg('chevron')), el('span', { class: 'ag-cl-t-name' }, 'Output'), el('span', { class: 'ag-cl-t-what' }, first || '(no output)')),
           el('div', { class: 'ag-cl-t-body' }, pre(m.text || '')));
       }
       case 'command':
@@ -497,6 +502,8 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier }) {
       return null;
     },
     count: () => items.length,
+    /** Whether this conversation launched any subagents. */
+    hasAgents: () => items.some((m) => m.role === 'tool' && (m.tool === 'Agent' || m.tool === 'Task')),
     /** What the reader sent goes to the bottom with them. */
     follow() { follow = true; toBottom(true); },
     destroy() { io.disconnect(); ro.disconnect(); },

@@ -32,6 +32,8 @@ export const el = (tag, attrs = {}, ...kids) => {
     else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
     else n.setAttribute(k, v === true ? '' : String(v));
   }
+  // 16px on a touch screen (agent.css), or iOS zooms in on focus.
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') n.classList.add('ag-as-in');
   for (const kid of kids.flat()) {
     if (kid == null || kid === false) continue;
     n.append(kid.nodeType ? kid : document.createTextNode(String(kid)));

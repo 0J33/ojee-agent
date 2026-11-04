@@ -67,7 +67,7 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 
 /* ── a session ──────────────────────────────────────────────── */
 
-.ag-cl-detail { gap: var(--s-2); }
+.ag-cl-detail { gap: var(--s-2); min-width: 0; }
 
 .ag-cl-head {
   display: flex; align-items: flex-start; gap: var(--s-2); flex-wrap: wrap;
@@ -114,7 +114,7 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 
 /* The terminal fills the viewport rather than growing the page - the same
    bound ojee-remote's Shell uses, so it never takes the scrollbar with it. */
-.ag-cl-body { display: flex; flex-direction: column; gap: 2px; min-height: 0; }
+.ag-cl-body { display: flex; flex-direction: column; gap: 2px; min-height: 0; min-width: 0; }
 .ag-cl-term {
   /* --ag-cl-termh is measured by sizeTerminal(); the calc is only the first
      frame's guess. */
@@ -203,6 +203,67 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-maxacts .ic { width: 15px; height: 15px; }
 .ag-cl-switch-item.is-needs { border-color: color-mix(in srgb, var(--warn) 55%, transparent); }
 .ag-cl-switch-item .ag-cl-devtag { margin-right: 0; }
+
+/* The phone's maximized bar (compactBar in claude.js): one row. Hidden
+   wherever the full bar fits. */
+.ag-cl-maxbar { position: relative; }
+.ag-cl-mx { display: none; }
+.ag-cl-mx-name {
+  display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; height: 40px; padding: 0 10px;
+  background: var(--bg-2); border: 1px solid var(--line-2); color: var(--ink);
+  font-family: var(--mono); font-size: 0.74rem; text-align: left; cursor: pointer;
+}
+.ag-cl-mx-name > .dot { flex: none; }
+.ag-cl-mx-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-cl-mx-chev { flex: none; width: 14px; height: 14px; color: var(--dim); transform: rotate(90deg); }
+.ag-cl-mx-name[aria-expanded="true"] .ag-cl-mx-chev { transform: rotate(-90deg); }
+.ag-cl-mx-act { flex: none; height: 40px; min-height: 40px; align-self: center; }
+.ag-cl-mx-act.ag-cl-sq { width: 40px; padding: 0; justify-content: center; }
+.ag-cl-mx-act .ic { width: 16px; height: 16px; }
+.ag-cl-pop {
+  position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; right: 0;
+  display: grid; max-height: min(60vh, 420px); overflow-y: auto; overscroll-behavior: contain;
+  background: var(--bg-2); border: 1px solid var(--line-strong);
+}
+.ag-cl-pop-item {
+  display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 10px;
+  min-height: 46px; padding: 6px 12px; text-align: left;
+  background: transparent; border: 0; border-bottom: 1px solid var(--line-2);
+  color: var(--ink); font-family: var(--mono); font-size: 0.76rem; cursor: pointer;
+}
+.ag-cl-pop-item:last-child { border-bottom: 0; }
+.ag-cl-pop-item:hover, .ag-cl-pop-item:focus-visible { background: var(--accent-08); outline: none; }
+.ag-cl-pop-item.is-current { box-shadow: inset 2px 0 0 var(--accent); }
+.ag-cl-pop-item.is-danger { color: var(--err); }
+.ag-cl-pop-item:disabled { opacity: 0.45; cursor: not-allowed; }
+.ag-cl-pop-item .ic { width: 16px; height: 16px; }
+.ag-cl-pop-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-cl-pop-meta { font-family: var(--hud); font-size: 0.55rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); white-space: nowrap; }
+
+/* The switcher between the session and its subagents (paintAgentBar). */
+.ag-cl-agentbar { position: relative; display: flex; align-items: center; gap: 4px; min-width: 0; flex: none; }
+.ag-cl-agentbar:empty { display: none; }
+.ag-cl-agentpick {
+  display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; height: 38px; padding: 0 10px;
+  background: var(--bg-2); border: 1px solid var(--line-2); color: var(--ink);
+  font-family: var(--mono); font-size: 0.72rem; text-align: left; cursor: pointer;
+}
+.ag-cl-agentbar.is-agent .ag-cl-agentpick { border-color: var(--accent); }
+.ag-cl-agentpick > .dot, .ag-cl-agentpick > .ic { flex: none; }
+.ag-cl-agentpick > .ic:first-child { width: 15px; height: 15px; color: var(--dim); }
+.ag-cl-agentpick-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-cl-agentpick-count { flex: none; font-family: var(--hud); font-size: 0.55rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); white-space: nowrap; }
+.ag-cl-agentpick[aria-expanded="true"] .ag-cl-mx-chev { transform: rotate(-90deg); }
+.ag-cl-agentback { flex: none; height: 38px; }
+.ag-cl-agentback .ic { width: 15px; height: 15px; }
+.ag-cl-agentnote {
+  display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 10px;
+  border: 1px solid var(--line-2); background: var(--bg-2);
+  font-family: var(--mono); font-size: 0.68rem; color: var(--ink-2);
+}
+.ag-cl-agentnote .ic { flex: none; width: 15px; height: 15px; color: var(--warn); }
+.ag-cl-t-agentbtn { justify-self: start; }
+.ag-cl-t-agentbtn .ic { width: 15px; height: 15px; }
 
 /* ── keys ───────────────────────────────────────────────────────
    Grouped, every key one tap. Square, mono, big enough for a thumb. */
@@ -318,11 +379,16 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-t-think {
   font-family: var(--mono); font-size: 0.7rem; color: var(--dim); padding: 2px 2px;
 }
-.ag-cl-t-think > summary { display: flex; align-items: baseline; gap: 8px; cursor: pointer; list-style: none; min-height: 26px; align-items: center; }
-.ag-cl-t-think > summary::-webkit-details-marker { display: none; }
+.ag-cl-t-think { min-width: 0; }
+/* The row is a span inside the summary: Safari will not make a <summary>
+   itself a flex box, and the preview then ran past the edge. */
+.ag-cl-t-thinksum { display: block; cursor: pointer; list-style: none; min-width: 0; }
+.ag-cl-t-thinksum::-webkit-details-marker { display: none; }
+.ag-cl-t-thinkrow { display: flex; align-items: center; gap: 8px; min-height: 26px; min-width: 0; }
+.ag-cl-t-thinkrow > span { flex: none; }
 .ag-cl-t-think.is-empty { display: flex; align-items: center; gap: 8px; min-height: 22px; }
 .ag-cl-t-thinkmark { color: var(--ink-2); }
-.ag-cl-t-thinkprev { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; }
+.ag-cl-t-thinkrow > .ag-cl-t-thinkprev { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; }
 .ag-cl-t-think[open] .ag-cl-t-thinkprev { display: none; }
 .ag-cl-t-thinkbody { margin: 4px 0 6px 6px; padding-left: 12px; border-left: 1px solid var(--line-2); font-style: italic; }
 .ag-cl-t-thinkbody .ag-cl-md { font-size: 0.74rem; color: var(--ink-2); }
@@ -331,17 +397,18 @@ button.ag-cl-row:hover { background: var(--accent-03); }
    share their hairlines, so a run of them reads as one block. */
 .ag-cl-t-tool { border: 1px solid var(--line-2); background: var(--bg-1); }
 .ag-cl-t-tool + .ag-cl-t-tool { margin-top: -5px; }
+.ag-cl-t-tool { min-width: 0; }
 .ag-cl-t-sum {
-  display: grid; grid-template-columns: 14px auto minmax(0, 1fr) auto; align-items: center; gap: 8px;
-  min-height: 34px; padding: 4px 10px; cursor: pointer; list-style: none;
+  display: block; min-width: 0; padding: 4px 10px; cursor: pointer; list-style: none;
   font-family: var(--mono); font-size: 0.7rem; color: var(--ink-2);
 }
+.ag-cl-t-sumrow { display: grid; grid-template-columns: 14px auto minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 26px; min-width: 0; }
 .ag-cl-t-sum::-webkit-details-marker { display: none; }
 .ag-cl-t-sum:hover { background: var(--accent-03); color: var(--ink); }
 .ag-cl-t-chev { display: grid; place-items: center; color: var(--dim); transition: transform var(--dur-2); }
 .ag-cl-t-chev .ic { width: 14px; height: 14px; }
 .ag-cl-t-tool[open] > .ag-cl-t-sum .ag-cl-t-chev { transform: rotate(90deg); }
-.ag-cl-t-name { font-weight: 700; color: var(--ink); }
+.ag-cl-t-name { font-weight: 700; color: var(--ink); white-space: nowrap; }
 .ag-cl-t-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
 .ag-cl-t-what > span + span { margin-left: 8px; }
 .ag-cl-t-file { color: var(--ink); }
@@ -457,7 +524,8 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-md-th { color: var(--ink); background: var(--bg-2); }
 
 /* ── under the transcript: now, a menu, keys, the message box ───── */
-.ag-cl-compose { display: grid; gap: 4px; }
+.ag-cl-compose { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-width: 0; }
+.ag-cl-txkeys, .ag-cl-menu { min-width: 0; }
 .ag-cl-compose[hidden] { display: none; }
 .ag-cl-detail:not(.is-tx) .ag-cl-live,
 .ag-cl-detail:not(.is-tx) .ag-cl-menu,
@@ -465,7 +533,7 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-menu:empty, .ag-cl-txkeys:empty { display: none; }
 
 .ag-cl-live {
-  display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; min-height: 34px; padding: 4px 10px;
+  display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; min-height: 34px; min-width: 0; padding: 4px 10px; overflow: hidden;
   background: var(--bg-2); border: 1px solid var(--line-2);
   font-family: var(--mono); font-size: 0.7rem; color: var(--ink-2);
 }
@@ -474,15 +542,18 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-live-dot--waiting, .ag-cl-live-dot--blocked, .ag-cl-live-dot--paused { background: var(--warn); }
 .ag-cl-live-dot--error { background: var(--err); }
 .ag-cl-live-dot--idle, .ag-cl-live-dot--done { background: var(--ok); }
-.ag-cl-live-main { color: var(--ink); font-weight: 700; }
-.ag-cl-live-sub { min-width: 0; flex: 1 1 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-cl-live-main { color: var(--ink); font-weight: 700; flex: 0 1 auto; min-width: 0; max-width: calc(100% - 18px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-cl-live-sub { min-width: 0; max-width: 100%; flex: 1 1 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-cl-live-mode, .ag-cl-live-draft {
   padding: 1px 6px; border: 1px solid var(--line-2);
   font-family: var(--hud); font-size: 0.55rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim);
 }
+.ag-cl-live-mode, .ag-cl-live-draft { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-cl-live-draft { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); text-transform: none; letter-spacing: 0; font-family: var(--mono); font-size: 0.64rem; }
-.ag-cl-live-agents > summary { cursor: pointer; color: var(--ink-2); }
-.ag-cl-live-agentlist { display: grid; gap: 2px; padding: 4px 0; width: 100%; }
+.ag-cl-live-agents { min-width: 0; max-width: 100%; }
+.ag-cl-live-agents > summary { cursor: pointer; color: var(--ink-2); white-space: nowrap; }
+.ag-cl-live-agentlist { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 4px 0; width: 100%; }
+.ag-cl-live-agentlist > div { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-cl-live-agents[open] { flex-basis: 100%; }
 @keyframes ag-cl-blink { to { opacity: 0.25; } }
 @media (prefers-reduced-motion: reduce) {
@@ -512,12 +583,18 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-menu-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .ag-cl-menu-keys { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
 
-.ag-cl-compose-row { position: relative; display: flex; align-items: flex-end; gap: 4px; }
+.ag-cl-compose-row { position: relative; display: flex; align-items: flex-end; gap: 4px; min-width: 0; }
+/* Width 0 and grow: the box takes what the buttons leave, never its own
+   idea of a width (iOS gives a textarea one). */
 .ag-cl-input.textarea {
-  flex: 1 1 auto; min-width: 0; min-height: 44px; max-height: 220px; resize: none;
+  flex: 1 1 0; width: 0; min-width: 0; min-height: 44px; max-height: 220px; resize: none;
   padding: 11px 12px; line-height: 1.45; overflow-y: auto;
 }
-.ag-cl-compose-row > .btn { min-height: 44px; }
+.ag-cl-compose-row > .btn {
+  /* The buttons stay 44px as the box grows: .ag-cl-sq stretches a button to
+     its row everywhere else, which here made / and Stop as tall as the box. */
+  flex: none; align-self: flex-end; height: 44px; min-height: 44px;
+}
 .ag-cl-slashbtn { font-family: var(--mono); font-size: 0.9rem; width: 44px; justify-content: center; }
 .ag-cl-stopbtn[hidden] { display: none; }
 .ag-cl-stopbtn .ic { width: 15px; height: 15px; }
@@ -653,9 +730,13 @@ button.ag-cl-row:hover { background: var(--accent-03); }
   /* The bar: Restore as an icon, chips shorter, actions as icons. */
   .ag-cl-maxbar .ag-cl-lbl { display: none; }
   .ag-cl-switch-item { max-width: 150px; padding-inline: 10px; }
-  .ag-cl-detail.is-max > .ag-cl-maxbar { flex-wrap: wrap; }
-  .ag-cl-detail.is-max .ag-cl-switch { flex-basis: 100%; order: 3; }
-  .ag-cl-detail.is-max .ag-cl-maxacts { margin-left: auto; }
+  /* Maximized: one row. Session (opens the switcher), the action that
+     matters now, more, Restore. The chips and the icon row step aside. */
+  .ag-cl-detail.is-max > .ag-cl-maxbar { flex-wrap: nowrap; gap: 4px; }
+  .ag-cl-detail.is-max .ag-cl-switch,
+  .ag-cl-detail.is-max .ag-cl-maxacts { display: none; }
+  .ag-cl-detail.is-max .ag-cl-mx { display: flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; }
+  .ag-cl-detail.is-max .ag-cl-restore { order: 2; flex: none; height: 40px; width: 40px; padding: 0; justify-content: center; }
 
   /* Keys: group labels go, the keys fill the row. */
   /* Keys: one dense grid, groups in order, labels gone. Three rows. */
@@ -674,6 +755,8 @@ button.ag-cl-row:hover { background: var(--accent-03); }
   .ag-cl-t-body { padding-left: 10px; }
   .ag-cl-t-what > .ag-cl-t-dir { display: none; }
   .ag-cl-compose-hint { display: none; }
+  .ag-cl-agentpick-count { display: none; }
+  .ag-cl-agentback .ag-cl-lbl { display: none; }
   .ag-cl-send { min-width: 64px; }
 }
 
@@ -694,3 +777,4 @@ button.ag-cl-row:hover { background: var(--accent-03); }
   .ag-cl-detail.is-max .ag-cl-term-state { display: none; }
   .ag-cl-kv { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
+

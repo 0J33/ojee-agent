@@ -432,3 +432,11 @@
 .wk-msg-body { padding: 0 var(--s-3) var(--s-3) calc(var(--s-3) + 16px); font-size: 0.8rem; color: var(--ink-2); display: grid; gap: 6px; }
 .wk-msg-body p { margin: 0; overflow-wrap: anywhere; }
 .wk-panel .wk-msgs, .wk-panel .wk-msg > summary { padding-left: 0; padding-right: 0; }
+
+/* Every design-system field in this module, on a touch screen or a phone-
+   sized window: 16px, because iOS zooms the page into a smaller one when it
+   takes focus and leaves it zoomed, which reads as every size changing. Only
+   fields: nothing else in the page changes size. */
+@media (pointer: coarse), (hover: none), (max-width: 560px) {
+  .ag-cl-in, .ag-as-in { font-size: 16px; }
+}

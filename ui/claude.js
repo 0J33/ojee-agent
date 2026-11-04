@@ -77,6 +77,8 @@ const S = {
   // from, and the screen state (an open menu, the spinner line) beside it.
   transcript: { id: null, cursor: null, timer: null, gen: 0, view: null },
   prompt: { id: null, data: null, timer: null, gen: 0 },
+  // The session's subagents, and which one the transcript shows (null: the session).
+  agents: { id: null, list: null, timer: null, gen: 0, viewing: null },
   // What each device's runner can do, learned on first use: an older runner
   // has no /keys, /prompt or detailed transcript, and the view falls back.
   caps: {},
@@ -713,9 +715,100 @@ const switchable = (s) => allSessions()
  * above the nav and tab bar, below dialogs and toasts so Rename and Delete
  * still work).
  */
+/**
+ * A small menu under a button, for the phone's maximized bar. One open at a
+ * time; a tap outside, Esc or a pick closes it. While one is open the bar is
+ * not rebuilt under it (a live update waits for it to close).
+ */
+let openPop = null;
+function closePop() {
+  if (!openPop) return;
+  const p = openPop;
+  openPop = null;
+  p.close();
+}
+function popMenu(anchor, items, label) {
+  if (openPop?.anchor === anchor) { closePop(); return; }
+  closePop();
+  const bar = anchor.closest('.ag-cl-maxbar, .ag-cl-agentbar');
+  const menu = el('div', { class: 'ag-cl-pop', role: 'menu', 'aria-label': label },
+    items.filter(Boolean).map((it) => el('button', {
+      class: `ag-cl-pop-item${it.current ? ' is-current' : ''}${it.danger ? ' is-danger' : ''}`,
+      type: 'button',
+      role: 'menuitem',
+      disabled: it.disabled || null,
+      'aria-current': it.current ? 'true' : null,
+      onclick: () => { closePop(); it.onclick(); },
+    }, it.lead || null, el('span', { class: 'ag-cl-pop-label' }, it.label), it.meta ? el('span', { class: 'ag-cl-pop-meta' }, it.meta) : null)));
+  const outside = (e) => { if (!menu.contains(e.target) && !anchor.contains(e.target)) closePop(); };
+  const key = (e) => { if (e.key === 'Escape') { e.stopPropagation(); closePop(); anchor.focus(); } };
+  bar.appendChild(menu);
+  anchor.setAttribute('aria-expanded', 'true');
+  document.addEventListener('pointerdown', outside, true);
+  document.addEventListener('keydown', key, true);
+  openPop = {
+    anchor,
+    close() {
+      menu.remove();
+      anchor.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('pointerdown', outside, true);
+      document.removeEventListener('keydown', key, true);
+      const cur = session(S.detail);
+      if (cur) { paintTopBar(cur); paintAgentBar(cur); }
+    },
+  };
+  menu.querySelector('.ag-cl-pop-item:not([disabled])')?.focus({ preventScroll: true });
+}
+
+/**
+ * The maximized bar on a phone: one row. The session (dot, name, a chevron)
+ * opens the switcher; then the one action that matters now (Stop while it
+ * works, Resume when it is not running); then "more" for the rest; then
+ * Restore. CSS shows this only on a narrow screen.
+ */
+function compactBar(s) {
+  const dev = s.device;
+  const off = !online(dev);
+  const alive = s.alive && !off;
+  const name = el('button', {
+    class: 'ag-cl-mx-name',
+    type: 'button',
+    title: 'Switch session',
+    'aria-haspopup': 'menu',
+    'aria-expanded': 'false',
+    onclick: (e) => popMenu(e.currentTarget, switchable(s).map((x) => ({
+      label: x.title,
+      lead: online(x.device) ? dot(x.state) : dot('stopped'),
+      meta: `${multi() ? `${devLabel(x.device)} · ` : ''}${online(x.device) ? STATE[x.state]?.label || x.state : 'offline'}`,
+      current: x.id === s.id,
+      onclick: () => { if (x.id !== s.id) go(x.id); },
+    })).concat([{ label: 'All sessions', lead: svg('back'), onclick: () => { setMax(false); go(); } }]), 'Sessions'),
+  }, off ? dot('stopped') : dot(s.state), el('span', { class: 'ag-cl-mx-title' }, s.title), svg('chevron', 'ic ag-cl-mx-chev'));
+  const primary = s.state === 'running' && !off
+    ? el('button', { class: 'btn btn--ghost btn--sm ag-cl-sq ag-cl-mx-act', type: 'button', title: 'Stop the current turn (Esc)', 'aria-label': 'Stop turn', onclick: () => interrupt(s) }, svg('pause'))
+    : !alive || s.state === 'paused'
+      ? el('button', { class: 'btn btn--sm ag-cl-mx-act ag-cl-mx-resume', type: 'button', disabled: off || S.busy.has(`resume:${s.id}`), title: off ? offWhy(devOf(dev)) : 'Start Claude again in this conversation', onclick: () => act(`resume:${s.id}`, () => post(dev, `/sessions/${s.id}/resume`, {}).then((v) => upsert(dev, v)), 'Resuming') }, svg('play'), s.state === 'paused' ? 'Now' : 'Resume')
+      : null;
+  const more = el('button', {
+    class: 'btn btn--ghost btn--sm ag-cl-sq ag-cl-mx-act',
+    type: 'button',
+    title: 'More: rename, change, end, delete',
+    'aria-label': 'More actions',
+    'aria-haspopup': 'menu',
+    'aria-expanded': 'false',
+    onclick: (e) => popMenu(e.currentTarget, [
+      { label: 'Rename', lead: svg('edit'), onclick: () => rename(s) },
+      { label: 'Change model or account', lead: svg('swap'), disabled: off, onclick: () => changeSession(s) },
+      alive ? { label: 'End the session', lead: svg('stop'), onclick: () => endSession(s) } : null,
+      { label: 'Delete', lead: svg('trash'), danger: true, disabled: off, onclick: () => deleteSession(s) },
+    ], 'Session actions'),
+  }, svg('menu'));
+  return el('div', { class: 'ag-cl-mx' }, name, primary, more);
+}
+
 function paintTopBar(s) {
   const bar = root?.querySelector('.ag-cl-maxbar');
-  if (!bar) return;
+  if (!bar || (openPop && bar.contains(openPop.anchor))) return;
   const strip = el('div', { class: 'ag-cl-switch', role: 'group', 'aria-label': 'Sessions' },
     switchable(s).map((x) => el('button', {
       class: `ag-cl-switch-item${x.id === s.id ? ' is-current' : ''}${online(x.device) && ['waiting', 'blocked', 'error'].includes(x.state) ? ' is-needs' : ''}`,
@@ -730,7 +823,7 @@ function paintTopBar(s) {
       ? el('button', { class: 'btn btn--sm ag-cl-restore', type: 'button', title: 'Back to the normal view', onclick: () => setMax(false) }, svg('unfull'), lbl('Restore'))
       : el('button', { class: 'iconbtn ag-cl-back', type: 'button', title: 'All sessions', 'aria-label': 'All sessions', onclick: () => go() }, svg('back')),
     strip,
-    ...(S.max ? [el('div', { class: 'ag-cl-maxacts' }, online(s.device) ? stateTag(s.state, s.background) : offTag(), ...actionButtons(s, { compact: true }))] : []));
+    ...(S.max ? [el('div', { class: 'ag-cl-maxacts' }, online(s.device) ? stateTag(s.state, s.background) : offTag(), ...actionButtons(s, { compact: true })), compactBar(s)] : []));
   // The current chip in view, without moving the page.
   strip.scrollLeft = keep;
   requestAnimationFrame(() => {
@@ -794,6 +887,7 @@ async function sendImage(dev, id, file) {
 }
 
 function setMax(on) {
+  closePop();
   S.max = on;
   pref('ag-cl-max', on ? '1' : '0');
   const view = root?.querySelector('.ag-cl-detail');
@@ -995,6 +1089,8 @@ function stopPane() {
   clearTimeout(S.prompt.timer);
   S.prompt.timer = null;
   S.prompt.gen += 1;
+  clearTimeout(S.agents.timer);
+  S.agents.gen += 1;
 }
 
 function mountPane(s) {
@@ -1057,16 +1153,24 @@ const missingRoute = (e) => /^(not found|cannot (get|post))/i.test(String(e?.mes
  */
 function mountTranscript(s, body) {
   const T = S.transcript;
-  if (T.id !== s.id || !T.view) {
+  // Which conversation: the session's own, or one of its subagents'. Read
+  // only either way: the message box stays bound to the session.
+  if (S.agents.id !== s.id) S.agents = { id: s.id, list: null, timer: null, gen: S.agents.gen + 1, viewing: null };
+  const agent = S.agents.viewing;
+  const key = `${s.id}:${agent || ''}`;
+  const base = agent ? `/sessions/${s.id}/agents/${encodeURIComponent(agent)}/transcript` : `/sessions/${s.id}/transcript`;
+  if (T.key !== key || !T.view) {
     T.view?.destroy();
     T.id = s.id;
+    T.key = key;
     T.cursor = null;
     T.view = createTranscript({
       el,
       svg,
       modelLabel: (id) => (id ? modelLabel(id) : null),
       toast: ctx.toast,
-      onEarlier: (before) => api(s.device, `/sessions/${s.id}/transcript?detail=1&before=${before}`),
+      onEarlier: (before) => api(s.device, `${base}?detail=1&before=${before}`),
+      onAgent: agent ? null : (toolUseId) => openAgentFor(s, toolUseId),
     });
   }
   // Each mount is a generation: a pull still in flight from an earlier one
@@ -1074,15 +1178,18 @@ function mountTranscript(s, body) {
   // the list or start a second loop.
   const gen = T.gen;
   const view = T.view;
+  let bar = body.querySelector(':scope > .ag-cl-agentbar');
   if (view.el.parentNode !== body) {
-    body.replaceChildren(view.el);
+    bar = el('div', { class: 'ag-cl-agentbar' });
+    body.replaceChildren(bar, view.el);
     requestAnimationFrame(() => { sizeTerminal(); view.scroll.scrollTop = view.scroll.scrollHeight; });
   }
-  const current = () => S.transcript === T && T.gen === gen && S.pane === 'transcript' && S.detail === s.id;
+  paintAgentBar(s);
+  const current = () => S.transcript === T && T.gen === gen && T.key === key && S.pane === 'transcript' && S.detail === s.id;
   const pull = async () => {
     try {
       const first = T.cursor == null;
-      const r = await api(s.device, `/sessions/${s.id}/transcript?detail=1${first ? '' : `&cursor=${T.cursor}`}`);
+      const r = await api(s.device, `${base}?detail=1${first ? '' : `&cursor=${T.cursor}`}`);
       if (!current()) return;
       if (first) {
         // An older runner sends no `start`: it cannot page back.
@@ -1092,18 +1199,126 @@ function mountTranscript(s, body) {
       T.cursor = r.cursor;
       view.error(null);
       paintLive(session(s.id) || s);
+      paintAgentBar(session(s.id) || s);
     } catch (e) {
       if (!current()) return;
-      view.error(`Could not read the transcript: ${e.message}`);
+      view.error(agent ? `Could not read this subagent: ${e.message}` : `Could not read the transcript: ${e.message}`);
     }
     if (!current()) return;
-    const busy = ['running', 'starting', 'waiting'].includes(session(s.id)?.state);
+    const busy = ['running', 'starting', 'waiting'].includes(session(s.id)?.state)
+      || (agent && S.agents.list?.find((a) => a.id === agent)?.running);
     T.timer = setTimeout(pull, document.hidden ? 10000 : busy ? 2000 : 4000);
   };
   pull();
   watchPrompt(s);
+  watchAgents(s);
   paintTxKeys(s);
   paintLive(s);
+}
+
+/* ── subagents ──────────────────────────────────────────────────────── */
+
+/** The session's subagents, kept fresh while the transcript is open. */
+function watchAgents(s) {
+  const A = S.agents;
+  clearTimeout(A.timer);
+  const gen = ++A.gen;
+  const run = async () => {
+    if (A.gen !== gen || S.pane !== 'transcript' || S.detail !== s.id) return;
+    const cur = session(s.id) || s;
+    if (online(cur.device) && cap(cur.device).agents !== false) {
+      try {
+        const r = await api(cur.device, `/sessions/${cur.id}/agents?limit=60`);
+        if (A.gen !== gen) return;
+        A.list = r.agents || [];
+        cap(cur.device).agents = true;
+      } catch (e) {
+        if (missingRoute(e)) cap(cur.device).agents = false;
+      }
+    }
+    if (A.gen !== gen) return;
+    paintAgentBar(cur);
+    if (cap(cur.device).agents === false) return;
+    const busy = cur.alive && (['running', 'starting'].includes(cur.state) || A.list?.some((a) => a.running));
+    A.timer = setTimeout(run, document.hidden ? 20000 : busy ? 5000 : 15000);
+  };
+  run();
+}
+
+/** Show a subagent's transcript, or the session's own (null). */
+function viewAgent(s, id) {
+  closePop();
+  S.agents.viewing = id;
+  updateComposer(s);
+  clearTimeout(S.transcript.timer);
+  S.transcript.gen += 1;
+  const body = root?.querySelector('.ag-cl-body');
+  if (body) mountTranscript(s, body);
+}
+
+/** "Open its transcript" on an Agent or Task call in the main view. */
+async function openAgentFor(s, toolUseId) {
+  if (cap(s.device).agents === false) { tooOldForAgents(s); return; }
+  let a = S.agents.list?.find((x) => x.toolUseId === toolUseId);
+  if (!a) {
+    try {
+      const r = await api(s.device, `/sessions/${s.id}/agents?limit=200`);
+      a = (r.agents || []).find((x) => x.toolUseId === toolUseId);
+    } catch (e) { if (missingRoute(e)) { cap(s.device).agents = false; tooOldForAgents(s); return; } }
+  }
+  if (!a) { ctx.toast?.('err', 'No transcript for that agent', 'Claude Code did not keep one, or it is older than the list goes.'); return; }
+  viewAgent(s, a.id);
+}
+
+const tooOldForAgents = (s) => ctx.toast?.('err', 'This runner is too old for subagent views', `Restart the Claude runner on ${devLabel(s.device)} (ojee-claude) to read subagents here.`);
+
+/**
+ * The switcher above the transcript, shown only when there are subagents:
+ * the session, then each subagent with what it was asked to do and whether
+ * it still runs. An older runner gets one plain line saying so instead,
+ * when the transcript shows the session has subagents at all.
+ */
+function paintAgentBar(s) {
+  const bar = root?.querySelector('.ag-cl-agentbar');
+  if (!bar || !s || openPop?.anchor && bar.contains(openPop.anchor)) return;
+  const A = S.agents;
+  const list = A.id === s.id ? A.list || [] : [];
+  if (cap(s.device).agents === false) {
+    const has = (s.background?.subagents || 0) > 0 || S.transcript.view?.hasAgents?.();
+    bar.replaceChildren(...(has ? [el('div', { class: 'ag-cl-agentnote' }, svg('info'),
+      el('span', {}, `Subagent transcripts need a newer Claude runner on ${devLabel(s.device)}. Restart ojee-claude there to switch to them here.`))] : []));
+    requestAnimationFrame(sizeTerminal);
+    return;
+  }
+  if (!list.length && !A.viewing) { if (bar.firstChild) { bar.replaceChildren(); requestAnimationFrame(sizeTerminal); } return; }
+  const viewing = A.viewing ? list.find((a) => a.id === A.viewing) || { id: A.viewing, description: A.viewing } : null;
+  const running = list.filter((a) => a.running).length;
+  const name = (a) => a.description || a.type || a.id;
+  const pick = el('button', {
+    class: 'ag-cl-agentpick',
+    type: 'button',
+    'aria-haspopup': 'menu',
+    'aria-expanded': 'false',
+    title: 'Switch between the session and its subagents',
+    onclick: (e) => popMenu(e.currentTarget, [
+      { label: 'Main session', lead: svg('terminal'), meta: 'you talk to this', current: !A.viewing, onclick: () => viewAgent(s, null) },
+      ...list.map((a) => ({
+        label: name(a),
+        lead: el('span', { class: a.running ? 'dot dot--live' : 'dot dot--ok' }),
+        meta: `${a.running ? 'running' : 'done'} · ${ago(a.modified)}`,
+        current: a.id === A.viewing,
+        onclick: () => viewAgent(s, a.id),
+      })),
+    ], 'Session and subagents'),
+  },
+  viewing ? el('span', { class: viewing.running ? 'dot dot--live' : 'dot dot--ok' }) : svg('terminal'),
+  el('span', { class: 'ag-cl-agentpick-label' }, viewing ? `Subagent: ${name(viewing)}` : 'Main session'),
+  el('span', { class: 'ag-cl-agentpick-count' }, `${list.length} subagent${list.length === 1 ? '' : 's'}${running ? ` · ${running} running` : ''}`),
+  svg('chevron', 'ic ag-cl-mx-chev'));
+  bar.replaceChildren(...[pick,
+    viewing ? el('button', { class: 'btn btn--ghost btn--sm ag-cl-agentback', type: 'button', title: 'Back to the main session', onclick: () => viewAgent(s, null) }, svg('back'), lbl('Main')) : null].filter(Boolean));
+  bar.classList.toggle('is-agent', !!viewing);
+  requestAnimationFrame(sizeTerminal);
 }
 
 /** Pull both the transcript and the screen soon: something was just sent. */
@@ -1179,11 +1394,11 @@ function paintLive(s) {
   const agents = p?.agents || [];
   box.replaceChildren(...[
     el('span', { class: `ag-cl-live-dot ag-cl-live-dot--${state}` }),
-    el('span', { class: 'ag-cl-live-main' }, main),
-    sub ? el('span', { class: 'ag-cl-live-sub' }, sub) : null,
+    el('span', { class: 'ag-cl-live-main', title: String(main || '') }, main),
+    sub ? el('span', { class: 'ag-cl-live-sub', title: sub }, sub) : null,
     agents.length ? el('details', { class: 'ag-cl-live-agents' },
-      el('summary', {}, `${agents.length} agent${agents.length === 1 ? '' : 's'}`),
-      el('div', { class: 'ag-cl-live-agentlist' }, agents.map((a) => el('div', {}, el('b', {}, a.name), ` ${a.doing}`, a.meta ? el('span', { class: 'meta' }, ` · ${a.meta}`) : null)))) : null,
+      el('summary', { title: agents.map((a) => `${a.name}: ${a.doing}`).join('\n') }, `${agents.length} agent${agents.length === 1 ? '' : 's'}`),
+      el('div', { class: 'ag-cl-live-agentlist' }, agents.map((a) => el('div', { title: `${a.name}: ${a.doing}${a.meta ? ` · ${a.meta}` : ''}` }, el('b', {}, a.name), ` ${a.doing}`, a.meta ? el('span', { class: 'meta' }, ` · ${a.meta}`) : null)))) : null,
     p?.mode ? el('span', { class: 'ag-cl-live-mode', title: 'Permission mode (Shift+Tab switches it)' }, p.mode) : null,
     p?.draft ? el('span', { class: 'ag-cl-live-draft', title: 'Typed in the terminal and not sent. A message from here is added after it.' }, `Unsent in the terminal: ${ONE_LINE(p.draft, 60)}`) : null,
   ].filter(Boolean));
@@ -1494,6 +1709,8 @@ function updateComposer(s) {
   const narrow = innerWidth <= 560;
   input.placeholder = s.state === 'waiting' ? (narrow ? 'Answer Claude' : 'Answer Claude, or / for a command')
     : s.alive ? (narrow ? 'Message Claude' : 'Message Claude, or / for a command') : (narrow ? 'Message to resume' : 'Resume the session with a message');
+  // Reading a subagent: the box still talks to the session, and says so.
+  if (S.agents.viewing && S.agents.id === s.id && s.alive) input.placeholder = narrow ? 'Message the main session' : 'Message the main session (subagents are read only)';
   note.textContent = !online(s.device) ? `${devLabel(s.device)} is offline.`
     : s.state === 'starting' ? 'Starting. Wait a moment.'
       : s.state === 'running' ? 'Working. A message now is queued and read after this step.'
@@ -2233,7 +2450,7 @@ export function routeClaude() {
   else { S.detail = null; S.tab = ['new', 'accounts', 'settings'].includes(first) ? first : 'sessions'; }
   // #/agent/claude/settings/loq: that device's settings (a deep link).
   if (second && ['accounts', 'settings'].includes(first) && (!S.devs || devOf(second))) setDev(second);
-  if (prevDetail !== S.detail) stopPane();
+  if (prevDetail !== S.detail) { closePop(); stopPane(); }
   if (S.tab !== 'accounts' || S.detail) stopLogin();
   // A new place starts at its top, not wherever the last one was scrolled to.
   if (prevDetail !== S.detail || prevTab !== S.tab) window.scrollTo(0, 0);
@@ -2245,6 +2462,10 @@ export function routeClaude() {
 export async function mountClaude(el0, context) {
   root = el0;
   ctx = context;
+  // iOS enlarges text it thinks is too small to read, differently on each
+  // view and after each zoom; the console's sizes are meant as written.
+  document.documentElement.style.setProperty('-webkit-text-size-adjust', '100%');
+  document.documentElement.style.setProperty('text-size-adjust', '100%');
   ensureIcons();
   if (!document.getElementById('ag-cl-css')) {
     const link = document.createElement('link');

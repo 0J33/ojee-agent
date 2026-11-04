@@ -645,6 +645,10 @@ export default {
       document.head.appendChild(link);
     }
     ensureIcons();
+    // iOS enlarges text it judges too small, by a different amount per view
+    // and after every zoom: sizes changed as the owner clicked around.
+    document.documentElement.style.setProperty('-webkit-text-size-adjust', '100%');
+    document.documentElement.style.setProperty('text-size-adjust', '100%');
 
     if (state.view === 'claude') {
       claudeOpen = true;
