@@ -1185,7 +1185,9 @@ function mountTranscript(s, body) {
   const T = S.transcript;
   // Which conversation: the session's own, or one of its subagents'. Read
   // only either way: the message box stays bound to the session.
-  if (S.agents.id !== s.id) S.agents = { id: s.id, list: null, timer: null, gen: S.agents.gen + 1, viewing: null };
+  // The choice survives the console mounting this module again (it did not:
+  // a reload put every subagent view back on the session).
+  if (S.agents.id !== s.id) S.agents = { id: s.id, list: null, timer: null, gen: S.agents.gen + 1, viewing: savedAgent(s.id) };
   const agent = S.agents.viewing;
   const key = `${s.id}:${agent || ''}`;
   const base = agent ? `/sessions/${s.id}/agents/${encodeURIComponent(agent)}/transcript` : `/sessions/${s.id}/transcript`;
@@ -1276,9 +1278,14 @@ function watchAgents(s) {
 }
 
 /** Show a subagent's transcript, or the session's own (null). */
+const AGENT_KEY = 'ag-cl-agent:';
+function savedAgent(id) { try { return sessionStorage.getItem(AGENT_KEY + id) || null; } catch { return null; } }
+function saveAgent(id, agent) { try { if (agent) sessionStorage.setItem(AGENT_KEY + id, agent); else sessionStorage.removeItem(AGENT_KEY + id); } catch { /* private window */ } }
+
 function viewAgent(s, id) {
   closePop();
   S.agents.viewing = id;
+  saveAgent(s.id, id);
   updateComposer(s);
   clearTimeout(S.transcript.timer);
   S.transcript.gen += 1;

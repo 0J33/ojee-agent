@@ -313,7 +313,36 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier, onAgen
   const top = el('div', { class: 'ag-cl-t-top' });
   const list = el('div', { class: 'ag-cl-t-list' });
   const jump = el('button', { class: 'ag-cl-jump', type: 'button', hidden: true, onclick: () => toBottom(true) }, svg('arrow'), 'Latest');
-  const wrap = el('div', { class: 'ag-cl-txwrap' }, scroll, jump);
+  // Quick jumps: top, previous message, next message, bottom. A message is
+  // one of your turns or one of Claude's replies; tool rows are skipped.
+  const msgs = () => [...list.querySelectorAll('.ag-cl-t-user, .ag-cl-t-asst')];
+  const goTo = (node) => { if (!node) return; scroll.scrollTop = Math.max(0, node.offsetTop - list.offsetTop - 6); follow = nearBottom(); };
+  const stepMsg = (dir) => {
+    const at = scroll.scrollTop + list.offsetTop;
+    const all = msgs();
+    if (dir > 0) {
+      const next = all.find((n) => n.offsetTop > at + 10);
+      if (next) goTo(next); else toBottom(true);
+    } else {
+      const prev = all.filter((n) => n.offsetTop < at - 10).pop();
+      if (prev) goTo(prev); else toTop();
+    }
+  };
+  const toTop = () => { scroll.scrollTop = 0; follow = false; };
+  const jumpBtn = (label, glyph, fn) => el('button', { class: 'ag-cl-tjump-b', type: 'button', title: label, 'aria-label': label, onpointerdown: (e) => e.preventDefault(), onclick: fn }, glyph);
+  const jumps = el('div', { class: 'ag-cl-tjump', role: 'toolbar', 'aria-label': 'Move through the chat' },
+    jumpBtn('Top of the chat', '⤒', toTop),
+    jumpBtn('Previous message', '↑', () => stepMsg(-1)),
+    jumpBtn('Next message', '↓', () => stepMsg(1)),
+    jumpBtn('Bottom of the chat', '⤓', () => toBottom(true)));
+  scroll.addEventListener('keydown', (e) => {
+    if (!e.altKey) return;
+    if (e.key === 'ArrowUp') { e.preventDefault(); stepMsg(-1); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); stepMsg(1); }
+    else if (e.key === 'Home') { e.preventDefault(); toTop(); }
+    else if (e.key === 'End') { e.preventDefault(); toBottom(true); }
+  });
+  const wrap = el('div', { class: 'ag-cl-txwrap' }, scroll, jumps, jump);
   scroll.append(top, list);
 
   // items: every message loaded, tool results folded into their call.

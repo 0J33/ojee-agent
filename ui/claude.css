@@ -322,16 +322,17 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 }
 .ag-cl-transcript {
   flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
-  padding: var(--s-3) var(--s-3) var(--s-4);
+  /* The right side leaves room for the jump buttons, so text never sits under them. */
+  padding: var(--s-3) 50px var(--s-4) var(--s-3);
   user-select: text; -webkit-user-select: text;
 }
 .ag-cl-transcript:focus-visible { outline: 1px solid var(--line-strong); outline-offset: -1px; }
 .ag-cl-t-list {
-  /* One column no wider than the box, and no wider than reads well. */
+  /* One column, the full width of the box (owner, 4 Nov). */
   display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px;
-  max-width: 920px; margin: 0 auto;
+  width: 100%; margin: 0;
 }
-.ag-cl-t-top { max-width: 920px; margin: 0 auto var(--s-2); display: flex; justify-content: center; }
+.ag-cl-t-top { margin: 0 0 var(--s-2); display: flex; justify-content: center; }
 .ag-cl-t-earlier {
   min-height: 34px; padding: 4px 14px; background: transparent; border: 1px solid var(--line-2);
   color: var(--ink-2); font-family: var(--mono); font-size: 0.68rem; cursor: pointer;
@@ -780,3 +781,14 @@ button.ag-cl-row:hover { background: var(--accent-03); }
   .ag-cl-kv { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
 
+
+/* Quick jumps in the transcript: top, previous message, next message, bottom. */
+.ag-cl-txwrap { position: relative; }
+.ag-cl-tjump { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); z-index: 3; display: grid; gap: 4px; opacity: 0.55; transition: opacity var(--dur-2, 0.15s); }
+.ag-cl-tjump:hover, .ag-cl-tjump:focus-within { opacity: 1; }
+.ag-cl-tjump-b { width: 34px; height: 34px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line-strong); background: var(--bg-1); color: var(--ink); font: 700 1rem/1 var(--mono); cursor: pointer; }
+.ag-cl-tjump-b:hover, .ag-cl-tjump-b:focus-visible { border-color: var(--ink); outline: none; }
+@media (hover: none) { .ag-cl-tjump { opacity: 0.8; } .ag-cl-tjump-b { width: 38px; height: 38px; } }
+@media (prefers-reduced-motion: reduce) { .ag-cl-tjump { transition: none; } }
+
+@media (max-width: 560px) { .ag-cl-transcript { padding: 10px 50px 16px 10px; } }
