@@ -1087,7 +1087,7 @@ function mountTranscript(s, body) {
       if (first) {
         // An older runner sends no `start`: it cannot page back.
         cap(s.device).detail = r.start != null;
-        view.reset(r.messages || [], { start: r.start, truncated: r.start != null && r.truncated });
+        view.reset(r.messages || [], { start: r.start, truncated: r.start != null && r.truncated, older: r.start == null && !!r.truncated });
       } else view.append(r.messages || []);
       T.cursor = r.cursor;
       view.error(null);

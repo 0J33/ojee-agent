@@ -318,6 +318,7 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier }) {
   let start = 0;
   let truncated = false;
   let loading = false;
+  let older = false;
   let byTool = new Map();
   let orphans = new Map();
 
@@ -378,7 +379,7 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier }) {
     top.replaceChildren(...[
       left > 0 ? el('button', { class: 'ag-cl-t-earlier', type: 'button', onclick: () => earlier() }, `Show ${Math.min(STEP, left)} earlier`)
         : truncated ? el('button', { class: 'ag-cl-t-earlier', type: 'button', disabled: loading, onclick: () => earlier() }, loading ? 'Loading earlier messages…' : 'Load earlier messages')
-          : items.length ? el('div', { class: 'ag-cl-t-start' }, 'Start of the conversation') : null,
+          : items.length ? el('div', { class: 'ag-cl-t-start' }, older ? 'Earlier messages are in the file (this runner cannot page back)' : 'Start of the conversation') : null,
     ].filter(Boolean));
   }
 
@@ -459,6 +460,7 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier }) {
       settle();
       start = info.start ?? 0;
       truncated = !!info.truncated;
+      older = !!info.older;
       drawAll();
       requestAnimationFrame(() => toBottom(true));
     },
