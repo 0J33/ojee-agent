@@ -594,7 +594,7 @@ function detailHead(s) {
     el('div', { class: 'ag-cl-head-main' },
       el('button', { class: 'ag-cl-title', type: 'button', title: 'Rename', onclick: () => rename(s) }, s.title),
       el('div', { class: 'ag-cl-chips' },
-        off ? offTag() : stateTag(s.state, s.background),
+        off ? offTag() : stateTag(s.state, bgOf(s)),
         multi() ? el('span', { class: 'ag-cl-chip ag-cl-chip--dev', title: 'Device' }, devLabel(dev)) : null,
         el('span', { class: 'ag-cl-chip', title: 'Model' }, modelLabel(s.model?.current), fell ? ' · fallback' : '', actual ? ` (answered by ${modelLabel(actual)})` : ''),
         el('span', { class: 'ag-cl-chip', title: 'Account' }, acctLabel(s.account, dev)),
@@ -614,7 +614,7 @@ function detailCallouts(s) {
   // screen to read, still gets the question here.
   const tx = S.pane === 'transcript';
   if (tx && cap(s.device).prompt !== false && s.state !== 'error') {
-    if (s.background) out.push(el('div', { class: 'alert alert--info ag-cl-bgnote' }, el('b', {}, 'Background'), el('span', {}, bgText(s.background))));
+    if (bgOf(s)) out.push(el('div', { class: 'alert alert--info ag-cl-bgnote' }, el('b', {}, 'Background'), el('span', {}, bgText(bgOf(s)))));
     return out;
   }
   if (s.state === 'waiting' && s.question) {
@@ -637,8 +637,8 @@ function detailCallouts(s) {
   } else if (s.state === 'starting' && s.detail) {
     out.push(el('div', { class: 'alert alert--info' }, el('b', {}, 'Starting'), el('span', {}, s.detail)));
   }
-  if (s.background) {
-    out.push(el('div', { class: 'alert alert--info ag-cl-bgnote' }, el('b', {}, 'Background'), el('span', {}, bgText(s.background))));
+  if (bgOf(s)) {
+    out.push(el('div', { class: 'alert alert--info ag-cl-bgnote' }, el('b', {}, 'Background'), el('span', {}, bgText(bgOf(s)))));
   }
   return out;
 }
@@ -813,7 +813,7 @@ function paintTopBar(s) {
   if (!bar || (openPop && bar.contains(openPop.anchor))) return;
   // Rebuild only on a change: a rebuild on every state tick swallowed taps
   // on its buttons (the switcher, "more", Resume) mid-press.
-  const sig = JSON.stringify([S.max, s.id, s.state, s.alive, s.background, s.title, online(s.device),
+  const sig = JSON.stringify([S.max, s.id, s.state, s.alive, bgOf(s), s.title, online(s.device),
     switchable(s).map((x) => [x.id, x.title, x.state, online(x.device), x.background])]);
   if (bar.dataset.sig === sig && bar.firstChild) return;
   bar.dataset.sig = sig;
@@ -831,7 +831,7 @@ function paintTopBar(s) {
       ? el('button', { class: 'btn btn--sm ag-cl-restore', type: 'button', title: 'Back to the normal view', onclick: () => setMax(false) }, svg('unfull'), lbl('Restore'))
       : el('button', { class: 'iconbtn ag-cl-back', type: 'button', title: 'All sessions', 'aria-label': 'All sessions', onclick: () => go() }, svg('back')),
     strip,
-    ...(S.max ? [el('div', { class: 'ag-cl-maxacts' }, online(s.device) ? stateTag(s.state, s.background) : offTag(), ...actionButtons(s, { compact: true })), compactBar(s)] : []));
+    ...(S.max ? [el('div', { class: 'ag-cl-maxacts' }, online(s.device) ? stateTag(s.state, bgOf(s)) : offTag(), ...actionButtons(s, { compact: true })), compactBar(s)] : []));
   // The current chip in view, without moving the page.
   strip.scrollLeft = keep;
   requestAnimationFrame(() => {
@@ -1271,8 +1271,11 @@ function watchAgents(s) {
       try {
         const r = await api(cur.device, `/sessions/${cur.id}/agents?limit=60`);
         if (A.gen !== gen) return;
+        const before = JSON.stringify((A.list || []).filter((a) => a.running).map((a) => a.id));
         A.list = r.agents || [];
         cap(cur.device).agents = true;
+        // The head's subagent count follows this list (bgOf): repaint it on a change.
+        if (before !== JSON.stringify(A.list.filter((a) => a.running).map((a) => a.id)) && S.detail === cur.id) paintDetail();
       } catch (e) {
         if (missingRoute(e)) cap(cur.device).agents = false;
       }
@@ -1289,6 +1292,21 @@ function watchAgents(s) {
 /** Show a subagent's transcript, or the session's own (null). */
 // Messages sent while the session was mid-turn, kept until they show up in
 // the transcript (sessionStorage, so a reload does not lose them).
+/**
+ * The session's background work for display, with the subagent count taken
+ * from the same list the subagent picker uses (finished = a completion
+ * notice in the log), so the head, the picker and the live line agree.
+ */
+function bgOf(s) {
+  const b = s.background;
+  const A = S.agents;
+  if (!A || A.id !== s.id || !Array.isArray(A.list)) return b;
+  const running = A.list.filter((a) => a.running).length;
+  const shells = b?.shells || 0;
+  if (!running && !shells) return null;
+  return { ...(b || {}), subagents: running, shells };
+}
+
 const QUEUE_KEY = 'ag-cl-queued:';
 function queued(id) { try { return JSON.parse(sessionStorage.getItem(QUEUE_KEY + id) || '[]'); } catch { return []; } }
 function setQueued(id, list) { try { if (list.length) sessionStorage.setItem(QUEUE_KEY + id, JSON.stringify(list)); else sessionStorage.removeItem(QUEUE_KEY + id); } catch { /* private window */ } }

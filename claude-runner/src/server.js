@@ -28,7 +28,7 @@ const { Tmux } = require('./tmux');
 const { Accounts, cleanEnv } = require('./accounts');
 const { Notifier } = require('./notify');
 const { Sessions } = require('./sessions');
-const { Tail, toMessages, readRange, listSessions, findTranscript, listSubagents, subagentFile } = require('./transcript');
+const { Tail, toMessages, readRange, listSessions, findTranscript, listSubagents, subagentFile, finishedAgents } = require('./transcript');
 const { parseScreen } = require('./screen');
 const logins = require('./logins');
 const { bridge } = require('./terminal');
@@ -438,11 +438,18 @@ function createRunner(overrides = {}) {
     if (!sessions.hasTranscript(s)) return res.json({ agents: [] });
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 40));
     const live = new Set((s.background || []).filter((t) => t.type === 'subagent').map((t) => t.id));
+    // Finished = a completed/failed/stopped notification is in the log. An
+    // agent waiting on its own background work has none yet, so it is still
+    // running (as Claude Code's own agent list shows it). One silent for two
+    // hours with no notification was lost (a restart): not running.
+    const done = finishedAgents(s.transcript);
     const now = Date.now();
     res.json({
       agents: listSubagents(s.transcript, { limit }).map((a) => ({
         ...a,
-        running: live.has(a.id) || now - a.modified < 20_000,
+        // Writing in the last 5 minutes beats an old notification: a resumed
+        // agent keeps the "completed" one from its earlier run.
+        running: live.has(a.id) || now - a.modified < 300_000 || (!done.has(a.id) && now - a.modified < 2 * 3600_000),
       })),
     });
   }));

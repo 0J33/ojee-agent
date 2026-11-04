@@ -374,4 +374,45 @@ function subagentFile(transcript, agentId) {
   return transcript && fs.existsSync(f) ? f : null;
 }
 
-module.exports = { findTranscript, Tail, toMessages, readRange, describe, listSessions, toolSummary, toolInput, listSubagents, subagentFile };
+/**
+ * Which subagents have finished: Claude Code records a task notification in
+ * the session's log when one completes, fails or is stopped. Read once, then
+ * only what was appended since, per log file.
+ */
+const FINISHED = /<task-id>([A-Za-z0-9_-]+)<\/task-id>[\s\S]{0,4000}?<status>(completed|failed|killed|stopped|cancelled)<\/status>[\s\S]{0,600}?<\/summary>/g;
+const finishedCache = new Map(); // transcript -> { offset, done: Set, tail: string }
+function finishedAgents(transcript) {
+  if (!transcript) return new Set();
+  let c = finishedCache.get(transcript);
+  let size;
+  try { size = fs.statSync(transcript).size; } catch { return c ? c.done : new Set(); }
+  if (!c || size < c.offset) { c = { offset: 0, done: new Set(), tail: '' }; finishedCache.set(transcript, c); }
+  if (size === c.offset) return c.done;
+  const fd = fs.openSync(transcript, 'r');
+  try {
+    const CHUNK = 8 * 1024 * 1024;
+    let pos = c.offset;
+    while (pos < size) {
+      const len = Math.min(CHUNK, size - pos);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, pos);
+      pos += len;
+      // Keep the last 8 KB of each chunk for the next, so a notification split
+      // across the boundary is still matched.
+      const text = c.tail + buf.toString('utf8');
+      FINISHED.lastIndex = 0;
+      let m;
+      while ((m = FINISHED.exec(text))) {
+        // "completed" with "is waiting on its own background work" means it
+        // paused for a command or a run of its own: still alive.
+        if (/waiting on its own background work/.test(m[0])) c.done.delete(m[1]);
+        else c.done.add(m[1]);
+      }
+      c.tail = text.slice(-8192);
+    }
+    c.offset = size;
+  } finally { fs.closeSync(fd); }
+  return c.done;
+}
+
+module.exports = { findTranscript, Tail, toMessages, readRange, describe, listSessions, toolSummary, toolInput, listSubagents, subagentFile, finishedAgents };
