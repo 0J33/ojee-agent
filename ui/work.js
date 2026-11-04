@@ -411,7 +411,7 @@ function fromClaude() {
       : el('p', { class: 'meta' }, 'No messages yet. Releases, moved deadlines and decisions show up here.'));
 }
 
-/** CI health from the host (ci-health.json): one line, red when anything waits too long. */
+/** CI from the host (ci-watch.json + ci-health.json): one line; click for each PR's state and what the watch did. */
 function ciLine() {
   const c = data.ci;
   if (!c) return null;
@@ -420,10 +420,29 @@ function ciLine() {
   const busy = c.runnersBusy ?? c.runners_busy;
   const total = c.runnersTotal ?? c.runners_total;
   const med = c.medianResultMin ?? c.median_result_min;
-  const bad = oldest > 30 || q > 3;
-  return el('div', { class: `wk-ci ${bad ? 'is-bad' : ''}` },
+  const baseRed = Object.entries(c.baseRed || {});
+  const bad = oldest > 30 || q > 3 || baseRed.length > 0;
+  const prs = c.prs || [];
+  const STATE = { green: ['Green', 'live'], red: ['Red', 'fix'], running: ['Running', 'review'], conflict: ['Conflict', 'fix'], draft: ['Draft', 'idle'] };
+  const open = () => openPanel({
+    title: 'CI', sub: 'Open PRs, their CI and what the CI watch did. It re-runs infrastructure failures, updates PRs whose failures are not theirs once the base is green, asks teammates to fix their own failing tests, and sends the rest to Claude.',
+    groups: [
+      { label: 'Base branches that are red', nodes: baseRed.map(([k, v]) => el('div', { class: 'wk-note' }, el('strong', {}, k.replace(':', ' ')), el('p', { class: 'meta' }, `Failing: ${v.join(', ')}. Every PR into it waits until it is fixed.`))) },
+      { label: 'Pull requests', nodes: prs.map((r) => {
+        const [lab, kind] = STATE[r.state] || [r.state, 'idle'];
+        return el('div', { class: 'wk-note' },
+          el('span', { class: 'wk-ci-pr' }, el('span', { class: `wk-stage wk-stage--${kind}` }, lab), el('a', { href: r.url, target: '_blank', rel: 'noopener' }, r.pr), el('span', { class: 'meta' }, r.author)),
+          el('p', { class: 'meta' }, r.title),
+          r.action ? el('p', { class: 'meta wk-ci-act' }, r.action) : null);
+      }) },
+    ],
+  });
+  const parts = [];
+  if (c.green != null) parts.push(`${c.green} green`, `${c.red} red`);
+  return el('button', { class: `wk-ci ${bad ? 'is-bad' : ''}`, type: 'button', onclick: open },
     el('span', { class: `dot dot--${bad ? 'err' : q ? 'warn' : 'ok'}` }),
-    el('span', { class: 'wk-ci-main' }, q ? `CI: ${plural(q, 'job')} waiting, oldest ${Math.round(oldest)} min` : 'CI: nothing waiting'),
+    el('span', { class: 'wk-ci-main' }, baseRed.length ? `CI: ${baseRed.map(([k]) => k.split(':')[1]).join(', ')} is red, PRs wait on it` : q ? `CI: ${plural(q, 'job')} waiting, oldest ${Math.round(oldest)} min` : 'CI: nothing waiting'),
+    parts.length ? el('span', { class: 'meta' }, parts.join(' · ')) : null,
     total != null ? el('span', { class: 'meta' }, `runners ${busy ?? 0}/${total} busy`) : null,
     med != null ? el('span', { class: 'meta' }, `median result ${Math.round(med)} min`) : null);
 }

@@ -464,3 +464,8 @@
 .wk-ci { display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--s-3); padding: 10px var(--s-3); border: 1px solid var(--line-2); background: var(--bg-2); font-size: 0.78rem; color: var(--ink-2); min-width: 0; }
 .wk-ci.is-bad { border-color: var(--err); }
 .wk-ci-main { color: var(--ink); font-weight: 700; }
+button.wk-ci { width: 100%; text-align: left; cursor: pointer; font: inherit; }
+button.wk-ci:hover { border-color: var(--line-strong); }
+.wk-ci-pr { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wk-ci-pr a { color: var(--ink); }
+.wk-ci-act { color: var(--ink-2) !important; }
