@@ -945,7 +945,9 @@ function sizeTerminal() {
   const top = pane.getBoundingClientRect().top + window.scrollY;
   const box = view.querySelector('.ag-cl-compose');
   const below = box && !box.hidden ? box.offsetHeight + 8 : 0;
-  const min = innerWidth <= 560 ? 240 : 300;
+  // A phone gives the pane less of a floor: with the message box grown, the
+  // box must still end above the console's bottom bar.
+  const min = innerWidth <= 560 ? 120 : 300;
   const h = Math.floor(visible - bottomChrome(view, visible) - top - below - 10);
   view.style.setProperty('--ag-cl-termh', `${Math.max(min, h)}px`);
   // Whatever still sits below it in the page (the host's padding, a status
@@ -953,6 +955,23 @@ function sizeTerminal() {
   const doc = document.documentElement;
   const over = doc.scrollHeight - doc.clientHeight;
   if (over > 0) view.style.setProperty('--ag-cl-termh', `${Math.max(min, h - over)}px`);
+  keepComposerInView(view);
+}
+
+/**
+ * The message box ends above whatever is pinned to the bottom of the window
+ * (the console's phone tab bar, measured, not assumed) and above the
+ * keyboard (the visual viewport). If it does not, the page scrolls by the
+ * difference.
+ */
+function keepComposerInView(view) {
+  const box = view.querySelector('.ag-cl-compose');
+  if (!box || box.hidden || view.matches('.is-max, .is-kb')) return;
+  const vv = window.visualViewport;
+  const visible = vv?.height || innerHeight;
+  const limit = (vv?.offsetTop || 0) + visible - bottomChrome(view, visible) - 4;
+  const r = box.getBoundingClientRect();
+  if (r.bottom > limit) window.scrollBy(0, Math.ceil(r.bottom - limit));
 }
 
 /**
@@ -1586,7 +1605,14 @@ function composer(s) {
   const slash = el('div', { class: 'ag-cl-slash', role: 'listbox', 'aria-label': 'Commands', hidden: true });
   let pick = 0;
   let matches = [];
-  const grow = () => { text.style.height = 'auto'; text.style.height = `${Math.min(text.scrollHeight + 2, touch() ? 140 : 220)}px`; };
+  // Grows with what is typed, up to a share of what is visible: on a phone a
+  // tall box would push itself under the bottom bar or the keyboard.
+  const grow = () => {
+    const visible = window.visualViewport?.height || innerHeight;
+    const cap = innerWidth <= 560 || touch() ? Math.max(66, Math.min(160, Math.round(visible * 0.24))) : 220;
+    text.style.height = 'auto';
+    text.style.height = `${Math.min(text.scrollHeight + 2, cap)}px`;
+  };
   const closeSlash = () => { slash.hidden = true; matches = []; };
   const drawSlash = () => {
     const v = text.value;

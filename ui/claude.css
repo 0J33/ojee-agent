@@ -755,6 +755,8 @@ button.ag-cl-row:hover { background: var(--accent-03); }
   .ag-cl-t-body { padding-left: 10px; }
   .ag-cl-t-what > .ag-cl-t-dir { display: none; }
   .ag-cl-compose-hint { display: none; }
+  /* sizeTerminal() sets the height; the floor here only stops it vanishing. */
+  .ag-cl-txwrap, .ag-cl-term, .ag-cl-noterm { min-height: 120px; }
   .ag-cl-agentpick-count { display: none; }
   .ag-cl-agentback .ag-cl-lbl { display: none; }
   .ag-cl-send { min-width: 64px; }
