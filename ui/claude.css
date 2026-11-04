@@ -1,5 +1,5 @@
 /* ============================================================
-   ojee-agent — the Claude view's styles.
+   ojee-agent - the Claude view's styles.
 
    Same rules as agent.css, restated because this is where they
    were broken three times before: every selector here is an
@@ -96,7 +96,7 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-head-actions .ic, .ag-cl-term-bar .ic, .ag-cl-browser-bar .ic, .ag-cl-login-panel .ic { width: 15px; height: 15px; }
 /* An icon-only button beside labelled small buttons: the design system's
    small icon button drops both padding and min-height, so it came out as
-   tall as its glyph — a flat sliver next to 31px neighbours. It takes the
+   tall as its glyph - a flat sliver next to 31px neighbours. It takes the
    row's height instead, which keeps it square. */
 .ag-cl-sq { align-self: stretch; height: auto; min-height: 30px; }
 
@@ -112,7 +112,7 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-term-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; margin-left: auto; }
 .ag-cl-term-state { margin-right: var(--s-2); }
 
-/* The terminal fills the viewport rather than growing the page — the same
+/* The terminal fills the viewport rather than growing the page - the same
    bound ojee-remote's Shell uses, so it never takes the scrollbar with it. */
 .ag-cl-body { display: flex; flex-direction: column; gap: 2px; min-height: 0; }
 .ag-cl-term {
@@ -128,18 +128,12 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 /* The inset lives on xterm's own element: its fit addon sizes rows from the
    PARENT's height (which, border-box, includes the parent's padding) minus
    the .xterm element's padding. Padding on the parent gave one row too many,
-   and the bottom line — Claude's status line — was cut in half. */
+   and the bottom line - Claude's status line - was cut in half. */
 .ag-cl-term .xterm { height: 100%; padding: var(--s-2) 6px 4px var(--s-2); }
 /* A drag on the terminal scrolls the terminal (touchScroll() in
    claude-term.js), never the page under it. */
 .ag-cl-term .xterm { touch-action: none; }
 .ag-cl-term .xterm-viewport { overflow-y: auto; }
-.ag-cl-keys {
-  display: flex; gap: 2px; padding: 6px 8px; overflow-x: auto;
-  background: var(--panel); border: 1px solid var(--line-2); scrollbar-width: none;
-}
-.ag-cl-keys::-webkit-scrollbar { display: none; }
-.ag-cl-keys .btn { flex: 0 0 auto; }
 .ag-cl-noterm { background: var(--panel); border: 1px solid var(--line-2); min-height: 240px; height: var(--ag-cl-termh, auto); }
 
 
@@ -147,7 +141,6 @@ button.ag-cl-row:hover { background: var(--accent-03); }
    The session lifted over the console: fixed to the window, above the
    nav (50), top bar (60) and tab bar (80), below dialogs (300) and toasts,
    so Rename and Delete still open over it. Not the browser's fullscreen. */
-.ag-cl-maxbar { display: none; }
 .ag-cl-detail.is-max,
 .ag-cl-detail.is-kb {
   position: fixed; inset: 0; z-index: calc(var(--z-modal, 300) - 10);
@@ -161,7 +154,7 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-detail.is-max > .ag-cl-callouts { display: none; }
 
 /* Typing on a phone: the view is sized to what the keyboard leaves visible
-   (the visual viewport), every bar steps aside, and the special keys show —
+   (the visual viewport), every bar steps aside, and the special keys show -
    Esc, arrows and Tab are what a phone keyboard lacks. */
 .ag-cl-detail.is-kb {
   top: var(--ag-cl-vvtop, 0); bottom: auto; height: var(--ag-cl-vvh, 100dvh);
@@ -172,13 +165,12 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-detail.is-kb > .ag-cl-callouts,
 .ag-cl-detail.is-kb > .ag-cl-maxbar,
 .ag-cl-detail.is-kb > .ag-cl-panes { display: none; }
-.ag-cl-detail.is-kb .ag-cl-keys[hidden] { display: flex !important; }
-.ag-cl-detail.is-max > .ag-cl-maxbar { display: flex; align-items: center; gap: 6px; flex: none; min-width: 0; }
+.ag-cl-detail.is-kb .ag-cl-keys--term[hidden] { display: flex !important; }
 .ag-cl-detail.is-max > .ag-cl-panes,
 .ag-cl-detail:is(.is-max, .is-kb) > .ag-cl-compose { flex: none; }
 .ag-cl-detail:is(.is-max, .is-kb) > .ag-cl-body { flex: 1 1 auto; min-height: 0; }
 .ag-cl-detail:is(.is-max, .is-kb) .ag-cl-term,
-.ag-cl-detail:is(.is-max, .is-kb) .ag-cl-transcript,
+.ag-cl-detail:is(.is-max, .is-kb) .ag-cl-txwrap,
 .ag-cl-detail:is(.is-max, .is-kb) .ag-cl-noterm { flex: 1 1 auto; height: auto; min-height: 0; }
 .ag-cl-restore { flex: none; }
 .ag-cl-restore .ic, .ag-cl-term-bar .ic { width: 15px; height: 15px; }
@@ -201,64 +193,362 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-switch-item:hover { border-color: var(--line-hover); color: var(--ink); }
 .ag-cl-switch-item.is-current { border-color: var(--accent); color: var(--ink); background: var(--accent-03); }
 
-.ag-cl-transcript {
-  /* One column no wider than the box. An automatic column grew to the
-     widest line that will not wrap (a tool call, a result's first line)
-     and dragged every message out past the right edge with it. */
-  display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; align-content: start;
-  height: var(--ag-cl-termh, calc(100dvh - 420px)); min-height: 240px;
-  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
-  padding: var(--s-2); background: var(--panel); border: 1px solid var(--line-2);
-}
-.ag-cl-msg {
-  display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-width: 0;
-  padding: 8px 10px; font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2);
-  overflow-wrap: anywhere;
-}
-.ag-cl-msg--user { background: var(--tint-1); border-left: 2px solid var(--accent); color: var(--ink); }
-.ag-cl-msg--assistant { color: var(--ink); }
-.ag-cl-msg-who {
-  display: flex; gap: 8px; align-items: baseline;
-  font-family: var(--hud); font-size: 0.58rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim);
-}
-.ag-cl-msg--tool, .ag-cl-msg--result { grid-template-columns: auto minmax(0, 1fr); padding-block: 3px; color: var(--dim); }
-.ag-cl-msg--result { display: block; padding-left: 22px; }
-.ag-cl-msg--result > summary { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ag-cl-msg--result.is-bad > summary { color: var(--err); }
-.ag-cl-tool { color: var(--accent); }
-.ag-cl-tool-arg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ag-cl-msg--error { background: var(--err-wash); border-left: 2px solid var(--err); }
-.ag-cl-msg--note, .ag-cl-msg--command { padding-block: 2px; }
-.ag-cl-trunc { padding: 6px 10px; }
+/* ── the bar above a session ────────────────────────────────────
+   Back (or Restore), one chip per open session, and when maximized the
+   state and every action. In both layouts, so switching is one tap. */
+.ag-cl-maxbar { display: flex; align-items: center; gap: 6px; flex: none; min-width: 0; }
+.ag-cl-back { flex: none; }
+.ag-cl-maxacts { display: flex; align-items: center; gap: 4px; flex: none; }
+.ag-cl-maxacts .ag-cl-state { margin-inline: 4px; }
+.ag-cl-maxacts .ic { width: 15px; height: 15px; }
+.ag-cl-switch-item.is-needs { border-color: color-mix(in srgb, var(--warn) 55%, transparent); }
+.ag-cl-switch-item .ag-cl-devtag { margin-right: 0; }
 
-/* A reply, drawn from its Markdown (md() in claude.js). */
-.ag-cl-md { display: grid; gap: 8px; min-width: 0; line-height: 1.6; }
+/* ── keys ───────────────────────────────────────────────────────
+   Grouped, every key one tap. Square, mono, big enough for a thumb. */
+.ag-cl-keys {
+  display: flex; flex-wrap: wrap; gap: 4px var(--s-3); padding: 6px 8px;
+  background: var(--bg-2); border: 1px solid var(--line-2);
+}
+.ag-cl-keys[hidden] { display: none; }
+.ag-cl-kgroup { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.ag-cl-klabel {
+  margin-right: 6px; font-family: var(--hud); font-size: 0.55rem; font-weight: 900;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim);
+}
+.ag-cl-key {
+  min-width: 38px; height: 36px; padding: 0 8px;
+  background: var(--bg-1); border: 1px solid var(--line-strong);
+  color: var(--ink); font-family: var(--mono); font-size: 0.74rem; cursor: pointer;
+  touch-action: manipulation; user-select: none; -webkit-user-select: none;
+  transition: background var(--dur-2), border-color var(--dur-2);
+}
+.ag-cl-key:hover { border-color: var(--line-hover); }
+.ag-cl-key:active { background: var(--accent-08); border-color: var(--accent); }
+.ag-cl-key--wide { font-size: 0.66rem; }
+
+/* The copy chip over the terminal: "Copied", or one tap to finish a copy
+   the browser would not do by itself. */
+.ag-cl-term { position: relative; }
+.ag-cl-copychip {
+  position: absolute; z-index: 5; top: 8px; right: 12px;
+  padding: 6px 12px; min-height: 32px;
+  background: var(--bg-2); border: 1px solid var(--line-strong);
+  color: var(--ink-2); font-family: var(--mono); font-size: 0.7rem; cursor: pointer;
+}
+.ag-cl-copychip.is-offer { border-color: var(--accent); color: var(--ink); background: var(--bg-1); }
+.ag-cl-copychip[hidden] { display: none; }
+/* iOS zooms into a field under 16px when it takes focus; xterm's hidden
+   input is one. */
+.ag-cl-term .xterm-helper-textarea { font-size: 16px !important; }
+
+.ag-cl-pick-pre {
+  margin: 0; max-height: min(60vh, 520px); overflow: auto; padding: var(--s-2);
+  background: var(--bg-0); border: 1px solid var(--line-2);
+  font-family: var(--mono); font-size: 0.7rem; line-height: 1.45; color: var(--ink);
+  white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text;
+}
+.ag-cl-pick-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ag-cl-pick-bar .ic { width: 15px; height: 15px; }
+
+/* ── the transcript ─────────────────────────────────────────────
+   A reading column: turns separated by air, replies at reading size,
+   tool calls as one-line rows that open, thinking folded away. */
+.ag-cl-txwrap {
+  position: relative; display: flex; flex-direction: column; min-height: 240px;
+  height: var(--ag-cl-termh, calc(100dvh - 420px));
+  background: var(--bg-1); border: 1px solid var(--line-2);
+}
+.ag-cl-transcript {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+  padding: var(--s-3) var(--s-3) var(--s-4);
+  user-select: text; -webkit-user-select: text;
+}
+.ag-cl-transcript:focus-visible { outline: 1px solid var(--line-strong); outline-offset: -1px; }
+.ag-cl-t-list {
+  /* One column no wider than the box, and no wider than reads well. */
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px;
+  max-width: 920px; margin: 0 auto;
+}
+.ag-cl-t-top { max-width: 920px; margin: 0 auto var(--s-2); display: flex; justify-content: center; }
+.ag-cl-t-earlier {
+  min-height: 34px; padding: 4px 14px; background: transparent; border: 1px solid var(--line-2);
+  color: var(--ink-2); font-family: var(--mono); font-size: 0.68rem; cursor: pointer;
+}
+.ag-cl-t-earlier:hover { border-color: var(--line-hover); color: var(--ink); }
+.ag-cl-t-start, .ag-cl-t-empty {
+  font-family: var(--hud); font-size: 0.58rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim);
+  padding: var(--s-2) 0; text-align: center;
+}
+
+.ag-cl-t-head { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.ag-cl-t-who {
+  font-family: var(--hud); font-size: 0.58rem; font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim);
+}
+.ag-cl-t-time { font-family: var(--mono); font-size: 0.62rem; color: var(--dim); }
+.ag-cl-t-dim { font-family: var(--mono); font-size: 0.62rem; color: var(--dim); }
+.ag-cl-t-head .ag-cl-copy { margin-left: auto; }
+
+.ag-cl-t-user {
+  display: grid; gap: 4px; margin-top: var(--s-3); padding: 10px 14px;
+  background: var(--bg-2); border: 1px solid var(--line-2); border-left: 2px solid var(--accent);
+}
+.ag-cl-t-user .ag-cl-t-who { color: var(--ink-2); }
+.ag-cl-t-text {
+  font-family: var(--mono); font-size: 0.8rem; line-height: 1.6; color: var(--ink);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.ag-cl-t-asst { display: grid; gap: 4px; padding: 6px 2px 2px; color: var(--ink); }
+.ag-cl-t-asst .ag-cl-md { font-size: 0.8rem; }
+/* Copy buttons show on hover on a desktop, always on a touch screen. */
+.ag-cl-copy {
+  display: inline-grid; place-items: center; width: 28px; height: 26px; flex: none;
+  background: transparent; border: 1px solid transparent; color: var(--dim); cursor: pointer;
+  transition: color var(--dur-2), border-color var(--dur-2), opacity var(--dur-2);
+}
+.ag-cl-copy .ic { width: 14px; height: 14px; }
+.ag-cl-copy:hover { color: var(--ink); border-color: var(--line-2); }
+.ag-cl-copy.is-done { color: var(--ok); }
+@media (hover: hover) {
+  .ag-cl-t-head .ag-cl-copy { opacity: 0; }
+  .ag-cl-t-user:hover .ag-cl-copy, .ag-cl-t-asst:hover .ag-cl-copy, .ag-cl-copy:focus-visible { opacity: 1; }
+}
+
+/* Thinking: one quiet line, open for the text. */
+.ag-cl-t-think {
+  font-family: var(--mono); font-size: 0.7rem; color: var(--dim); padding: 2px 2px;
+}
+.ag-cl-t-think > summary { display: flex; align-items: baseline; gap: 8px; cursor: pointer; list-style: none; min-height: 26px; align-items: center; }
+.ag-cl-t-think > summary::-webkit-details-marker { display: none; }
+.ag-cl-t-think.is-empty { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.ag-cl-t-thinkmark { color: var(--ink-2); }
+.ag-cl-t-thinkprev { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; }
+.ag-cl-t-think[open] .ag-cl-t-thinkprev { display: none; }
+.ag-cl-t-thinkbody { margin: 4px 0 6px 6px; padding-left: 12px; border-left: 1px solid var(--line-2); font-style: italic; }
+.ag-cl-t-thinkbody .ag-cl-md { font-size: 0.74rem; color: var(--ink-2); }
+
+/* A tool call: one row; open, its input and output. Consecutive calls
+   share their hairlines, so a run of them reads as one block. */
+.ag-cl-t-tool { border: 1px solid var(--line-2); background: var(--bg-1); }
+.ag-cl-t-tool + .ag-cl-t-tool { margin-top: -5px; }
+.ag-cl-t-sum {
+  display: grid; grid-template-columns: 14px auto minmax(0, 1fr) auto; align-items: center; gap: 8px;
+  min-height: 34px; padding: 4px 10px; cursor: pointer; list-style: none;
+  font-family: var(--mono); font-size: 0.7rem; color: var(--ink-2);
+}
+.ag-cl-t-sum::-webkit-details-marker { display: none; }
+.ag-cl-t-sum:hover { background: var(--accent-03); color: var(--ink); }
+.ag-cl-t-chev { display: grid; place-items: center; color: var(--dim); transition: transform var(--dur-2); }
+.ag-cl-t-chev .ic { width: 14px; height: 14px; }
+.ag-cl-t-tool[open] > .ag-cl-t-sum .ag-cl-t-chev { transform: rotate(90deg); }
+.ag-cl-t-name { font-weight: 700; color: var(--ink); }
+.ag-cl-t-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.ag-cl-t-what > span + span { margin-left: 8px; }
+.ag-cl-t-file { color: var(--ink); }
+.ag-cl-t-dir { color: var(--dim); }
+.ag-cl-t-st {
+  font-family: var(--hud); font-size: 0.55rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); white-space: nowrap;
+}
+.ag-cl-t-st.is-ok { color: var(--dim); }
+.ag-cl-t-st.is-err { color: var(--err); }
+.ag-cl-t-st.is-run { color: var(--accent); }
+.ag-cl-t-st.is-run::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; background: var(--accent); vertical-align: 1px; animation: ag-cl-blink 1s steps(2, start) infinite; }
+.ag-cl-t-tool.is-bad { border-color: var(--err-line); }
+.ag-cl-t-tool.is-bad .ag-cl-t-name { color: var(--err); }
+.ag-cl-t-body { display: grid; gap: 8px; padding: 4px 10px 10px 32px; min-width: 0; }
+.ag-cl-t-in { display: grid; gap: 6px; min-width: 0; }
+.ag-cl-t-desc { font-family: var(--mono); font-size: 0.7rem; color: var(--ink-2); }
+.ag-cl-t-path { font-family: var(--mono); font-size: 0.68rem; color: var(--ink-2); overflow-wrap: anywhere; }
+.ag-cl-t-cmd { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 6px 8px; background: var(--bg-0); border: 1px solid var(--line-2); }
+.ag-cl-t-cmd .ag-cl-t-pre { padding: 0; border: 0; background: transparent; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ag-cl-t-prompt { font-family: var(--mono); font-size: 0.7rem; color: var(--dim); line-height: 1.5; }
+.ag-cl-t-pre {
+  margin: 0; padding: 8px 10px; max-height: 420px; overflow: auto;
+  background: var(--bg-0); border: 1px solid var(--line-2);
+  font-family: var(--mono); font-size: 0.68rem; line-height: 1.5; color: var(--ink-2);
+  white-space: pre; overflow-wrap: normal; tab-size: 2;
+}
+.ag-cl-t-pre.is-err { color: var(--err); }
+.ag-cl-t-out { display: grid; gap: 4px; min-width: 0; }
+.ag-cl-t-outbar { display: flex; align-items: center; gap: 8px; font-family: var(--hud); font-size: 0.55rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
+.ag-cl-t-outbar .ag-cl-copy { margin-left: auto; }
+.ag-cl-t-prose { padding: 6px 10px; border-left: 1px solid var(--line-2); }
+.ag-cl-t-prose .ag-cl-md { font-size: 0.72rem; color: var(--ink-2); }
+.ag-cl-todos { gap: 2px; font-family: var(--mono); font-size: 0.7rem; }
+.ag-cl-todo { display: grid; grid-template-columns: 18px minmax(0, 1fr); color: var(--ink-2); }
+.ag-cl-todo.is-completed { color: var(--dim); text-decoration: line-through; }
+.ag-cl-todo.is-in_progress { color: var(--ink); }
+
+.ag-cl-diff {
+  display: grid; overflow: auto; max-height: 460px; padding: 4px 0;
+  background: var(--bg-0); border: 1px solid var(--line-2);
+  font-family: var(--mono); font-size: 0.68rem; line-height: 1.5; color: var(--ink-2);
+}
+.ag-cl-diff-l { display: grid; grid-template-columns: 18px auto; padding-right: 10px; white-space: pre; min-width: max-content; }
+.ag-cl-diff-k { color: var(--dim); text-align: center; user-select: none; -webkit-user-select: none; }
+.ag-cl-diff-l.is-del { background: var(--err-wash); color: var(--ink); }
+.ag-cl-diff-l.is-del .ag-cl-diff-k { color: var(--err); }
+.ag-cl-diff-l.is-add { background: color-mix(in srgb, var(--ok) 12%, transparent); color: var(--ink); }
+.ag-cl-diff-l.is-add .ag-cl-diff-k { color: var(--ok); }
+
+/* A long block shows its first lines; "Show all" opens the rest. */
+.ag-cl-clampwrap { display: grid; gap: 4px; min-width: 0; }
+.is-clamped.ag-cl-t-pre, .is-clamped.ag-cl-diff, .is-clamped.ag-cl-t-prose { max-height: 16.5em; overflow: hidden; }
+.is-clamped.ag-cl-t-text { max-height: 25.6em; overflow: hidden; }
+.ag-cl-more {
+  justify-self: start; padding: 2px 0; background: transparent; border: 0;
+  color: var(--ink-2); font-family: var(--mono); font-size: 0.66rem; text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
+}
+.ag-cl-more:hover { color: var(--ink); }
+
+.ag-cl-t-slash { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-top: var(--s-2); font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2); }
+.ag-cl-t-slashname { padding: 2px 8px; border: 1px solid var(--line-strong); color: var(--ink); }
+.ag-cl-t-cmdout .ag-cl-t-pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ag-cl-t-turn { text-align: right; font-family: var(--hud); font-size: 0.55rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); padding: 2px 0 6px; }
+.ag-cl-t-note {
+  display: flex; align-items: center; gap: 10px; margin: 6px 0;
+  font-family: var(--mono); font-size: 0.66rem; color: var(--dim);
+}
+.ag-cl-t-note::before, .ag-cl-t-note::after { content: ''; flex: 1 1 24px; height: 1px; background: var(--line-2); }
+.ag-cl-t-note > span { max-width: 80%; text-align: center; overflow-wrap: anywhere; }
+.ag-cl-t-note.is-warn { color: var(--warn); }
+.ag-cl-t-err { display: grid; gap: 4px; padding: 10px 14px; background: var(--err-wash); border: 1px solid var(--err-line); }
+.ag-cl-t-err .ag-cl-t-who { color: var(--err); }
+
+.ag-cl-jump {
+  position: absolute; right: 14px; bottom: 12px; z-index: 2;
+  display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 4px 12px;
+  background: var(--bg-2); border: 1px solid var(--line-strong); color: var(--ink);
+  font-family: var(--mono); font-size: 0.68rem; cursor: pointer;
+}
+.ag-cl-jump .ic { width: 14px; height: 14px; transform: rotate(90deg); }
+.ag-cl-jump[hidden] { display: none; }
+
+/* A reply, drawn from its Markdown (createTranscript in claude-transcript.js). */
+.ag-cl-md { display: grid; gap: 10px; min-width: 0; font-family: var(--mono); line-height: 1.65; overflow-wrap: anywhere; }
 .ag-cl-md-p { margin: 0; }
-.ag-cl-md-h { color: var(--ink); font-weight: 700; margin-top: 4px; }
-.ag-cl-md-h1 { font-size: 0.86rem; }
-.ag-cl-md-h2 { font-size: 0.8rem; }
+.ag-cl-md-h { color: var(--ink); font-weight: 700; margin-top: 6px; }
+.ag-cl-md-h1 { font-size: 1.05em; }
+.ag-cl-md-h2 { font-size: 1em; }
+.ag-cl-md-h3 { font-size: 0.95em; color: var(--ink-2); }
 .ag-cl-md-b { color: var(--ink); font-weight: 700; }
-.ag-cl-md-c { padding: 0 4px; background: var(--tint-1); border: 1px solid var(--line-2); font-size: 0.68rem; }
-.ag-cl-md-a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
-.ag-cl-md-li { position: relative; padding-left: calc(var(--d, 0) * 14px + 18px); margin-top: -4px; }
-.ag-cl-md-mark { position: absolute; left: calc(var(--d, 0) * 14px); color: var(--dim); }
-.ag-cl-md-quote { padding-left: 10px; border-left: 2px solid var(--line-strong); color: var(--dim); }
+.ag-cl-md-i { font-style: italic; }
+.ag-cl-md-c { padding: 0 4px; background: var(--bg-2); border: 1px solid var(--line-2); font-size: 0.92em; }
+.ag-cl-md-a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; overflow-wrap: anywhere; }
+.ag-cl-md-a:hover { text-decoration-color: var(--ink); }
+.ag-cl-md-li { position: relative; padding-left: calc(var(--d, 0) * 16px + 20px); margin-top: -6px; }
+.ag-cl-md-mark { position: absolute; left: calc(var(--d, 0) * 16px); color: var(--dim); }
+.ag-cl-md-quote { padding-left: 12px; border-left: 2px solid var(--line-strong); color: var(--ink-2); }
 .ag-cl-md-hr { height: 1px; background: var(--line-2); }
 /* Code and tables keep their shape and scroll sideways inside the reply. */
+.ag-cl-md-codewrap { border: 1px solid var(--line-2); background: var(--bg-0); min-width: 0; }
+.ag-cl-md-codebar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 0 0 0 10px; border-bottom: 1px solid var(--line-2);
+  font-family: var(--hud); font-size: 0.55rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim);
+}
 .ag-cl-md-code {
   margin: 0; padding: 8px 10px; overflow-x: auto; white-space: pre; overflow-wrap: normal;
-  background: var(--bg-0); border: 1px solid var(--line-2); font-size: 0.68rem; line-height: 1.5;
+  font-family: var(--mono); font-size: 0.9em; line-height: 1.5; color: var(--ink-2);
 }
 .ag-cl-md-tablewrap { overflow-x: auto; }
-.ag-cl-md-table { border-collapse: collapse; font-size: 0.68rem; }
+.ag-cl-md-table { border-collapse: collapse; font-size: 0.9em; }
 .ag-cl-md-th, .ag-cl-md-td { padding: 4px 8px; border: 1px solid var(--line-2); text-align: left; vertical-align: top; overflow-wrap: normal; min-width: 6ch; }
-.ag-cl-md-th { color: var(--ink); background: var(--tint-1); }
+.ag-cl-md-th { color: var(--ink); background: var(--bg-2); }
 
-.ag-cl-compose { display: grid; gap: 6px; }
+/* ── under the transcript: now, a menu, keys, the message box ───── */
+.ag-cl-compose { display: grid; gap: 4px; }
 .ag-cl-compose[hidden] { display: none; }
-.ag-cl-input { min-height: 60px; }
-.ag-cl-compose-bar { display: flex; align-items: center; gap: var(--s-2); }
+.ag-cl-detail:not(.is-tx) .ag-cl-live,
+.ag-cl-detail:not(.is-tx) .ag-cl-menu,
+.ag-cl-detail:not(.is-tx) .ag-cl-txkeys { display: none; }
+.ag-cl-menu:empty, .ag-cl-txkeys:empty { display: none; }
+
+.ag-cl-live {
+  display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; min-height: 34px; padding: 4px 10px;
+  background: var(--bg-2); border: 1px solid var(--line-2);
+  font-family: var(--mono); font-size: 0.7rem; color: var(--ink-2);
+}
+.ag-cl-live-dot { width: 8px; height: 8px; flex: none; background: var(--line-strong); }
+.ag-cl-live-dot--running, .ag-cl-live-dot--starting { background: var(--accent); animation: ag-cl-blink 1.2s steps(2, start) infinite; }
+.ag-cl-live-dot--waiting, .ag-cl-live-dot--blocked, .ag-cl-live-dot--paused { background: var(--warn); }
+.ag-cl-live-dot--error { background: var(--err); }
+.ag-cl-live-dot--idle, .ag-cl-live-dot--done { background: var(--ok); }
+.ag-cl-live-main { color: var(--ink); font-weight: 700; }
+.ag-cl-live-sub { min-width: 0; flex: 1 1 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-cl-live-mode, .ag-cl-live-draft {
+  padding: 1px 6px; border: 1px solid var(--line-2);
+  font-family: var(--hud); font-size: 0.55rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim);
+}
+.ag-cl-live-draft { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); text-transform: none; letter-spacing: 0; font-family: var(--mono); font-size: 0.64rem; }
+.ag-cl-live-agents > summary { cursor: pointer; color: var(--ink-2); }
+.ag-cl-live-agentlist { display: grid; gap: 2px; padding: 4px 0; width: 100%; }
+.ag-cl-live-agents[open] { flex-basis: 100%; }
+@keyframes ag-cl-blink { to { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) {
+  .ag-cl-live-dot--running, .ag-cl-live-dot--starting, .ag-cl-t-st.is-run::before { animation: none; }
+}
+
+.ag-cl-menu-card {
+  display: grid; gap: 6px; padding: 10px; max-height: min(46vh, 420px); overflow-y: auto; overscroll-behavior: contain;
+  background: var(--bg-2); border: 1px solid var(--warn);
+}
+.ag-cl-menu-title { font-family: var(--mono); font-size: 0.74rem; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ag-cl-menu-opts { display: grid; gap: 2px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); }
+.ag-cl-opt {
+  display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: start; gap: 8px;
+  min-height: 44px; padding: 6px 10px; text-align: left;
+  background: var(--bg-1); border: 1px solid var(--line-strong); color: var(--ink);
+  font-family: var(--mono); font-size: 0.74rem; cursor: pointer; touch-action: manipulation;
+  transition: border-color var(--dur-2), background var(--dur-2);
+}
+.ag-cl-opt:hover { border-color: var(--line-hover); background: var(--accent-03); }
+.ag-cl-opt.is-cur { border-color: var(--accent); }
+.ag-cl-opt:disabled { opacity: 0.5; cursor: progress; }
+.ag-cl-opt-n { display: grid; place-items: center; height: 22px; border: 1px solid var(--line-strong); color: var(--ink-2); font-size: 0.66rem; }
+.ag-cl-opt-main { display: grid; gap: 2px; min-width: 0; }
+.ag-cl-opt-label { overflow-wrap: anywhere; }
+.ag-cl-opt-desc { color: var(--dim); font-size: 0.66rem; overflow-wrap: anywhere; }
+.ag-cl-menu-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.ag-cl-menu-keys { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+
+.ag-cl-compose-row { position: relative; display: flex; align-items: flex-end; gap: 4px; }
+.ag-cl-input.textarea {
+  flex: 1 1 auto; min-width: 0; min-height: 44px; max-height: 220px; resize: none;
+  padding: 11px 12px; line-height: 1.45; overflow-y: auto;
+}
+.ag-cl-compose-row > .btn { min-height: 44px; }
+.ag-cl-slashbtn { font-family: var(--mono); font-size: 0.9rem; width: 44px; justify-content: center; }
+.ag-cl-stopbtn[hidden] { display: none; }
+.ag-cl-stopbtn .ic { width: 15px; height: 15px; }
+.ag-cl-send { min-width: 72px; justify-content: center; }
+.ag-cl-compose-bar { display: flex; align-items: baseline; gap: var(--s-2); flex-wrap: wrap; min-height: 18px; }
 .ag-cl-compose-note { flex: 1 1 auto; min-width: 0; }
+.ag-cl-compose-hint { font-size: 0.6rem; color: var(--dim); }
+
+.ag-cl-slash {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 4px); z-index: 6;
+  display: grid; max-height: min(320px, 50vh); overflow-y: auto;
+  background: var(--bg-2); border: 1px solid var(--line-strong);
+}
+.ag-cl-slash[hidden] { display: none; }
+.ag-cl-slash-item {
+  display: grid; grid-template-columns: minmax(0, 12ch) minmax(0, 1fr); gap: 12px; align-items: baseline;
+  min-height: 38px; padding: 6px 12px; text-align: left; background: transparent; border: 0; border-bottom: 1px solid var(--line-2);
+  color: var(--ink-2); font-family: var(--mono); font-size: 0.72rem; cursor: pointer;
+}
+.ag-cl-slash-item:last-child { border-bottom: 0; }
+.ag-cl-slash-item.is-cur, .ag-cl-slash-item:hover { background: var(--accent-08); color: var(--ink); }
+.ag-cl-slash-name { color: var(--ink); }
+.ag-cl-slash-desc { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Touch screens (and any phone-sized window): 16px in every field so iOS
+   does not zoom in on focus (el() in claude.js marks every input, select
+   and textarea it makes, dialogs included). */
+@media (pointer: coarse), (hover: none), (max-width: 560px) {
+  .ag-cl-in, .ag-cl-in.input, .ag-cl-in.textarea, .ag-cl-in.select { font-size: 16px; }
+  .ag-cl-copy { width: 36px; height: 32px; }
+}
 
 /* ── new session ────────────────────────────────────────────── */
 
@@ -360,9 +650,31 @@ button.ag-cl-row:hover { background: var(--accent-03); }
   .ag-cl-detail .ag-cl-panes .ag-cl-term-bar { width: auto; margin-left: auto; }
   .ag-cl-panes .ag-cl-term-state { margin-right: auto; }
 
-  .ag-cl-transcript { padding: 4px; }
-  .ag-cl-msg { padding: 8px; }
-  .ag-cl-msg--tool, .ag-cl-msg--result { padding-block: 3px; }
+  /* The bar: Restore as an icon, chips shorter, actions as icons. */
+  .ag-cl-maxbar .ag-cl-lbl { display: none; }
+  .ag-cl-switch-item { max-width: 150px; padding-inline: 10px; }
+  .ag-cl-detail.is-max > .ag-cl-maxbar { flex-wrap: wrap; }
+  .ag-cl-detail.is-max .ag-cl-switch { flex-basis: 100%; order: 3; }
+  .ag-cl-detail.is-max .ag-cl-maxacts { margin-left: auto; }
+
+  /* Keys: group labels go, the keys fill the row. */
+  /* Keys: one dense grid, groups in order, labels gone. Three rows. */
+  .ag-cl-klabel { display: none; }
+  .ag-cl-keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: 3px; padding: 4px; }
+  .ag-cl-keys[hidden] { display: none; }
+  .ag-cl-kgroup { display: contents; }
+  .ag-cl-key { min-width: 0; height: 38px; padding: 0 2px; }
+  .ag-cl-key--wide { font-size: 0.6rem; }
+
+  .ag-cl-transcript { padding: var(--s-2) var(--s-2) var(--s-3); }
+  .ag-cl-t-user { padding: 8px 10px; }
+  .ag-cl-t-text, .ag-cl-t-asst .ag-cl-md { font-size: 0.78rem; }
+  .ag-cl-t-sum { grid-template-columns: 12px auto minmax(0, 1fr) auto; padding-inline: 8px; }
+  .ag-cl-t-sum > .ag-cl-t-st:not(.is-run):not(.is-err) { visibility: hidden; width: 0; }
+  .ag-cl-t-body { padding-left: 10px; }
+  .ag-cl-t-what > .ag-cl-t-dir { display: none; }
+  .ag-cl-compose-hint { display: none; }
+  .ag-cl-send { min-width: 64px; }
 }
 
 @media (max-width: 720px) {

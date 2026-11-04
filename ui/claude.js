@@ -1,15 +1,15 @@
 /* ============================================================
-   ojee-agent — the Claude view.
+   ojee-agent - the Claude view.
 
    Unattended Claude Code sessions, through a runner on each machine
-   that runs them (claude-runner/ in this repo) — HP, and LOQ when it
+   that runs them (claude-runner/ in this repo) - HP, and LOQ when it
    is awake. Four places, one row of tabs:
 
      Sessions   what is running on every device, what needs you, and
                 every other conversation on a machine
      New        a device, a folder anywhere on it, a prompt, a model
      Accounts   one device's Claude logins, which one is active, which
-                are out and until when — and logging one in
+                are out and until when - and logging one in
      Settings   one device's default and fallback model, auto-switch,
                 pings, CPU
 
@@ -28,7 +28,8 @@
    a Discord ping opens straight to the session.
    ============================================================ */
 
-import { startTerminal } from './claude-term.js';
+import { startTerminal, keyStrip, copyText } from './claude-term.js';
+import { createTranscript } from './claude-transcript.js';
 import { ensureIcons } from './claude-icons.js';
 
 const el = (tag, attrs = {}, ...kids) => {
@@ -40,6 +41,9 @@ const el = (tag, attrs = {}, ...kids) => {
     else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
     else n.setAttribute(k, v === true ? '' : String(v));
   }
+  // Every field in this view, dialogs included: 16px on a touch screen, or
+  // iOS zooms the page in when it takes focus (claude.css).
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') n.classList.add('ag-cl-in');
   for (const kid of kids.flat()) {
     if (kid == null || kid === false) continue;
     n.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
@@ -54,7 +58,7 @@ let sse = null;
 const S = {
   // One entry per device: { id, label, sleeps, online, error, data, seenAt },
   // where data is that runner's { sessions, accounts, settings, models,
-  // notify, runner, governor } — kept when it goes offline, drawn as stale.
+  // notify, runner, governor } - kept when it goes offline, drawn as stale.
   devs: null,
   error: null,
   dev: pref('ag-cl-dev'),                   // the device Accounts / Settings / history show
@@ -66,15 +70,24 @@ const S = {
   fs: null,
   hidden: false,
   form: null,
-  pane: 'terminal',     // 'terminal' | 'transcript' in a session
+  pane: pref('ag-cl-pane') === 'transcript' ? 'transcript' : 'terminal', // in a session, remembered
   term: null,
   termState: null,
-  transcript: { id: null, messages: [], cursor: null, timer: null, truncated: false },
+  // The transcript being read: its view, the file offset the next poll reads
+  // from, and the screen state (an open menu, the spinner line) beside it.
+  transcript: { id: null, cursor: null, timer: null, gen: 0, view: null },
+  prompt: { id: null, data: null, timer: null, gen: 0 },
+  // What each device's runner can do, learned on first use: an older runner
+  // has no /keys, /prompt or detailed transcript, and the view falls back.
+  caps: {},
+  sent: {},             // messages sent per session, for Up to recall
+
   login: null,          // { id, state, timer, term }
   busy: new Set(),
   // Per-viewer layout, remembered in this browser only.
   compose: pref('ag-cl-compose') === '1',   // the message box (the terminal is the way in)
   max: pref('ag-cl-max') === '1',           // the session filling the window
+  keys: pref('ag-cl-keys') === '1',         // the special-key row
 };
 
 function pref(key, value) {
@@ -103,7 +116,7 @@ const post = (dev, path, body) => api(dev, path, { method: 'POST', body: JSON.st
 
 const devOf = (id) => S.devs?.find((d) => d.id === id) || null;
 const dataOf = (id) => devOf(id)?.data || null;
-const devLabel = (id) => devOf(id)?.label || id || '—';
+const devLabel = (id) => devOf(id)?.label || id || '-';
 const online = (id) => !!devOf(id)?.online;
 /** More than one device: only then is a device named anywhere. */
 const multi = () => (S.devs?.length || 0) > 1;
@@ -121,7 +134,7 @@ const devTag = (id) => (multi() ? el('span', { class: 'ag-cl-devtag', title: `Ru
 function offWhy(d) {
   if (!d || d.online) return null;
   const seen = d.seenAt ? ` · last seen ${ctx.relTime(d.seenAt)}` : '';
-  return d.sleeps ? `${d.label} is offline — asleep, shut or away${seen}` : `${d.label} is not answering${d.error ? ` (${d.error})` : ''}${seen}`;
+  return d.sleeps ? `${d.label} is offline: asleep, shut or away${seen}` : `${d.label} is not answering${d.error ? ` (${d.error})` : ''}${seen}`;
 }
 /** Every device's sessions in one list, most recently active first. */
 const allSessions = () => (S.devs || []).flatMap((d) => d.data?.sessions || [])
@@ -157,12 +170,12 @@ export { dot as stateDot, stateTag };
 const bgText = (bg) => [bg.subagents ? `${bg.subagents} subagent${bg.subagents === 1 ? '' : 's'}` : null,
   bg.shells ? `${bg.shells} command${bg.shells === 1 ? '' : 's'}` : null].filter(Boolean).join(', ') + ' in the background';
 
-const modelLabel = (id) => (S.devs || []).map((d) => d.data?.models?.find((m) => m.id === id)).find(Boolean)?.label || id || '—';
-const acctLabel = (id, dev) => dataOf(dev)?.accounts?.find((a) => a.id === id)?.label || id || '—';
+const modelLabel = (id) => (S.devs || []).map((d) => d.data?.models?.find((m) => m.id === id)).find(Boolean)?.label || id || '-';
+const acctLabel = (id, dev) => dataOf(dev)?.accounts?.find((a) => a.id === id)?.label || id || '-';
 
-const ago = (ms) => (ms ? ctx.relTime(ms) : '—');
+const ago = (ms) => (ms ? ctx.relTime(ms) : '-');
 const at = (ms) => {
-  if (!ms) return '—';
+  if (!ms) return '-';
   const d = new Date(ms);
   const same = d.toDateString() === new Date().toDateString();
   const t = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
@@ -305,7 +318,7 @@ function tabs() {
 
 /**
  * Repaint what the current place shows. `reason` lets a live update skip the
- * parts that must not be rebuilt under the user — a form being filled in, a
+ * parts that must not be rebuilt under the user - a form being filled in, a
  * terminal, a transcript being read.
  */
 function paint(reason) {
@@ -351,7 +364,7 @@ function paint(reason) {
   return paintSessions();
 }
 
-/** Which device a place shows — a row of buttons, only with more than one. */
+/** Which device a place shows - a row of buttons, only with more than one. */
 function devSwitch(onpick, value = curDev()) {
   if (!multi()) return null;
   return el('div', { class: 'segctl ag-cl-devswitch', role: 'group', 'aria-label': 'Device' },
@@ -527,14 +540,14 @@ function paintSessions() {
             // Open in a terminal there: a second process on the same
             // conversation would fork it. The runner refuses it too.
             disabled: S.busy.has(`adopt:${h.id}`) || h.runningElsewhere,
-            title: h.runningElsewhere ? 'Running in a terminal on that machine — close it there first' : null,
+            title: h.runningElsewhere ? 'Running in a terminal on that machine. Close it there first' : null,
             onclick: async () => {
               const v = await act(`adopt:${h.id}`, () => post(hdev, `/history/${h.id}/adopt`, {}));
               if (v) { upsert(hdev, v); S.history = null; go(v.id); }
             },
           }, 'Open'))))
         : el('p', { class: 'meta' }, `Every conversation on ${multi() ? devLabel(hdev) : 'this machine'} is already listed above.`));
-      hist.append(el('p', { class: 'meta' }, 'Opening one here lets you resume it, read it and message it — the same conversation, not a copy.'));
+      hist.append(el('p', { class: 'meta' }, 'Opening one here lets you resume it, read it and message it: the same conversation, not a copy.'));
     }
   }
   wrap.append(hist);
@@ -543,15 +556,39 @@ function paintSessions() {
 
 /* ── one session ────────────────────────────────────────────────────── */
 
-function detailHead(s) {
+/**
+ * What can be done to a session, as buttons. The head shows them labelled;
+ * the maximized bar shows the same set as icons (Resume keeps its word: it
+ * is the one that matters when it shows), plus Rename, since the title is
+ * not on screen there.
+ */
+function actionButtons(s, { compact = false } = {}) {
   const dev = s.device;
   const off = !online(dev);
   const alive = s.alive && !off;
   const busy = (k) => off || S.busy.has(`${k}:${s.id}`);
+  const cls = (v = 'btn--ghost') => `btn ${v} btn--sm${compact ? ' ag-cl-sq' : ''}`;
+  const L = (t) => (compact ? null : lbl(t));
+  return [
+    // Labels in .ag-cl-lbl: a phone shows the icons (each keeps its name as
+    // a title and aria-label) so the actions take one short row, not two.
+    s.state === 'running' && !off ? el('button', { class: cls(), type: 'button', title: 'Stop the current turn (Esc)', 'aria-label': 'Stop turn', onclick: () => interrupt(s) }, svg('pause'), L('Stop turn')) : null,
+    !alive || s.state === 'paused'
+      ? el('button', { class: `btn btn--sm ag-cl-resume`, type: 'button', disabled: busy('resume'), title: off ? offWhy(devOf(dev)) : 'Start Claude again in this conversation', onclick: () => act(`resume:${s.id}`, () => post(dev, `/sessions/${s.id}/resume`, {}).then((v) => upsert(dev, v)), 'Resuming') }, svg('play'), s.state === 'paused' ? 'Resume now' : 'Resume')
+      : null,
+    compact ? el('button', { class: cls(), type: 'button', title: 'Rename', 'aria-label': 'Rename', onclick: () => rename(s) }, svg('edit')) : null,
+    el('button', { class: cls(), type: 'button', title: 'Change model or account', 'aria-label': 'Change', disabled: off, onclick: () => changeSession(s) }, svg('swap'), L('Change')),
+    alive ? el('button', { class: cls(), type: 'button', title: 'End the session (the conversation is kept)', 'aria-label': 'End', disabled: busy('end'), onclick: () => endSession(s) }, svg('stop'), L('End')) : null,
+    el('button', { class: 'btn btn--ghost btn--sm btn--icon ag-cl-sq', type: 'button', title: 'Delete', 'aria-label': 'Delete', disabled: off, onclick: () => deleteSession(s) }, svg('trash')),
+  ];
+}
+
+function detailHead(s) {
+  const dev = s.device;
+  const off = !online(dev);
   const fell = s.model?.current && s.model.preferred && s.model.current !== s.model.preferred;
   const actual = s.model?.actual && s.model.actual !== s.model.current ? s.model.actual : null;
   return el('header', { class: 'ag-cl-head' },
-    el('button', { class: 'iconbtn', type: 'button', title: 'All sessions', 'aria-label': 'All sessions', onclick: () => go() }, svg('back')),
     el('div', { class: 'ag-cl-head-main' },
       el('button', { class: 'ag-cl-title', type: 'button', title: 'Rename', onclick: () => rename(s) }, s.title),
       el('div', { class: 'ag-cl-chips' },
@@ -560,16 +597,7 @@ function detailHead(s) {
         el('span', { class: 'ag-cl-chip', title: 'Model' }, modelLabel(s.model?.current), fell ? ' · fallback' : '', actual ? ` (answered by ${modelLabel(actual)})` : ''),
         el('span', { class: 'ag-cl-chip', title: 'Account' }, acctLabel(s.account, dev)),
         el('span', { class: 'ag-cl-chip ag-cl-chip--path', title: s.cwd }, shortPath(s.cwd, dev)))),
-    el('div', { class: 'ag-cl-head-actions' },
-      // Labels in .ag-cl-lbl: a phone shows the icons (each keeps its name as
-      // a title and aria-label) so the actions take one short row, not two.
-      s.state === 'running' && !off ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Interrupt the current turn (Esc)', 'aria-label': 'Stop turn', onclick: () => act(`int:${s.id}`, () => post(dev, `/sessions/${s.id}/interrupt`)) }, svg('pause'), lbl('Stop turn')) : null,
-      !alive || s.state === 'paused'
-        ? el('button', { class: 'btn btn--sm', type: 'button', disabled: busy('resume'), title: off ? offWhy(devOf(dev)) : null, onclick: () => act(`resume:${s.id}`, () => post(dev, `/sessions/${s.id}/resume`, {}).then((v) => upsert(dev, v)), 'Resuming') }, svg('play'), s.state === 'paused' ? 'Resume now' : 'Resume')
-        : null,
-      el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Change model or account', 'aria-label': 'Change', disabled: off, onclick: () => changeSession(s) }, svg('swap'), lbl('Change')),
-      alive ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'End the session (the conversation is kept)', 'aria-label': 'End', disabled: busy('end'), onclick: () => endSession(s) }, svg('stop'), lbl('End')) : null,
-      el('button', { class: 'btn btn--ghost btn--sm btn--icon ag-cl-sq', type: 'button', title: 'Delete', 'aria-label': 'Delete', disabled: off, onclick: () => deleteSession(s) }, svg('trash'))));
+    el('div', { class: 'ag-cl-head-actions' }, ...actionButtons(s)));
 }
 
 function detailCallouts(s) {
@@ -579,17 +607,25 @@ function detailCallouts(s) {
       el('span', {}, `${offWhy(devOf(s.device))}. What is shown is how it was last seen; a session there carries on when the machine wakes.`)));
     return out;
   }
+  // Under the transcript, the live line and the menu say all of this; only
+  // what they do not (an error) stays above it. An older runner, with no
+  // screen to read, still gets the question here.
+  const tx = S.pane === 'transcript';
+  if (tx && cap(s.device).prompt !== false && s.state !== 'error') {
+    if (s.background) out.push(el('div', { class: 'alert alert--info ag-cl-bgnote' }, el('b', {}, 'Background'), el('span', {}, bgText(s.background))));
+    return out;
+  }
   if (s.state === 'waiting' && s.question) {
     out.push(el('div', { class: 'alert alert--warn ag-cl-q' }, el('b', {}, 'Asking'),
       el('span', {}, el('span', { class: 'ag-cl-pre' }, s.question.text),
-        el('span', { class: 'meta ag-cl-hint' }, S.compose
-          ? 'Answer in the terminal, or with the message box — a message dismisses the question and becomes the answer.'
-          : 'Answer in the terminal.'))));
+        el('span', { class: 'meta ag-cl-hint' }, S.pane === 'transcript'
+          ? 'Pick an answer under the transcript, or type one: a message dismisses the question and becomes the answer.'
+          : 'Answer in the terminal, or open the transcript to answer with buttons.'))));
   } else if (s.state === 'blocked') {
     out.push(el('div', { class: 'alert alert--warn' }, el('b', {}, 'Blocked'), el('span', {}, s.detail || '')));
   } else if (s.state === 'paused') {
     out.push(el('div', { class: 'alert alert--info' }, el('b', {}, 'Paused'),
-      el('span', {}, `${s.detail || 'Out of usage'} — resumes on its own at ${at(s.pausedUntil)}.`)));
+      el('span', {}, `${s.detail || 'Out of usage'}. It resumes on its own at ${at(s.pausedUntil)}.`)));
   } else if (s.state === 'error') {
     out.push(el('div', { class: 'alert alert--err' }, el('b', {}, 'Error'), el('span', {}, s.detail || s.lastError?.text || '')));
   } else if (s.state === 'done') {
@@ -611,20 +647,22 @@ function paintDetail(reason) {
     const away = (S.devs || []).filter((d) => !d.online && !d.data);
     root.replaceChildren(el('section', { class: 'stack-lg' }, tabs(),
       el('section', { class: 'panel stack' }, problem('No such session', away.length
-        ? `It may have been deleted — or it runs on ${away.map((d) => d.label).join(' or ')}, which ${away.length === 1 ? 'is' : 'are'} offline.`
+        ? `It may have been deleted, or it runs on ${away.map((d) => d.label).join(' or ')}, which ${away.length === 1 ? 'is' : 'are'} offline.`
         : 'It may have been deleted.',
         el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => go() }, 'All sessions')))));
     return;
   }
 
-  // Live updates rebuild only the head and the callouts. The terminal, the
-  // transcript and a half-typed message stay exactly as they are.
+  // Live updates rebuild only the bars, the head and the callouts. The
+  // terminal, the transcript and a half-typed message stay exactly as they are.
   const existing = root.querySelector(`[data-session="${s.id}"]`);
   if (existing) {
     existing.querySelector('.ag-cl-headwrap').replaceChildren(detailHead(s));
     existing.querySelector('.ag-cl-callouts').replaceChildren(...detailCallouts(s));
-    existing.querySelector('.ag-cl-maxbar').replaceChildren(...maxBar(s));
+    paintTopBar(s);
     updateComposer(s);
+    paintLive(s);
+    paintMenu(s);
     sizeTerminal();
     // A session that came back (resumed, relaunched into a new tmux session)
     // gets its terminal back; one that is gone gets the "not running" card.
@@ -638,28 +676,19 @@ function paintDetail(reason) {
   }
 
   stopPane();
-  const text = el('textarea', {
-    class: 'textarea ag-cl-input',
-    rows: '3',
-    placeholder: 'Message Claude — Ctrl+Enter to send',
-    onkeydown: (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(s.id); } },
-  });
   const view = el('section', {
-    class: `stack ag-cl-detail${S.max ? ' is-max' : ''}${S.compose ? ' has-compose' : ''}`,
+    class: `stack ag-cl-detail${S.max ? ' is-max' : ''}${S.compose ? ' has-compose' : ''}${S.pane === 'transcript' ? ' is-tx' : ''}`,
     'data-session': s.id,
   },
     tabs(),
-    el('div', { class: 'ag-cl-maxbar' }, ...maxBar(s)),
+    el('div', { class: 'ag-cl-maxbar' }),
     el('div', { class: 'ag-cl-headwrap' }, detailHead(s)),
     el('div', { class: 'ag-cl-callouts' }, ...detailCallouts(s)),
     el('div', { class: 'ag-cl-panes' }, ...paneTabs(s)),
     el('div', { class: 'ag-cl-body' }),
-    el('div', { class: 'ag-cl-compose', hidden: !S.compose },
-      text,
-      el('div', { class: 'ag-cl-compose-bar' },
-        el('span', { class: 'meta ag-cl-compose-note' }),
-        el('button', { class: 'btn btn--sm ag-cl-send', type: 'button', onclick: () => send(s.id) }, 'Send'))));
+    composer(s));
   root.replaceChildren(view);
+  paintTopBar(s);
   if (!typeWatch) { window.addEventListener('keydown', typeAnywhere, true); typeWatch = true; }
   watchViewport();
   lockPage();
@@ -668,31 +697,52 @@ function paintDetail(reason) {
   onViewport();
 }
 
+/** Open sessions in a steady order (oldest first), so chips do not jump about. */
+const switchable = (s) => allSessions()
+  .filter((x) => x.id === s.id || x.state !== 'stopped')
+  .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.id.localeCompare(b.id));
+
 /**
- * Maximized: the session takes the whole window — not the browser's
- * fullscreen, just everything the console draws around the view covered —
- * with a switcher to hop between sessions and a way back. The console's
- * chrome is not touched; the view is lifted over it (fixed, above the nav
- * and tab bar, below dialogs and toasts so Rename and Delete still work).
+ * The bar above a session, in both layouts: a way back (All sessions, or
+ * Restore when maximized), a chip per open session to hop between them, and
+ * when maximized the session's state and every action the head has.
+ *
+ * Maximized: the session takes the whole window (not the browser's
+ * fullscreen, just everything the console draws around the view covered).
+ * The console's chrome is not touched; the view is lifted over it (fixed,
+ * above the nav and tab bar, below dialogs and toasts so Rename and Delete
+ * still work).
  */
-function maxBar(s) {
-  const others = allSessions()
-    .filter((x) => x.id === s.id || x.state !== 'stopped');
-  return [
-    el('button', { class: 'btn btn--sm ag-cl-restore', type: 'button', title: 'Back to the normal view', onclick: () => setMax(false) }, svg('unfull'), 'Restore'),
-    el('div', { class: 'ag-cl-switch', role: 'group', 'aria-label': 'Sessions' },
-      others.map((x) => el('button', {
-        class: `ag-cl-switch-item${x.id === s.id ? ' is-current' : ''}`,
-        type: 'button',
-        title: `${x.title}${multi() ? ` on ${devLabel(x.device)}` : ''} — ${online(x.device) ? STATE[x.state]?.label || x.state : 'offline'}${x.background ? ` (${bgText(x.background)})` : ''}`,
-        'aria-current': x.id === s.id ? 'true' : null,
-        onclick: () => { if (x.id !== s.id) go(x.id); },
-      }, online(x.device) ? dot(x.state) : dot('stopped'), devTag(x.device), el('span', {}, x.title)))),
-  ];
+function paintTopBar(s) {
+  const bar = root?.querySelector('.ag-cl-maxbar');
+  if (!bar) return;
+  const strip = el('div', { class: 'ag-cl-switch', role: 'group', 'aria-label': 'Sessions' },
+    switchable(s).map((x) => el('button', {
+      class: `ag-cl-switch-item${x.id === s.id ? ' is-current' : ''}${online(x.device) && ['waiting', 'blocked', 'error'].includes(x.state) ? ' is-needs' : ''}`,
+      type: 'button',
+      title: `${x.title}${multi() ? ` on ${devLabel(x.device)}` : ''}: ${online(x.device) ? STATE[x.state]?.label || x.state : 'offline'}${x.background ? ` (${bgText(x.background)})` : ''}`,
+      'aria-current': x.id === s.id ? 'true' : null,
+      onclick: () => { if (x.id !== s.id) go(x.id); },
+    }, online(x.device) ? dot(x.state) : dot('stopped'), devTag(x.device), el('span', {}, x.title))));
+  const keep = bar.querySelector('.ag-cl-switch')?.scrollLeft || 0;
+  bar.replaceChildren(
+    S.max
+      ? el('button', { class: 'btn btn--sm ag-cl-restore', type: 'button', title: 'Back to the normal view', onclick: () => setMax(false) }, svg('unfull'), lbl('Restore'))
+      : el('button', { class: 'iconbtn ag-cl-back', type: 'button', title: 'All sessions', 'aria-label': 'All sessions', onclick: () => go() }, svg('back')),
+    strip,
+    ...(S.max ? [el('div', { class: 'ag-cl-maxacts' }, online(s.device) ? stateTag(s.state, s.background) : offTag(), ...actionButtons(s, { compact: true }))] : []));
+  // The current chip in view, without moving the page.
+  strip.scrollLeft = keep;
+  requestAnimationFrame(() => {
+    const cur = strip.querySelector('.is-current');
+    if (!cur) return;
+    const l = cur.offsetLeft - strip.offsetLeft;
+    if (l < strip.scrollLeft || l + cur.offsetWidth > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = Math.max(0, l - 24);
+  });
 }
 
 /**
- * Put the keyboard in the terminal — on a desktop, where it is what you came
+ * Put the keyboard in the terminal - on a desktop, where it is what you came
  * to type into. Not on a touch screen: focusing there raises the keyboard
  * over half the screen before anyone asked for it.
  */
@@ -705,38 +755,39 @@ function focusTerminal() {
 
 /**
  * Type into the session from anywhere on its page. Without this, a key
- * pressed after clicking a button (Maximize, a session chip) went nowhere —
+ * pressed after clicking a button (Maximize, a session chip) went nowhere -
  * and "/" opened the console's jump menu instead of Claude's command list.
  * Moving focus during keydown sends the character to the terminal, and the
  * console's shortcut, which checks focus, stands down.
  */
 function typeAnywhere(e) {
-  if (!S.detail || !S.term || S.pane !== 'terminal' || !root?.isConnected) return;
+  if (!S.detail || !root?.isConnected) return;
   if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.key.length !== 1) return;
   const a = document.activeElement;
   if (a && a !== document.body && (a.closest('input, textarea, select, [contenteditable]') || a.isContentEditable)) return;
   if (document.querySelector('.modal-backdrop, .cp-backdrop')) return; // a dialog or the jump menu is open
-  S.term.focus();
+  if (S.pane === 'terminal' && S.term) { S.term.focus(); return; }
+  // The transcript: the message box takes the key (and "/" opens commands).
+  const box = root.querySelector('.ag-cl-compose:not([hidden]) .ag-cl-input');
+  if (S.pane === 'transcript' && box && window.matchMedia('(pointer: fine)').matches) box.focus();
 }
 
 /**
- * An image pasted or dropped on the terminal: uploaded to the box, where the
- * runner pastes its path into Claude — which attaches it as [Image #n],
- * exactly as dragging a file into a local terminal does.
+ * An image pasted or dropped on the terminal or the message box: uploaded to
+ * the box, where the runner pastes its path into Claude, which attaches it as
+ * [Image #n], exactly as dragging a file into a local terminal does.
  */
 async function sendImage(dev, id, file) {
   if (!file) return;
   if (file.size > 20 * 1024 * 1024) { ctx.toast?.('err', 'Image too large', 'The limit is 20 MB.'); return; }
   try {
-    const res = await fetch(`${ctx.base}/api/claude/d/${encodeURIComponent(dev)}/sessions/${id}/image`, {
+    await ctx.api(`/claude/d/${encodeURIComponent(dev)}/sessions/${id}/image`, {
       method: 'POST',
       headers: { 'content-type': file.type || 'image/png' },
       body: file,
     });
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(j.error || res.statusText);
-    ctx.toast?.('ok', 'Image attached', 'Add your message and press Enter.');
-    S.term?.focus();
+    ctx.toast?.('ok', 'Image attached', 'Add your message and send it.');
+    if (S.pane === 'terminal') S.term?.focus();
   } catch (e) {
     ctx.toast?.('err', 'Could not attach the image', e.message);
   }
@@ -748,13 +799,16 @@ function setMax(on) {
   const view = root?.querySelector('.ag-cl-detail');
   view?.classList.toggle('is-max', on);
   const s = session(S.detail);
-  if (view && s) view.querySelector('.ag-cl-panes').replaceChildren(...paneTabs(s));
+  if (view && s) {
+    view.querySelector('.ag-cl-panes').replaceChildren(...paneTabs(s));
+    paintTopBar(s);
+  }
   lockPage();
   // Focus inside the overlay can scroll the page underneath it; the normal
   // view is laid out to fit from the top.
   if (!on) window.scrollTo(0, 0);
   sizeTerminal();
-  S.term?.focus();
+  if (S.pane === 'terminal') S.term?.focus();
 }
 
 /** While maximized or typing, the page behind must not scroll. */
@@ -764,8 +818,8 @@ function lockPage() {
 }
 
 /**
- * How tall whatever is pinned to the bottom of the window is — the console's
- * phone tab bar, its status bar, a standalone shell's — so the terminal ends
+ * How tall whatever is pinned to the bottom of the window is - the console's
+ * phone tab bar, its status bar, a standalone shell's - so the terminal ends
  * above it rather than underneath. Found by asking what is drawn at the
  * bottom edge, not by knowing the host's markup.
  */
@@ -783,7 +837,7 @@ function bottomChrome(view, visible) {
 
 /**
  * The terminal (or transcript) fills the screen from where it starts down to
- * the bottom of what is visible — measured, not a guess per layout, because
+ * the bottom of what is visible - measured, not a guess per layout, because
  * the console's chrome differs between phone and desktop and the standalone
  * shell differs again. Maximized and typing layouts use flex instead.
  */
@@ -791,7 +845,7 @@ function sizeTerminal() {
   const view = root?.querySelector('.ag-cl-detail');
   if (!view) return;
   if (view.matches('.is-max, .is-kb')) { view.style.removeProperty('--ag-cl-termh'); return; }
-  const pane = view.querySelector('.ag-cl-term, .ag-cl-transcript, .ag-cl-noterm');
+  const pane = view.querySelector('.ag-cl-term, .ag-cl-txwrap, .ag-cl-noterm');
   if (!pane) return;
   const visible = window.visualViewport?.height || innerHeight;
   const top = pane.getBoundingClientRect().top + window.scrollY;
@@ -809,7 +863,7 @@ function sizeTerminal() {
 
 /**
  * A phone's keyboard covers the page instead of shrinking it, and Claude's
- * input line is at the bottom of the terminal — exactly what it covers. The
+ * input line is at the bottom of the terminal - exactly what it covers. The
  * visual viewport is the part left above the keyboard: while it is much
  * shorter than the page and focus is in this view, the view switches to a
  * typing layout sized to it (bars hidden, special keys shown), and the
@@ -856,6 +910,9 @@ function watchViewport() {
   };
 }
 
+/** The message box shows under the transcript always, under the terminal when asked. */
+const composeShown = () => S.compose || S.pane === 'transcript';
+
 function setCompose(on) {
   S.compose = on;
   pref('ag-cl-compose', on ? '1' : '0');
@@ -863,7 +920,7 @@ function setCompose(on) {
   if (!view) return;
   view.classList.toggle('has-compose', on);
   const box = view.querySelector('.ag-cl-compose');
-  box.hidden = !on;
+  box.hidden = !composeShown();
   const s = session(S.detail);
   if (s) {
     view.querySelector('.ag-cl-panes').replaceChildren(...paneTabs(s));
@@ -873,23 +930,44 @@ function setCompose(on) {
   if (on) box.querySelector('.ag-cl-input')?.focus();
 }
 
+function setKeys(on) {
+  S.keys = on;
+  pref('ag-cl-keys', on ? '1' : '0');
+  S.term?.toggleKeys(on);
+  const s = session(S.detail);
+  if (s) {
+    root.querySelector('.ag-cl-panes')?.replaceChildren(...paneTabs(s));
+    paintTxKeys(s);
+  }
+  sizeTerminal();
+}
+
 function paneTabs(s) {
+  const term = S.pane === 'terminal';
   return [
     el('div', { class: 'segctl ag-cl-pane-tabs', role: 'group', 'aria-label': 'View' },
-      el('button', { type: 'button', 'aria-pressed': String(S.pane === 'terminal'), onclick: () => switchPane('terminal') }, svg('terminal'), 'Terminal'),
-      el('button', { type: 'button', 'aria-pressed': String(S.pane === 'transcript'), onclick: () => switchPane('transcript') }, svg('log'), 'Transcript')),
+      el('button', { type: 'button', 'aria-pressed': String(term), onclick: () => switchPane('terminal') }, svg('terminal'), 'Terminal'),
+      el('button', { type: 'button', 'aria-pressed': String(!term), onclick: () => switchPane('transcript') }, svg('log'), 'Transcript')),
     el('div', { class: 'ag-cl-term-bar' },
-      S.pane === 'terminal' ? el('span', { class: 'meta ag-cl-term-state' }, !online(s.device) ? 'offline' : S.termState || (s.alive ? 'connecting…' : 'not running')) : null,
-      S.pane === 'terminal' ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Special keys', 'aria-label': 'Special keys', onclick: () => { S.term?.toggleKeys(); sizeTerminal(); } }, svg('keyboard'), lbl('Keys')) : null,
-      S.pane === 'terminal' ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Reconnect', 'aria-label': 'Reconnect', onclick: () => S.term?.reconnect() }, svg('refresh'), lbl('Reconnect')) : null,
+      term ? el('span', { class: 'meta ag-cl-term-state' }, !online(s.device) ? 'offline' : S.termState || (s.alive ? 'connecting…' : 'not running')) : null,
       el('button', {
+        class: 'btn btn--ghost btn--sm',
+        type: 'button',
+        'aria-pressed': String(S.keys),
+        title: 'Keys a phone keyboard lacks: Esc, arrows, Tab, Ctrl+C, y and n, 1 to 3',
+        'aria-label': 'Special keys',
+        onclick: () => setKeys(!S.keys),
+      }, svg('keyboard'), lbl('Keys')),
+      term ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Copy the selection, or pick text to copy (a long press does this on a phone)', 'aria-label': 'Copy', onclick: () => copyFromTerminal(s) }, svg('copy'), lbl('Copy')) : null,
+      term ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Reconnect', 'aria-label': 'Reconnect', onclick: () => S.term?.reconnect() }, svg('refresh'), lbl('Reconnect')) : null,
+      term ? el('button', {
         class: 'btn btn--ghost btn--sm',
         type: 'button',
         'aria-pressed': String(S.compose),
         title: S.compose ? 'Hide the message box' : 'Show a message box under the terminal',
         'aria-label': S.compose ? 'Hide message box' : 'Message box',
         onclick: () => setCompose(!S.compose),
-      }, svg('edit'), lbl(S.compose ? 'Hide message' : 'Message')),
+      }, svg('edit'), lbl(S.compose ? 'Hide message' : 'Message')) : null,
       S.max ? null : el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Fill the window with this session', 'aria-label': 'Maximize', onclick: () => setMax(true) }, svg('full'), lbl('Maximize'))),
   ];
 }
@@ -898,7 +976,13 @@ function switchPane(pane) {
   const s = session(S.detail);
   if (!s) return;
   S.pane = pane;
+  pref('ag-cl-pane', pane);
+  const view = root.querySelector('.ag-cl-detail');
+  view?.classList.toggle('is-tx', pane === 'transcript');
   root.querySelector('.ag-cl-panes')?.replaceChildren(...paneTabs(s));
+  const box = root.querySelector('.ag-cl-compose');
+  if (box) box.hidden = !composeShown();
+  view?.querySelector('.ag-cl-callouts')?.replaceChildren(...detailCallouts(s));
   mountPane(s);
 }
 
@@ -907,6 +991,10 @@ function stopPane() {
   S.term = null;
   clearTimeout(S.transcript.timer);
   S.transcript.timer = null;
+  S.transcript.gen += 1;
+  clearTimeout(S.prompt.timer);
+  S.prompt.timer = null;
+  S.prompt.gen += 1;
 }
 
 function mountPane(s) {
@@ -931,7 +1019,8 @@ function mountPane(s) {
         el('b', {}, 'Not running'),
         el('p', {}, s.state === 'paused'
           ? `Paused until ${at(s.pausedUntil)}. It starts again on its own; "Resume now" tries sooner.`
-          : 'The conversation is kept. Resume it to get the terminal back, or read the transcript.')));
+          : 'The conversation is kept. Resume it to get the terminal back, or read the transcript.'),
+        s.state === 'paused' ? null : el('button', { class: 'btn btn--sm', type: 'button', onclick: () => act(`resume:${s.id}`, () => post(s.device, `/sessions/${s.id}/resume`, {}).then((v) => upsert(s.device, v)), 'Resuming') }, svg('play'), 'Resume')));
       requestAnimationFrame(sizeTerminal);
       return;
     }
@@ -941,7 +1030,9 @@ function mountPane(s) {
       host: body,
       ctx,
       path: `/d/${encodeURIComponent(s.device)}/sessions/${s.id}/terminal`,
+      keys: S.keys,
       onImage: (file) => sendImage(s.device, s.id, file),
+      onPick: () => pickText(s),
       onState: (st, detail) => {
         S.termState = st;
         if (st === 'connected') focusTerminal();
@@ -951,167 +1042,494 @@ function mountPane(s) {
     });
     return;
   }
-  // Transcript. What was already read is kept per session, so coming back
-  // to this pane draws it again at once and then asks only for what is new.
-  if (S.transcript.id !== s.id) S.transcript = { id: s.id, messages: [], cursor: null, timer: null, truncated: false, gen: 0 };
-  // Each mount is a generation: a pull still in flight from an earlier one
-  // (Transcript → Terminal → Transcript inside a request) must not append
-  // to the list it built, double the messages, or start a second loop.
-  const gen = S.transcript.gen = (S.transcript.gen || 0) + 1;
+  mountTranscript(s, body);
+}
+
+/* ── the transcript ─────────────────────────────────────────────────── */
+
+const cap = (dev) => (S.caps[dev] ||= {});
+/** An express 404 for a route an older runner does not have. */
+const missingRoute = (e) => /^(not found|cannot (get|post))/i.test(String(e?.message || ''));
+
+/**
+ * The session's record, kept per session: coming back to this pane draws it
+ * again at once (the same nodes) and then asks only for what is new.
+ */
+function mountTranscript(s, body) {
   const T = S.transcript;
-  const list = el('div', { class: 'ag-cl-transcript' });
-  const note = () => list.append(el('p', { class: 'meta ag-cl-trunc' }, 'Earlier messages are in the file; showing the most recent.'));
-  if (T.truncated) note();
-  for (const m of T.messages) list.append(message(m));
-  body.replaceChildren(list);
-  requestAnimationFrame(() => { sizeTerminal(); list.scrollTop = list.scrollHeight; });
+  if (T.id !== s.id || !T.view) {
+    T.view?.destroy();
+    T.id = s.id;
+    T.cursor = null;
+    T.view = createTranscript({
+      el,
+      svg,
+      modelLabel: (id) => (id ? modelLabel(id) : null),
+      toast: ctx.toast,
+      onEarlier: (before) => api(s.device, `/sessions/${s.id}/transcript?detail=1&before=${before}`),
+    });
+  }
+  // Each mount is a generation: a pull still in flight from an earlier one
+  // (Transcript, Terminal, Transcript inside a request) must not append to
+  // the list or start a second loop.
+  const gen = T.gen;
+  const view = T.view;
+  if (view.el.parentNode !== body) {
+    body.replaceChildren(view.el);
+    requestAnimationFrame(() => { sizeTerminal(); view.scroll.scrollTop = view.scroll.scrollHeight; });
+  }
   const current = () => S.transcript === T && T.gen === gen && S.pane === 'transcript' && S.detail === s.id;
   const pull = async () => {
     try {
-      const q = T.cursor != null ? `?cursor=${T.cursor}` : '';
-      const r = await api(s.device, `/sessions/${s.id}/transcript${q}`);
-      if (!current()) return;
-      const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
       const first = T.cursor == null;
+      const r = await api(s.device, `/sessions/${s.id}/transcript?detail=1${first ? '' : `&cursor=${T.cursor}`}`);
+      if (!current()) return;
       if (first) {
-        T.messages = r.messages;
-        T.truncated = r.truncated;
-        list.replaceChildren();
-        if (r.truncated) note();
-      } else T.messages.push(...r.messages);
-      for (const m of r.messages) list.append(message(m));
+        // An older runner sends no `start`: it cannot page back.
+        cap(s.device).detail = r.start != null;
+        view.reset(r.messages || [], { start: r.start, truncated: r.start != null && r.truncated });
+      } else view.append(r.messages || []);
       T.cursor = r.cursor;
-      list.querySelector('.ag-cl-empty-note')?.remove();
-      list.querySelector('.ag-cl-err-note')?.remove();
-      if (!T.messages.length) list.append(el('p', { class: 'meta ag-cl-empty-note' }, 'Nothing yet.'));
-      if (nearBottom || first) list.scrollTop = list.scrollHeight;
+      view.error(null);
+      paintLive(session(s.id) || s);
     } catch (e) {
       if (!current()) return;
-      // One line for a failure that repeats every poll, not a growing pile.
-      list.querySelector('.ag-cl-err-note')?.remove();
-      list.append(el('p', { class: 'meta ag-cl-err-note' }, `Could not read the transcript: ${e.message}`));
+      view.error(`Could not read the transcript: ${e.message}`);
     }
-    if (current()) T.timer = setTimeout(pull, document.hidden ? 10000 : 3000);
+    if (!current()) return;
+    const busy = ['running', 'starting', 'waiting'].includes(session(s.id)?.state);
+    T.timer = setTimeout(pull, document.hidden ? 10000 : busy ? 2000 : 4000);
   };
   pull();
+  watchPrompt(s);
+  paintTxKeys(s);
+  paintLive(s);
+}
+
+/** Pull both the transcript and the screen soon: something was just sent. */
+function kick() {
+  // For a few seconds after anything is sent, watch the screen closely: a
+  // command may open a menu, a key may close one.
+  S.prompt.fastUntil = Date.now() + 12000;
+  const s = session(S.detail);
+  if (!s || S.pane !== 'transcript') return;
+  setTimeout(() => {
+    if (S.detail !== s.id || S.pane !== 'transcript') return;
+    const body = root?.querySelector('.ag-cl-body');
+    if (!body) return;
+    clearTimeout(S.transcript.timer);
+    S.transcript.gen += 1;
+    clearTimeout(S.prompt.timer);
+    S.prompt.gen += 1;
+    mountTranscript(session(s.id) || s, body);
+  }, 700);
 }
 
 /**
- * Claude's replies are Markdown. Enough of it is drawn to read on a phone —
- * paragraphs, headings, lists, quotes, code, tables, bold, links — and the
- * rest stays as written. Built from DOM nodes, never innerHTML: the text is
- * whatever the model wrote. Line breaks are kept as the author made them.
+ * The screen beside the transcript: a menu open in the terminal (drawn as
+ * buttons), the spinner line, background agents, unsent input. Polled while
+ * the transcript is open: often while it works or asks, slowly otherwise.
  */
-const INLINE = /`([^`\n]+)`|\*\*([^*\n]+?)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"`])/g;
-function inline(text) {
+function watchPrompt(s) {
+  const P = S.prompt;
+  if (P.id !== s.id) { P.id = s.id; P.data = null; }
+  const gen = P.gen;
+  const run = async () => {
+    if (P.gen !== gen || S.pane !== 'transcript' || S.detail !== s.id) return;
+    const cur = session(s.id) || s;
+    if (cur.alive && online(cur.device) && cap(cur.device).prompt !== false) {
+      try { P.data = await api(cur.device, `/sessions/${cur.id}/prompt`); }
+      catch (e) { if (missingRoute(e)) cap(cur.device).prompt = false; P.data = null; }
+    } else P.data = null;
+    if (P.gen !== gen) return;
+    paintMenu(cur);
+    paintLive(cur);
+    if (cap(cur.device).prompt === false) return;
+    const busy = ['running', 'starting', 'waiting'].includes(cur.state) || P.data?.menu || Date.now() < (P.fastUntil || 0);
+    P.timer = setTimeout(run, document.hidden ? 10000 : busy ? 1200 : 4000);
+  };
+  run();
+}
+
+const ONE_LINE = (t, n = 160) => { const x = String(t || '').replace(/\s+/g, ' ').trim(); return x.length > n ? `${x.slice(0, n - 1)}…` : x; };
+
+/** One line: what the session is doing now. */
+function paintLive(s) {
+  const box = root?.querySelector('.ag-cl-live');
+  if (!box || !s) return;
+  const p = S.prompt.id === s.id ? S.prompt.data : null;
+  const tool = S.transcript.id === s.id ? S.transcript.view?.running() : null;
+  let state = s.state;
+  let main;
+  let sub = '';
+  if (!online(s.device)) { state = 'stopped'; main = 'Offline'; sub = offWhy(devOf(s.device)) || ''; }
+  else if (!s.alive) {
+    main = s.state === 'paused' ? 'Paused' : s.state === 'queued' ? 'Queued' : 'Not running';
+    sub = s.state === 'paused' ? `resumes on its own at ${at(s.pausedUntil)}` : 'a message resumes it';
+  } else if (p?.menu) { state = 'waiting'; main = 'Waiting on you'; sub = 'a menu is open in the terminal: pick below'; }
+  else if (s.state === 'waiting') { main = 'Waiting on you'; sub = ONE_LINE(s.question?.text || s.detail); }
+  else if (s.state === 'running' || s.state === 'starting') {
+    main = p?.activity ? ONE_LINE(p.activity, 90) : tool ? `Running ${tool.tool}` : s.state === 'starting' ? 'Starting' : 'Working';
+    sub = tool ? ONE_LINE(tool.input?.description || tool.text, 120) : ONE_LINE(s.detail || '');
+  } else {
+    main = STATE[s.state]?.label || s.state;
+    main = main.charAt(0).toUpperCase() + main.slice(1);
+    sub = ONE_LINE(s.detail || (s.lastActivityAt ? `last activity ${ago(s.lastActivityAt)}` : ''));
+  }
+  const agents = p?.agents || [];
+  box.replaceChildren(...[
+    el('span', { class: `ag-cl-live-dot ag-cl-live-dot--${state}` }),
+    el('span', { class: 'ag-cl-live-main' }, main),
+    sub ? el('span', { class: 'ag-cl-live-sub' }, sub) : null,
+    agents.length ? el('details', { class: 'ag-cl-live-agents' },
+      el('summary', {}, `${agents.length} agent${agents.length === 1 ? '' : 's'}`),
+      el('div', { class: 'ag-cl-live-agentlist' }, agents.map((a) => el('div', {}, el('b', {}, a.name), ` ${a.doing}`, a.meta ? el('span', { class: 'meta' }, ` · ${a.meta}`) : null)))) : null,
+    p?.mode ? el('span', { class: 'ag-cl-live-mode', title: 'Permission mode (Shift+Tab switches it)' }, p.mode) : null,
+    p?.draft ? el('span', { class: 'ag-cl-live-draft', title: 'Typed in the terminal and not sent. A message from here is added after it.' }, `Unsent in the terminal: ${ONE_LINE(p.draft, 60)}`) : null,
+  ].filter(Boolean));
+}
+
+/** A menu open in the terminal, as buttons that pick its options. */
+function paintMenu(s) {
+  const box = root?.querySelector('.ag-cl-menu');
+  if (!box || !s) return;
+  const p = S.prompt.id === s.id ? S.prompt.data : null;
+  const menu = S.pane === 'transcript' && s.alive ? p?.menu : null;
+  const sig = menu ? JSON.stringify(menu) : '';
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  if (!menu) { box.replaceChildren(); requestAnimationFrame(sizeTerminal); return; }
+  const busy = () => S.busy.has(`key:${s.id}`);
+  box.replaceChildren(el('div', { class: 'ag-cl-menu-card', role: 'group', 'aria-label': menu.title || 'Menu' },
+    menu.title ? el('div', { class: 'ag-cl-menu-title' }, menu.title) : null,
+    el('div', { class: 'ag-cl-menu-opts' }, menu.options.map((o) => el('button', {
+      class: `ag-cl-opt${o.selected ? ' is-cur' : ''}`,
+      type: 'button',
+      disabled: busy(),
+      onclick: () => choose(s, o.n),
+    }, el('span', { class: 'ag-cl-opt-n' }, String(o.n)),
+    el('span', { class: 'ag-cl-opt-main' }, el('span', { class: 'ag-cl-opt-label' }, o.label), o.desc ? el('span', { class: 'ag-cl-opt-desc' }, o.desc) : null)))),
+    menu.more ? el('div', { class: 'meta' }, 'More options below: move with ↑ and ↓ under Keys, then Enter.') : null,
+    el('div', { class: 'ag-cl-menu-foot' },
+      el('span', { class: 'meta' }, menu.multi ? 'Several can be picked: each tap toggles one, then pick Submit or press Enter.' : (menu.footer || '')),
+      el('div', { class: 'ag-cl-menu-keys' },
+        (menu.hotkeys || []).map((h) => el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: `${h.key}: ${h.label} (for the highlighted option)`, onclick: () => sendKey(s, h.key) }, `${h.key} · ${h.label}`)),
+        el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Close the menu (Esc)', onclick: () => sendKey(s, 'Escape') }, 'Esc')))));
+  requestAnimationFrame(sizeTerminal);
+}
+
+/** The key row under the transcript, sent through the runner. */
+function paintTxKeys(s) {
+  const box = root?.querySelector('.ag-cl-txkeys');
+  if (!box) return;
+  if (!S.keys) { box.replaceChildren(); return; }
+  if (!box.firstChild) box.append(keyStrip((k) => sendKey(session(S.detail) || s, k[2])));
+}
+
+/** Keys from the console, for a runner that may not have /keys yet. */
+async function keysApi(s, body) {
+  if (cap(s.device).keys === false) throw Object.assign(new Error('old runner'), { old: true });
+  try { return await post(s.device, `/sessions/${s.id}/keys`, body); } catch (e) {
+    if (missingRoute(e)) { cap(s.device).keys = false; throw Object.assign(new Error('old runner'), { old: true }); }
+    throw e;
+  }
+}
+const oldRunner = (s) => ctx.toast?.('err', 'Not on this runner yet', `The Claude runner on ${devLabel(s.device)} is older than this console. Update it, or use the terminal.`);
+
+async function sendKey(s, key) {
+  if (!s?.alive) { ctx.toast?.('err', 'Not running', 'Resume the session first.'); return; }
+  try {
+    await keysApi(s, { keys: [key] });
+  } catch (e) {
+    if (e.old && key === 'Escape') { await interrupt(s); return; }
+    if (e.old) { oldRunner(s); return; }
+    ctx.toast?.('err', 'The key did not go through', e.message);
+    return;
+  }
+  S.prompt.fastUntil = Date.now() + 12000;
+  setTimeout(() => { S.prompt.gen += 1; clearTimeout(S.prompt.timer); if (S.pane === 'transcript') watchPrompt(s); }, 350);
+}
+
+async function choose(s, n) {
+  const r = await act(`key:${s.id}`, () => keysApi(s, { choose: n }).catch((e) => { if (e.old) { oldRunner(s); return null; } throw e; }));
+  if (r) { upsert(s.device, r); kick(); }
+}
+
+async function interrupt(s) {
+  await act(`int:${s.id}`, () => post(s.device, `/sessions/${s.id}/interrupt`));
+  kick();
+}
+
+/**
+ * Copy out of the terminal: the selection if there is one (or what a drag
+ * selected last), else the sheet to pick text from.
+ */
+async function copyFromTerminal(s) {
+  if (S.term && await S.term.copy()) return;
+  pickText(s);
+}
+
+const URLS = /https?:\/\/[^\s<>"'`│┃]+[^\s<>"'`│┃.,;:!?)\]]/g;
+/** Text with its URLs as links. */
+function linkified(text) {
   const out = [];
   let last = 0;
-  for (const m of text.matchAll(INLINE)) {
+  for (const m of text.matchAll(URLS)) {
     if (m.index > last) out.push(text.slice(last, m.index));
-    if (m[1] != null) out.push(el('code', { class: 'ag-cl-md-c' }, m[1]));
-    else if (m[2] != null) out.push(el('strong', { class: 'ag-cl-md-b' }, ...inline(m[2])));
-    else {
-      const href = m[4] || m[5];
-      out.push(el('a', { class: 'ag-cl-md-a', href, target: '_blank', rel: 'noreferrer noopener' }, m[3] || m[5]));
-    }
+    out.push(el('a', { class: 'ag-cl-md-a', href: m[0], target: '_blank', rel: 'noreferrer noopener' }, m[0]));
     last = m.index + m[0].length;
   }
-  if (last < text.length) out.push(text.slice(last));
+  out.push(text.slice(last));
   return out;
 }
 
-const cells = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+/**
+ * The terminal as plain text in a sheet, where a phone's own selection
+ * handles (or a mouse) pick what to copy and links open on a tap. The text
+ * is tmux's: the screen and its scrollback, wrapped lines joined.
+ */
+async function pickText(s) {
+  const pre = el('pre', { class: 'ag-cl-pick-pre', tabindex: '0' }, 'Loading…');
+  const note = el('span', { class: 'meta' }, 'Select text, then Copy selection. Links open on a tap.');
+  const keepSel = (e) => e.preventDefault();
+  const copyBtn = (label, get) => el('button', {
+    class: 'btn btn--sm',
+    type: 'button',
+    onpointerdown: keepSel,
+    onmousedown: keepSel,
+    onclick: async () => {
+      const t = get();
+      if (!t) { note.textContent = 'Nothing selected yet.'; return; }
+      const ok = await copyText(t);
+      note.textContent = ok ? `Copied ${t.length} characters.` : 'The browser refused the clipboard.';
+    },
+  }, svg('copy'), label);
+  let text = '';
+  const body = el('div', { class: 'stack ag-cl-pick' },
+    pre,
+    el('div', { class: 'ag-cl-pick-bar' },
+      copyBtn('Copy selection', () => {
+        const sel = window.getSelection();
+        return sel && pre.contains(sel.anchorNode) ? sel.toString() : '';
+      }),
+      copyBtn('Copy all', () => text),
+      note));
+  const done = ctx.modal({ title: 'Copy from the terminal', body, actions: [{ label: 'Close', value: false, variant: 'ghost' }] });
+  try {
+    const r = await api(s.device, `/sessions/${s.id}/screen?history=3000`);
+    text = String(r.screen || '');
+  } catch { text = ''; }
+  if (!text.trim()) text = S.term?.bufferText() || '';
+  text = text.replace(/\s+$/, '');
+  pre.replaceChildren(...linkified(text || '(the terminal is empty)'));
+  requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
+  await done;
+}
 
-function md(src) {
-  const out = el('div', { class: 'ag-cl-md' });
-  const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
-  let para = [];
-  const flush = () => {
-    if (!para.length) return;
-    const p = el('p', { class: 'ag-cl-md-p' });
-    para.forEach((l, i) => { if (i) p.append(el('br')); p.append(...inline(l)); });
-    out.append(p);
-    para = [];
+/* ── the message box ────────────────────────────────────────────────── */
+
+/**
+ * The commands people reach for. Anything else can be typed: the box sends
+ * whatever starts with "/" to Claude Code as it is. [name, what it does,
+ * takes words after it]
+ */
+const SLASH = [
+  ['/compact', 'Summarise the conversation to free context; words after it say what to keep', true],
+  ['/clear', 'Start a fresh conversation in this session'],
+  ['/model', 'Pick the model (opens a menu)'],
+  ['/context', 'How full the context window is'],
+  ['/usage', 'Plan usage and when limits reset'],
+  ['/cost', 'Tokens and cost so far'],
+  ['/status', 'Version, model, account'],
+  ['/todos', 'The current to-do list'],
+  ['/tasks', 'Background tasks and shells'],
+  ['/agents', 'Subagents'],
+  ['/mcp', 'MCP servers'],
+  ['/memory', 'Memory files'],
+  ['/permissions', 'Allow and deny rules'],
+  ['/review', 'Review a pull request', true],
+  ['/init', 'Write a CLAUDE.md for this folder'],
+  ['/rewind', 'Go back to an earlier point'],
+  ['/export', 'Export the conversation'],
+  ['/add-dir', 'Add a working folder', true],
+  ['/config', 'Settings'],
+  ['/hooks', 'Hooks'],
+  ['/doctor', 'Check the installation'],
+  ['/help', 'Every command'],
+];
+
+const touch = () => window.matchMedia('(pointer: coarse)').matches;
+
+function composer(s) {
+  const text = el('textarea', {
+    class: 'textarea ag-cl-input',
+    rows: '1',
+    enterkeyhint: touch() ? 'enter' : 'send',
+    autocomplete: 'off',
+    'aria-label': 'Message',
+  });
+  const slash = el('div', { class: 'ag-cl-slash', role: 'listbox', 'aria-label': 'Commands', hidden: true });
+  let pick = 0;
+  let matches = [];
+  const grow = () => { text.style.height = 'auto'; text.style.height = `${Math.min(text.scrollHeight + 2, touch() ? 140 : 220)}px`; };
+  const closeSlash = () => { slash.hidden = true; matches = []; };
+  const drawSlash = () => {
+    const v = text.value;
+    const m = /^\/(\S*)$/.exec(v);
+    if (!m) { closeSlash(); return; }
+    matches = SLASH.filter(([n]) => n.slice(1).startsWith(m[1].toLowerCase()));
+    if (!matches.length) { closeSlash(); return; }
+    pick = Math.min(pick, matches.length - 1);
+    slash.replaceChildren(...matches.map(([n, d], i) => el('button', {
+      class: `ag-cl-slash-item${i === pick ? ' is-cur' : ''}`,
+      type: 'button',
+      role: 'option',
+      'aria-selected': String(i === pick),
+      onpointerdown: (e) => e.preventDefault(),
+      onclick: () => useSlash(i, true),
+    }, el('span', { class: 'ag-cl-slash-name' }, n), el('span', { class: 'ag-cl-slash-desc' }, d))));
+    slash.hidden = false;
+    slash.querySelector('.is-cur')?.scrollIntoView({ block: 'nearest' });
   };
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    let m;
-    if (/^\s*```/.test(line)) {
-      flush();
-      const code = [];
-      while (++i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i]);
-      out.append(el('pre', { class: 'ag-cl-md-code' }, code.join('\n')));
-    } else if (/^\s*\|.*\|\s*$/.test(line)) {
-      flush();
-      const rows = [];
-      for (; i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i]); i++) rows.push(lines[i]);
-      i--;
-      const body = rows.filter((r) => !/^\s*\|[\s:|-]+\|\s*$/.test(r)).map(cells);
-      const [head, ...rest] = body;
-      out.append(el('div', { class: 'ag-cl-md-tablewrap' }, el('table', { class: 'ag-cl-md-table' },
-        head ? el('tr', {}, head.map((c) => el('th', { class: 'ag-cl-md-th' }, ...inline(c)))) : null,
-        rest.map((r) => el('tr', {}, r.map((c) => el('td', { class: 'ag-cl-md-td' }, ...inline(c))))))));
-    } else if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) {
-      flush();
-      out.append(el('div', { class: `ag-cl-md-h ag-cl-md-h${Math.min(m[1].length, 3)}` }, ...inline(m[2])));
-    } else if ((m = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(line))) {
-      flush();
-      const depth = Math.min(4, Math.floor(m[1].replace(/\t/g, '  ').length / 2));
-      out.append(el('div', { class: 'ag-cl-md-li', style: `--d:${depth}` },
-        el('span', { class: 'ag-cl-md-mark' }, /\d/.test(m[2]) ? m[2] : '•'), el('span', {}, ...inline(m[3]))));
-    } else if ((m = /^\s*>\s?(.*)$/.exec(line))) {
-      flush();
-      out.append(el('div', { class: 'ag-cl-md-quote' }, ...inline(m[1])));
-    } else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
-      flush();
-      out.append(el('div', { class: 'ag-cl-md-hr' }));
-    } else if (!line.trim()) {
-      flush();
-    } else {
-      para.push(line);
+  /** A command picked: one that takes words waits for them; the rest go now. */
+  const useSlash = (i, go) => {
+    const c = matches[i];
+    if (!c) return;
+    closeSlash();
+    if (c[2] || !go) { text.value = `${c[0]} `; grow(); text.focus(); return; }
+    text.value = c[0];
+    send(s.id);
+  };
+  let hist = -1;
+  text.addEventListener('input', () => { pick = 0; hist = -1; grow(); drawSlash(); });
+  text.addEventListener('blur', () => setTimeout(closeSlash, 150));
+  text.addEventListener('keydown', (e) => {
+    e.stopPropagation(); // the console's own shortcuts stay out of the box
+    if (!slash.hidden && matches.length) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        pick = (pick + (e.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length;
+        drawSlash();
+        return;
+      }
+      if (e.key === 'Tab') { e.preventDefault(); useSlash(pick, false); return; }
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !touch()) { e.preventDefault(); useSlash(pick, true); return; }
+      if (e.key === 'Escape') { e.preventDefault(); closeSlash(); return; }
     }
-  }
-  flush();
-  return out;
-}
+    if (e.key === 'Enter' && !e.isComposing && ((e.ctrlKey || e.metaKey) || (!e.shiftKey && !e.altKey && !touch()))) {
+      e.preventDefault();
+      send(s.id);
+      return;
+    }
+    // Up and Down in an empty (or recalled) box walk back through what was sent.
+    const sent = S.sent[s.id] || [];
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && sent.length && !e.shiftKey
+      && (!text.value || (hist >= 0 && text.value === sent[sent.length - 1 - hist]))) {
+      e.preventDefault();
+      hist = Math.max(-1, Math.min(sent.length - 1, hist + (e.key === 'ArrowUp' ? 1 : -1)));
+      text.value = hist < 0 ? '' : sent[sent.length - 1 - hist];
+      grow();
+      return;
+    }
+    // Esc in an empty box is the terminal's Esc: it stops the turn or
+    // closes a menu.
+    if (e.key === 'Escape' && !text.value) {
+      e.preventDefault();
+      const cur = session(s.id);
+      if (cur?.alive) sendKey(cur, 'Escape');
+    }
+  });
+  const imageOf = (list) => [...(list || [])].find((f) => f && f.type && f.type.startsWith('image/'));
+  text.addEventListener('paste', (e) => {
+    const item = [...(e.clipboardData?.items || [])].find((i) => i.kind === 'file' && i.type.startsWith('image/'));
+    if (!item) return;
+    e.preventDefault();
+    sendImage(s.device, s.id, item.getAsFile());
+  });
+  text.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.items || [])].some((i) => i.kind === 'file')) e.preventDefault(); });
+  text.addEventListener('drop', (e) => {
+    const f = imageOf(e.dataTransfer?.files);
+    if (!f) return;
+    e.preventDefault();
+    sendImage(s.device, s.id, f);
+  });
 
-function message(m) {
-  const cls = `ag-cl-msg ag-cl-msg--${m.role}${m.error ? ' is-bad' : ''}`;
-  const time = m.at ? new Date(m.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
-  if (m.role === 'user') return el('div', { class: cls }, el('span', { class: 'ag-cl-msg-who' }, 'You', el('span', { class: 'meta' }, time)), el('div', { class: 'ag-cl-pre' }, m.text));
-  if (m.role === 'assistant') return el('div', { class: cls }, el('span', { class: 'ag-cl-msg-who' }, modelLabel(m.model) || 'Claude', el('span', { class: 'meta' }, time)), md(m.text));
-  if (m.role === 'tool') return el('div', { class: cls }, el('span', { class: 'ag-cl-tool' }, m.tool), el('span', { class: 'ag-cl-tool-arg' }, m.text));
-  if (m.role === 'result') {
-    const first = String(m.text || '').split('\n')[0];
-    return el('details', { class: cls }, el('summary', {}, first || '(no output)'), el('div', { class: 'ag-cl-pre' }, m.text));
-  }
-  if (m.role === 'error') return el('div', { class: `${cls} is-bad` }, el('span', { class: 'ag-cl-msg-who' }, `Request failed · ${m.kind}`), el('div', { class: 'ag-cl-pre' }, m.text));
-  return el('div', { class: cls }, el('span', { class: 'meta' }, m.text));
+  const box = el('div', { class: 'ag-cl-compose', hidden: !composeShown() },
+    el('div', { class: 'ag-cl-live', 'aria-live': 'polite' }),
+    el('div', { class: 'ag-cl-menu' }),
+    el('div', { class: 'ag-cl-txkeys' }),
+    el('div', { class: 'ag-cl-compose-row' },
+      slash,
+      el('button', {
+        class: 'btn btn--ghost btn--sm ag-cl-sq ag-cl-slashbtn',
+        type: 'button',
+        title: 'Commands: /compact, /model and the rest',
+        'aria-label': 'Commands',
+        onpointerdown: (e) => e.preventDefault(),
+        onclick: () => { if (!text.value.startsWith('/')) text.value = '/'; pick = 0; text.focus(); grow(); drawSlash(); },
+      }, '/'),
+      text,
+      el('button', { class: 'btn btn--ghost btn--sm ag-cl-sq ag-cl-stopbtn', type: 'button', title: 'Stop the turn (Esc)', 'aria-label': 'Stop the turn', hidden: true, onclick: () => interrupt(session(s.id) || s) }, svg('stop')),
+      el('button', { class: 'btn btn--sm ag-cl-send', type: 'button', onpointerdown: (e) => e.preventDefault(), onclick: () => send(s.id) }, 'Send')),
+    el('div', { class: 'ag-cl-compose-bar' },
+      el('span', { class: 'meta ag-cl-compose-note' }),
+      el('span', { class: 'meta ag-cl-compose-hint' }, touch() ? '/ for commands · Keys for Esc and arrows' : 'Enter sends · Shift+Enter new line · / commands · Esc stops · ↑ last message')));
+  // The box grows with what is typed and with a menu; the pane above gives
+  // way to it.
+  new ResizeObserver(() => sizeTerminal()).observe(box);
+  return box;
 }
 
 function updateComposer(s) {
   const btn = root.querySelector('.ag-cl-send');
   const note = root.querySelector('.ag-cl-compose-note');
   const input = root.querySelector('.ag-cl-input');
+  const stop = root.querySelector('.ag-cl-stopbtn');
   if (!btn || !note || !input) return;
   const busy = S.busy.has(`send:${s.id}`);
-  btn.disabled = busy || s.state === 'starting';
-  btn.textContent = busy ? '…' : s.alive ? 'Send' : 'Resume with this';
-  input.placeholder = s.state === 'waiting' ? 'Answer Claude…' : s.alive ? 'Message Claude — Ctrl+Enter to send' : 'Resume the session with a message…';
-  note.textContent = s.state === 'starting' ? 'Starting — wait a moment.'
-    : s.state === 'running' ? 'Working — a message now is queued by Claude Code and read after this turn.'
-      : s.state === 'queued' ? 'Queued — a message now is added to its first prompt.'
-        : s.model?.current !== s.model?.preferred ? `On ${modelLabel(s.model?.current)}; the next message goes back to ${modelLabel(s.model?.preferred)} if it is available.` : '';
+  btn.disabled = busy || s.state === 'starting' || !online(s.device);
+  btn.textContent = busy ? '…' : s.alive ? 'Send' : 'Resume';
+  btn.title = s.alive ? 'Send (Enter)' : 'Resume the session with this message';
+  if (stop) stop.hidden = !(s.alive && s.state === 'running');
+  const narrow = innerWidth <= 560;
+  input.placeholder = s.state === 'waiting' ? (narrow ? 'Answer Claude' : 'Answer Claude, or / for a command')
+    : s.alive ? (narrow ? 'Message Claude' : 'Message Claude, or / for a command') : (narrow ? 'Message to resume' : 'Resume the session with a message');
+  note.textContent = !online(s.device) ? `${devLabel(s.device)} is offline.`
+    : s.state === 'starting' ? 'Starting. Wait a moment.'
+      : s.state === 'running' ? 'Working. A message now is queued and read after this step.'
+        : s.state === 'queued' ? 'Queued. A message now is added to its first prompt.'
+          : s.model?.current !== s.model?.preferred ? `On ${modelLabel(s.model?.current)}; the next message goes back to ${modelLabel(s.model?.preferred)} if it is available.` : '';
 }
 
 async function send(id) {
   const input = root.querySelector('.ag-cl-input');
   const text = input?.value.trim();
   if (!text) return;
-  const dev = session(id)?.device;
-  if (!dev) return;
-  const r = await act(`send:${id}`, () => post(dev, `/sessions/${id}/message`, { text }));
-  if (r) { input.value = ''; upsert(dev, r); paint('session'); }
+  const s = session(id);
+  if (!s) return;
+  const dev = s.device;
+  const sent = (S.sent[id] ||= []);
+  if (sent[sent.length - 1] !== text) sent.push(text);
+  if (sent.length > 50) sent.shift();
+  // A slash command, a "!" shell line or a "#" memory line is keyboard input
+  // for Claude Code itself, not a message: typed as it is, with no resume or
+  // model switch, into a session that is running. Everything else goes as a
+  // message, which also resumes a stopped session and answers a question.
+  const raw = /^[/!#]/.test(text) && s.alive && cap(dev).keys !== false;
+  const r = await act(`send:${id}`, async () => {
+    if (raw) {
+      try { return await keysApi(s, { text, enter: true }); } catch (e) { if (!e.old) throw e; }
+    }
+    return post(dev, `/sessions/${id}/message`, { text });
+  });
+  if (r) {
+    input.value = '';
+    input.style.height = '';
+    if (S.transcript.id === id) S.transcript.view?.follow();
+    upsert(dev, r);
+    paint('session');
+    kick();
+  }
 }
 
 async function rename(s) {
@@ -1283,7 +1701,7 @@ function newDevice() {
   return (S.devs.find((d) => usable(d.id)) || S.devs.find((d) => d.data) || S.devs[0]).id;
 }
 
-/** The per-device parts of the form: folder, model, account — from that runner's settings. */
+/** The per-device parts of the form: folder, model, account - from that runner's settings. */
 function formFor(dev, keep = {}) {
   const x = dataOf(dev) || {};
   const set = x.settings || {};
@@ -1382,7 +1800,7 @@ function paintNew() {
         el('div', { class: 'field' }, el('label', {}, 'Account'), acct),
         el('div', { class: 'field' }, el('label', {}, 'Ping when done'), done)),
       el('label', { class: 'check' }, el('input', { type: 'checkbox', checked: F.unattended, onchange: bind('unattended') }),
-        el('span', {}, 'Unattended instructions — decide instead of asking, end with DONE: or BLOCKED:')),
+        el('span', {}, 'Unattended instructions: decide instead of asking, end with DONE: or BLOCKED:')),
       el('div', { class: 'field ag-cl-narrow' }, el('label', {}, 'Nudge to continue'),
         el('input', { class: 'input', type: 'number', min: '0', max: '10', value: String(F.autoContinue), oninput: bind('autoContinue', Number) }),
         el('span', { class: 'help' }, 'times to say “continue” if a turn ends without DONE or BLOCKED'))),
@@ -1421,7 +1839,7 @@ async function create() {
 /* ── accounts ───────────────────────────────────────────────────────── */
 
 function acctStatus(a) {
-  if (a.status === 'needs-login') return { dot: 'err', text: a.limitText ? `Needs login — ${a.limitText}` : 'Not logged in' };
+  if (a.status === 'needs-login') return { dot: 'err', text: a.limitText ? `Needs login: ${a.limitText}` : 'Not logged in' };
   if (a.status === 'limited') return { dot: 'warn', text: `Out until ${at(a.limitedUntil)}${a.limitWindow ? ` (${a.limitWindow === 'five_hour' ? '5-hour' : a.limitWindow === 'seven_day' ? 'weekly' : a.limitWindow} limit)` : ''}` };
   if (a.status === 'unknown') return { dot: 'info', text: a.authError || 'Not checked yet' };
   return { dot: 'ok', text: 'Available' };
@@ -1471,7 +1889,7 @@ function paintAccounts(reason) {
     devSwitch(switchTo('accounts')),
     el('section', { class: 'panel stack' },
       el('div', { class: 'ag-panel-head' }, el('h3', { class: 'h3' }, multi() ? `Accounts on ${d.label}` : 'Accounts'),
-        el('span', { class: 'meta' }, 'normal Claude subscription logins — no API keys')),
+        el('span', { class: 'meta' }, 'normal Claude subscription logins, no API keys')),
       el('div', { class: 'ag-cl-list ag-cl-acct-list' }, accounts.map(accountRow)),
       toggleRow('autoSwitchAccounts', 'Auto-switch accounts', 'ag-cl-autoswitch', { detail: 'when one runs out, sessions move to the next available account' }),
       el('p', { class: 'meta' }, 'Sessions move to the next available account in this order and pick up where they stopped. With it off, they pause until the account resets.')),
@@ -1593,7 +2011,7 @@ function paintLogin(update) {
   };
   const status = !S.login.state ? 'Starting the login…'
     : st.finished ? 'Logged in.'
-      : st.failed ? `Login failed: ${st.error}. Start again and paste the whole code — it ends with a # part — from the page that link opens, not an older one.`
+      : st.failed ? `Login failed: ${st.error}. Start again and paste the whole code (it ends with a # part) from the page that link opens, not an older one.`
         : st.error ? `Could not read the login: ${st.error}`
           : !st.running ? 'The login window has closed.'
             : st.url ? (st.wantsCode ? 'Open the sign-in page, approve, then paste the whole code it shows (including the part after #).' : 'Open the sign-in page and approve.')
@@ -1732,11 +2150,11 @@ function paintSettings() {
           onclick: () => act('test', () => post('/notify/test'), 'Test ping sent'),
         }, 'Send a test')),
       notify?.enabled
-        ? el('p', { class: 'meta' }, 'Sent to the Claude webhook (CLAUDE_DISCORD_WEBHOOK) — separate from fleet\'s.')
+        ? el('p', { class: 'meta' }, 'Sent to the Claude webhook (CLAUDE_DISCORD_WEBHOOK), separate from fleet\'s.')
         : el('div', { class: 'alert alert--warn' }, el('b', {}, 'No webhook'), el('span', {}, `Set CLAUDE_DISCORD_WEBHOOK in ~/.config/ojee-claude/env on ${multi() ? d.label : 'the host'} and restart the runner. Until then pings are only listed below.`)),
       // Which pings go where (app, Discord, quiet hours, cooldowns) is set
       // with every other module's in the console; only excerpts stay here.
-      el('p', { class: 'meta' }, 'Which pings are sent — to the app and to Discord — and quiet hours are set in ',
+      el('p', { class: 'meta' }, 'Which pings are sent (to the app and to Discord) and quiet hours are set in ',
         el('a', { href: '#/settings/notifications', class: 'ag-link' }, 'Settings → Notifications'),
         notify?.console ? `. This runner last received them ${at(notify.console.at)}.` : '. This runner has not received them yet; until it does, the defaults apply.'),
       el('div', { class: 'ag-cl-toggles' }, NOTIFY.filter(([k]) => k === 'excerpts').map(([k, label, detail]) => toggleRow(k, label, '', { notify: true, detail }))),
@@ -1773,12 +2191,12 @@ function paintSettings() {
       el('div', { class: 'ag-cl-list' },
         ...[['Device', d.data.device ? `${d.data.device.label} (${d.data.device.id})` : d.label], ['Claude Code', runner?.claude || 'not found'], ['tmux', runner?.tmux || 'not found'],
           ['Listening on', runner?.port ? `${runner.host}:${runner.port}` : runner?.host], ['Protected stack folder', runner?.stackDir]]
-          .map(([k, v]) => el('div', { class: 'ag-cl-row ag-cl-kv' }, el('span', { class: 'meta' }, k), el('span', {}, v || '—')))))));
+          .map(([k, v]) => el('div', { class: 'ag-cl-row ag-cl-kv' }, el('span', { class: 'meta' }, k), el('span', {}, v || '-')))))));
 }
 
 function govLine(g) {
   if (!g) return '';
-  if (!g.active) return g.reason ? `off — ${g.reason}` : 'off';
+  if (!g.active) return g.reason ? `off: ${g.reason}` : 'off';
   return [
     g.temp != null ? `${g.temp} °C` : null,
     `sessions ${g.usagePct}% of cap ${g.capPct}%`,
