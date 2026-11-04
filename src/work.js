@@ -19,6 +19,12 @@ const SESSION_CWD = process.env.WORK_SESSION_CWD || '/home/ojee/work/forsa-ecosy
 // Between turns: safe to type into. 'running' is mid-turn; 'starting' and
 // 'queued' are handled by the runner's own send().
 const SAFE = new Set(['idle', 'done', 'blocked', 'waiting', 'error', 'stopped']);
+// When the last sweep went out: kept in the module's data volume so a restart
+// does not send an extra one. The n8n "Forsa work loop" workflow calls
+// /api/work/sweep?ifDue=55 every ten minutes; the button calls it without.
+const STAMP_FILE = process.env.WORK_STAMP_FILE || '/app/data/work-sweep.json';
+const readStamp = () => { try { return JSON.parse(fs.readFileSync(STAMP_FILE, 'utf8')).at || 0; } catch { return 0; } };
+const writeStamp = (at) => { try { fs.writeFileSync(STAMP_FILE, JSON.stringify({ at })); } catch { /* best effort */ } };
 
 function readWork() {
   try {
@@ -73,16 +79,22 @@ module.exports = function mountWork(app, auth, runners) {
     }
   });
 
-  app.post('/api/work/sweep', auth, async (_req, res) => {
+  app.get('/api/work/sweep', auth, (_req, res) => res.json({ lastSweepAt: readStamp() || null }));
+
+  app.post('/api/work/sweep', auth, async (req, res) => {
     try {
+      const ifDue = Number(req.query.ifDue) || 0;
+      if (ifDue && Date.now() - readStamp() < ifDue * 60_000) return res.json({ skipped: 'not due', lastSweepAt: readStamp() });
       const found = await findSession(runners);
       if (found.error) return res.status(409).json(found);
       const s = found.session;
-      if (s.question) return res.status(409).json({ error: 'The session is waiting on a question. Answer it in the Claude view first.' });
-      if (s.alive && !SAFE.has(s.state)) return res.status(409).json({ error: `The session is busy (${s.state}). The hourly loop will send the sweep when it is free.` });
+      // The scheduled call skips quietly and tries again ten minutes later; the button says why.
+      if (s.question) return ifDue ? res.json({ skipped: 'question open' }) : res.status(409).json({ error: 'The session is waiting on a question. Answer it in the Claude view first.' });
+      if (s.alive && !SAFE.has(s.state)) return ifDue ? res.json({ skipped: `busy (${s.state})` }) : res.status(409).json({ error: `The session is busy (${s.state}). The work loop sends the sweep when it is free.` });
       const text = fs.readFileSync(PROMPT_FILE, 'utf8').trim();
       await runner(found.runner, 'POST', `/sessions/${encodeURIComponent(s.id)}/message`, { text });
-      res.json({ ok: true, session: s.id });
+      writeStamp(Date.now());
+      res.json({ ok: true, session: s.id, wasState: s.state });
     } catch (e) {
       res.status(502).json({ error: e.message });
     }
