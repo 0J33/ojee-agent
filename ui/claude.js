@@ -947,7 +947,18 @@ function sizeTerminal() {
   const below = box && !box.hidden ? box.offsetHeight + 8 : 0;
   // A phone gives the pane less of a floor: with the message box grown, the
   // box must still end above the console's bottom bar.
-  const min = innerWidth <= 560 ? 120 : 300;
+  const phone = innerWidth <= 560;
+  if (phone) {
+    // On a phone the header above the pane takes half the screen, so fitting
+    // the pane under it left a sliver of chat. Instead the pane is a whole
+    // screen tall (less the tab bar and the message box): scroll past the
+    // header once and the chat fills the screen.
+    const full = Math.floor(visible - bottomChrome(view, visible) - below - 56);
+    view.style.setProperty('--ag-cl-termh', `${Math.max(240, full)}px`);
+    keepComposerInView(view);
+    return;
+  }
+  const min = 300;
   const h = Math.floor(visible - bottomChrome(view, visible) - top - below - 10);
   view.style.setProperty('--ag-cl-termh', `${Math.max(min, h)}px`);
   // Whatever still sits below it in the page (the host's padding, a status
