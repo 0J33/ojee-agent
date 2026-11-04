@@ -20,7 +20,7 @@
 import { mountClaude, routeClaude, unmountClaude, stateDot, stateTag } from './claude.js';
 import { ensureIcons } from './claude-icons.js';
 import { mountAssistant, routeAssistant, unmountAssistant } from './assistant.js';
-import { loadWork, viewWork } from './work.js';
+import { loadWork, viewWork, workBusy } from './work.js';
 
 const el = (tag, attrs = {}, ...kids) => {
   const n = document.createElement(tag);
@@ -662,7 +662,7 @@ export default {
     // enough to see a run land without polling a workflow engine to death.
     timer = setInterval(() => {
       if (document.hidden || state.view === 'claude' || state.view === 'assistant') return;
-      if (state.view === 'work') { loadWork(api).then(render); return; }
+      if (state.view === 'work') { loadWork(api).then(() => { if (!workBusy()) render(); }); return; }
       refresh();
     }, 60_000);
     // Sessions change by the second; the overview keeps up with them.

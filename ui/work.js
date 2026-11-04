@@ -1,14 +1,21 @@
 /* ============================================================
    Work view: who is working on what, and where it is.
 
-   Reads /api/work, the file the host rebuilds every ten minutes from the
+   Two levels, so the first screen can be read at a glance:
+   1. The glance: one sentence, four numbers (needs you, in progress, due
+      soon, problems), one card per person, the next deadlines. Every one
+      of them is a button.
+   2. The detail: a side panel opened from any of those, listing the tasks
+      behind it. Each task is one line until opened; open, it shows where
+      it is, its next step, what blocks it and its PRs.
+
+   Data: /api/work, the file the host rebuilds every ten minutes from the
    owner's ClickUp scope (Task Planning, the Confidential Sprint, the Sprint
-   Folder, Feature Requests and Bug Reports) and the open GitHub PRs.
+   Folder, Feature Requests, Bug Reports) and the open GitHub PRs.
 
    A story and its sprint copy are one piece of work: the story is shown,
-   with the people taken from the copy, which is where the team is assigned.
-   Status is read as a stage of the code, because that is the rule the team
-   works to: started = building, pr open = in review, issues found = fixing,
+   with the people taken from the copy. Status is read as a stage of the
+   code: started = building, pr open = in review, issues found = fixing,
    deployed to dev = on dev, released = live.
    ============================================================ */
 
@@ -28,28 +35,34 @@ const el = (tag, attrs = {}, ...kids) => {
 };
 
 const OWNER = 'Omar Gamal (ojee)';
+const ME = 'Omar / Claude';
 const DAY = 86400000;
 const DONE = new Set(['released', 'closed', 'done', 'complete']);
-const PRI = { 1: 'Urgent', 2: 'High', 3: 'Normal', 4: 'Low' };
 const STAGE = {
-  'to do': ['Not started', 'idle'],
-  started: ['Building', 'build'],
-  'pr open': ['In review', 'review'],
   'issues found': ['Fixing', 'fix'],
+  started: ['Building', 'build'],
+  'in progress': ['Building', 'build'],
+  'pr open': ['In review', 'review'],
+  'in review': ['In review', 'review'],
   'deployed to dev': ['On dev', 'dev'],
-  released: ['Live', 'live'],
+  'to do': ['Not started', 'idle'],
   'on hold': ['On hold', 'idle'],
+  released: ['Live', 'live'],
   closed: ['Closed', 'live'],
 };
+const ACTIVE = new Set(['started', 'pr open', 'issues found', 'in progress', 'in review']);
 
-let data = null;      // last /api/work answer
-let session = null;   // last /api/work/session answer
+let data = null;
+let session = null;
 let loading = false;
 let sweepMsg = null;
-let filter = 'all';   // a person, or 'all'
+let panel = null;          // { title, sub, groups: [{label, items | nodes, hint}] } or null
+let rerenderRef = () => {};
 
 // ClickUp gives "deployed to dev" the done status TYPE, so only these names and the closed type count as finished.
 const isDone = (t) => DONE.has(String(t.status).toLowerCase()) || t.stype === 'closed';
+const stOf = (t) => String(t.status).toLowerCase();
+const stageOf = (i) => (ACTIVE.has(stOf(i)) ? 'active' : stOf(i) === 'deployed to dev' ? 'dev' : stOf(i) === 'on hold' ? 'held' : 'queued');
 const short = (p) => String(p).split(' (')[0];
 const taskUrl = (id) => `https://app.clickup.com/t/${id}`;
 const fmtDay = (ms) => new Date(ms).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Africa/Cairo' });
@@ -60,21 +73,26 @@ const agoMs = (ms) => {
   if (s < 86400) return `${Math.round(s / 3600)} h ago`;
   return `${Math.round(s / 86400)} d ago`;
 };
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many || `${one}s`}`;
+const byKey = (a, b) => ((a.priority || 9) - (b.priority || 9)) || ((a.due || 9e15) - (b.due || 9e15));
+const byDue = (a, b) => (a.due || 9e15) - (b.due || 9e15);
 
 function stageChip(status) {
   const [label, kind] = STAGE[String(status).toLowerCase()] || [status, 'idle'];
   return el('span', { class: `wk-stage wk-stage--${kind}` }, label);
 }
 
-function dueChip(t, now) {
-  if (!t.due) return el('span', { class: 'meta' }, 'no date');
+function dueText(t, now) {
+  if (!t.due) return null;
   const left = (t.due - now) / DAY;
-  const kind = left < 0 ? 'late' : left < 2 ? 'soon' : 'ok';
-  const txt = left < 0 ? `${fmtDay(t.due)} · late ${Math.ceil(-left)}d` : fmtDay(t.due);
-  return el('span', { class: `wk-due wk-due--${kind}` }, txt);
+  if (left < 0) return stageOf(t) === 'dev' ? { txt: 'on dev', kind: 'ok' } : { txt: `late ${Math.ceil(-left)}d`, kind: 'late' };
+  if (left < 1) return { txt: 'today', kind: 'soon' };
+  if (left < 2) return { txt: 'tomorrow', kind: 'soon' };
+  return { txt: fmtDay(t.due), kind: 'ok' };
 }
 
-/** The work model: stories with their copies folded in, team tasks, PRs by task. */
+/* ── model ──────────────────────────────────────────────────────────── */
+
 function model(d) {
   const now = d.fetched;
   const notes = d.notes || {};
@@ -90,14 +108,14 @@ function model(d) {
     lists.push({ id: lid, name: src.name, tasks: src.tasks });
     for (const t of src.tasks) {
       const copy = d.copies[pairs[t.id]];
-      const people = (copy || t).assignees.filter((a) => a !== OWNER);
+      const ppl = (copy || t).assignees.filter((a) => a !== OWNER);
+      const who = tnotes[t.id]?.who;
       items.push({
         ...t,
-        kind: src.name === 'Task Planning' ? 'story' : src.name === 'Bug Reports' ? 'bug' : 'feature',
+        kind: src.name === 'Task Planning' ? 'Story' : src.name === 'Bug Reports' ? 'Bug' : 'Feature request',
         where: copy ? copy.list_name : src.name,
-        copyId: copy?.id,
-        who: tnotes[t.id]?.who || (people.length ? people.map(short).join(', ') : 'Omar / Claude'),
-        people: people.length ? people.map(short) : ['Omar / Claude'],
+        who: who || (ppl.length ? ppl.map(short).join(', ') : ME),
+        people: who && who.startsWith('Claude') ? [ME] : (ppl.length ? ppl.map(short) : [ME]),
         note: tnotes[t.id],
         prs: [...(prsByTask[t.id] || []), ...(copy ? prsByTask[copy.id] || [] : [])],
       });
@@ -107,227 +125,274 @@ function model(d) {
   for (const t of Object.values(d.copies || {})) {
     (byList[t.list_name] ||= []).push(t);
     if (copyIds.has(t.id)) continue;
-    const people = t.assignees.filter((a) => a !== OWNER);
+    const ppl = t.assignees.filter((a) => a !== OWNER);
     items.push({
-      ...t, kind: 'team', where: t.list_name, who: people.length ? people.map(short).join(', ') : 'Omar / Claude',
-      people: people.length ? people.map(short) : ['Omar / Claude'], note: tnotes[t.id], prs: prsByTask[t.id] || [],
+      ...t, kind: 'Team task', where: t.list_name, who: ppl.length ? ppl.map(short).join(', ') : ME,
+      people: ppl.length ? ppl.map(short) : [ME], note: tnotes[t.id], prs: prsByTask[t.id] || [],
     });
   }
   for (const [name, tasks] of Object.entries(byList)) lists.push({ id: name, name, tasks });
-  const linked = new Set(items.flatMap((i) => i.prs.map((p) => `${p.repo}#${p.number}`)));
-  return { now, notes, items, lists, prs: d.prs || [], loosePrs: (d.prs || []).filter((p) => !linked.has(`${p.repo}#${p.number}`)) };
+  const open = items.filter((i) => !isDone(i));
+  const prs = d.prs || [];
+  const problems = {
+    failing: prs.filter((p) => p.ci === 'failing'),
+    fixing: open.filter((i) => stOf(i) === 'issues found'),
+    stale: open.filter((i) => i.kind === 'Team task' && stageOf(i) === 'active' && i.updated && now - i.updated > 3 * DAY),
+    // On dev means the work is done and only waits for a release, so it is not late work.
+    late: open.filter((i) => i.due && i.due < now && stageOf(i) !== 'dev').sort(byDue),
+    oldPrs: prs.filter((p) => now - p.updated > 3 * DAY),
+  };
+  return {
+    now, notes, items, open, lists, prs, problems,
+    active: open.filter((i) => stageOf(i) === 'active'),
+    soon: open.filter((i) => i.due && i.due < now + 2 * DAY).sort(byDue),
+    week: open.filter((i) => i.due && i.due < now + 7 * DAY).sort(byDue),
+  };
 }
 
-const key = (t) => [(t.priority || 9), (t.due || 9e15)];
-const byKey = (a, b) => { const x = key(a), y = key(b); return x[0] - y[0] || x[1] - y[1]; };
+/* ── the detail panel ───────────────────────────────────────────────── */
+
+function openPanel(p) { panel = p; rerenderRef(); }
+function closePanel() { panel = null; rerenderRef(); }
 
 function prChip(p) {
-  return el('a', { class: `wk-pr wk-pr--${p.ci}`, href: p.url, target: '_blank', rel: 'noopener', title: `${p.title} (CI ${p.ci})` },
-    `${p.repo}#${p.number}`);
+  const ci = { passing: 'CI passing', failing: 'CI failing', running: 'CI running', none: 'no CI' }[p.ci] || p.ci;
+  return el('a', { class: `wk-pr wk-pr--${p.ci}`, href: p.url, target: '_blank', rel: 'noopener', title: p.title },
+    `${p.repo}#${p.number}`, el('span', { class: 'wk-pr-ci' }, ci));
 }
 
-function itemRow(i, now) {
-  return el('div', { class: 'ag-row wk-item' },
-    stageChip(i.status),
-    el('a', { class: 'ag-row-name wk-name', href: taskUrl(i.id), target: '_blank', rel: 'noopener', title: i.name }, i.name),
-    el('span', { class: 'meta wk-where', title: i.where }, i.where),
-    dueChip(i, now),
-    el('span', { class: 'wk-prs' }, i.prs.map(prChip)),
-    i.note?.next ? el('span', { class: 'wk-next', title: i.note.next }, i.note.next) : null);
+const prNote = (p, extra) => el('div', { class: 'wk-note' }, prChip(p), el('p', { class: 'meta' }, [p.title, short(p.person), extra].filter(Boolean).join(' · ')));
+
+/** One line until opened; opened, everything known about the task. */
+function taskLine(i, now, open) {
+  const due = dueText(i, now);
+  return el('details', { class: 'wk-task', open: open || false },
+    el('summary', {},
+      stageChip(i.status),
+      el('span', { class: 'wk-task-name' }, i.name),
+      due ? el('span', { class: `wk-due wk-due--${due.kind}` }, due.txt) : null),
+    el('div', { class: 'wk-task-body' },
+      el('dl', { class: 'wk-facts' },
+        el('dt', {}, 'Who'), el('dd', {}, i.who),
+        el('dt', {}, 'Where'), el('dd', {}, `${i.where} · ${i.kind}`),
+        el('dt', {}, 'Due'), el('dd', {}, i.due ? fmtDay(i.due) : 'no date'),
+        i.note?.next ? [el('dt', {}, 'Next step'), el('dd', {}, i.note.next)] : null,
+        i.note?.blocker ? [el('dt', {}, 'Blocked by'), el('dd', { class: 'wk-blocker' }, i.note.blocker)] : null),
+      i.prs.length ? el('div', { class: 'wk-prs' }, i.prs.map(prChip)) : null,
+      el('a', { class: 'wk-open', href: taskUrl(i.id), target: '_blank', rel: 'noopener' }, 'Open in ClickUp')));
 }
 
-/* ── panels ─────────────────────────────────────────────────────────── */
-
-function header(m, api, rerender) {
-  const s = session && !session.error ? session : null;
-  const busy = s && s.alive && s.state === 'running';
-  return el('section', { class: 'panel stack' },
-    el('div', { class: 'ag-panel-head' },
-      el('h3', { class: 'h3' }, 'Work'),
-      el('div', { class: 'wk-head-side' },
-        el('span', { class: 'meta' }, `ClickUp and GitHub, updated ${agoMs(data.fileAgeMs)}`),
-        data.doc ? el('a', { class: 'btn btn--ghost btn--sm', href: `https://app.clickup.com/90152575282/v/dc/${data.doc.doc}/${data.doc.page}`, target: '_blank', rel: 'noopener' }, 'Work Plan doc') : null,
-        el('button', {
-          class: 'btn btn--sm', type: 'button', disabled: !!busy || sweepMsg === '…',
-          title: busy ? 'Claude is mid-turn; the hourly loop sends the sweep when it is free' : 'Type the sweep prompt into the Conductor session',
-          onclick: async () => {
-            sweepMsg = '…'; rerender();
-            try {
-              const r = await api('/work/sweep', { method: 'POST' });
-              sweepMsg = r?.error ? r.error : 'Sweep sent to Claude.';
-            } catch (e) { sweepMsg = e.message; }
-            await loadSession(api); rerender();
-          },
-        }, 'Sweep now'))),
-    el('div', { class: 'wk-session' },
-      el('span', { class: `dot dot--${!s ? 'err' : busy ? 'live' : s.question ? 'warn' : 'ok'}` }),
-      el('span', {}, s ? `Claude (${s.title}): ${s.question ? 'waiting on a question' : busy ? 'working' : s.alive ? 'between turns' : 'not running'}` : `Claude session: ${session?.error || 'unknown'}`),
-      s?.lastActivityAt ? el('span', { class: 'meta' }, `last activity ${agoMs(Date.now() - s.lastActivityAt)}`) : null,
-      sweepMsg && sweepMsg !== '…' ? el('span', { class: 'meta wk-sweepmsg' }, sweepMsg) : null),
-    s?.lastAssistant ? el('p', { class: 'meta wk-said' }, s.lastAssistant) : null);
+function viewPanel(m) {
+  if (!panel) return null;
+  const groups = panel.groups.filter((g) => (g.items || g.nodes || []).length);
+  const single = groups.length === 1 && (groups[0].items || []).length === 1;
+  const body = groups.map((g) => el('section', { class: 'wk-group' },
+    el('h4', { class: 'wk-group-h' }, g.label, el('span', { class: 'wk-count' }, String((g.items || g.nodes).length))),
+    g.hint ? el('p', { class: 'meta wk-hint' }, g.hint) : null,
+    g.items ? g.items.map((i) => taskLine(i, m.now, single)) : g.nodes));
+  return el('div', { class: 'wk-panel-wrap' },
+    el('div', { class: 'wk-scrim', onclick: closePanel }),
+    el('aside', { class: 'wk-panel', role: 'dialog', 'aria-modal': 'true', 'aria-label': panel.title },
+      el('header', { class: 'wk-panel-head' },
+        el('div', { class: 'wk-panel-titles' }, el('h3', { class: 'h3' }, panel.title), panel.sub ? el('p', { class: 'meta' }, panel.sub) : null),
+        el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: closePanel }, 'Close')),
+      el('div', { class: 'wk-panel-body' }, body.length ? body : el('p', { class: 'meta' }, 'Nothing here.'))));
 }
 
-function stats(m) {
-  const open = m.items.filter((i) => !isDone(i));
-  const stories = m.items.filter((i) => i.kind === 'story');
-  const late = open.filter((i) => i.due && i.due < m.now);
-  const soon = open.filter((i) => i.due && i.due >= m.now && i.due < m.now + 7 * DAY);
-  const week = stories.filter((i) => isDone(i) && i.done && i.done > m.now - 7 * DAY);
-  const tile = (label, value, warn) => el('div', { class: `panel stat ${warn ? 'is-warn' : ''}` },
-    el('span', { class: 'meta' }, label), el('span', { class: 'value wk-value' }, String(value)));
-  return el('div', { class: 'grid grid--4 wk-stats' },
-    tile('Open stories', `${stories.filter((i) => !isDone(i)).length} of ${stories.length}`),
-    tile('Late, all lists', late.length, late.length > 0),
-    tile('Due in 7 days', soon.length, false),
-    tile('Stories finished, 7 days', week.length, false),
-    tile('Open PRs', m.prs.length, m.prs.some((p) => p.ci === 'failing')));
+/* ── the glance ─────────────────────────────────────────────────────── */
+
+function tile({ label, value, sub, tone, onclick }) {
+  return el('button', { class: `wk-tile wk-tile--${tone || 'plain'}`, type: 'button', onclick },
+    el('span', { class: 'wk-tile-label' }, label),
+    el('span', { class: 'wk-tile-value' }, String(value)),
+    el('span', { class: 'wk-tile-sub' }, sub));
 }
 
-const ACTIVE = new Set(['started', 'pr open', 'issues found', 'in progress', 'in review']);
-const stageOf = (i) => {
-  const st = String(i.status).toLowerCase();
-  if (ACTIVE.has(st)) return 'active';
-  if (st === 'deployed to dev') return 'dev';
-  if (st === 'on hold') return 'held';
-  return 'queued';
-};
-
-function fold(label, rows, now, open) {
-  if (!rows.length) return null;
-  return el('details', { class: 'wk-next-up', open: open || false },
-    el('summary', { class: 'meta' }, `${label} (${rows.length})`),
-    el('div', { class: 'ag-list' }, rows.slice(0, 60).map((i) => itemRow(i, now))),
-    rows.length > 60 ? el('p', { class: 'meta' }, `and ${rows.length - 60} more in ClickUp`) : null);
-}
-
-function people(m) {
-  const open = m.items.filter((i) => !isDone(i));
-  const count = (k) => open.filter((i) => stageOf(i) === k).length;
-  const names = [...new Set(open.flatMap((i) => i.people))]
-    .sort((a, b) => (a === 'Omar / Claude' ? -1 : b === 'Omar / Claude' ? 1 : a.localeCompare(b)));
-  const choose = (p) => el('button', {
-    class: `tab ${filter === p ? 'active' : ''}`, type: 'button', 'aria-selected': filter === p ? 'true' : 'false',
-    onclick: () => { filter = p; rerenderRef(); },
-  }, p === 'all' ? 'Everyone' : p);
-  const shown = filter === 'all' ? names : names.filter((n) => n === filter);
-  return el('section', { class: 'panel stack' },
-    el('div', { class: 'ag-panel-head' },
-      el('h3', { class: 'h3' }, 'Being worked on'),
-      el('span', { class: 'meta' }, `${count('active')} in progress · ${count('dev')} on dev waiting for release · ${count('queued')} not started · ${count('held')} on hold`)),
-    el('div', { class: 'tabs wk-tabs' }, choose('all'), names.map(choose)),
-    shown.map((p) => {
-      const mine = open.filter((i) => i.people.includes(p));
-      const by = (k) => mine.filter((i) => stageOf(i) === k).sort(byKey);
-      const active = by('active');
-      const theirPrs = m.loosePrs.filter((x) => (p === 'Omar / Claude' ? x.person === OWNER : short(x.person) === p));
-      const nowRows = p === 'Omar / Claude' ? (m.notes.now || []) : (m.notes.now || []).filter((x) => x.who.includes(p));
-      return el('div', { class: 'wk-person stack' },
-        el('div', { class: 'wk-person-head' },
-          el('strong', {}, p),
-          el('span', { class: 'meta' }, `${active.length} in progress · ${by('dev').length} on dev · ${by('queued').length} next${by('held').length ? ` · ${by('held').length} on hold` : ''}${theirPrs.length ? ` · ${theirPrs.length} PR without a task` : ''}`)),
-        nowRows.length ? el('div', { class: 'ag-list' }, nowRows.map((x) => el('div', { class: 'ag-row wk-now' },
-          el('span', { class: 'dot dot--live' }),
-          el('span', { class: 'ag-row-name', title: x.what }, x.what),
-          el('span', { class: 'meta', title: x.state }, `${x.who}: ${x.state}`)))) : null,
-        active.length ? el('div', { class: 'ag-list' }, active.map((i) => itemRow(i, m.now))) : el('p', { class: 'meta' }, 'Nothing in progress.'),
-        theirPrs.length ? el('div', { class: 'wk-prs wk-loose' }, el('span', { class: 'meta' }, 'PRs without a task:'), theirPrs.map(prChip)) : null,
-        fold('On dev, waiting for release', by('dev'), m.now),
-        fold('Next up', by('queued'), m.now),
-        fold('On hold', by('held'), m.now));
+function tiles(m) {
+  const owner = m.notes.owner || [];
+  const pr = m.problems;
+  const nProblems = pr.failing.length + pr.fixing.length + pr.stale.length + pr.late.length;
+  const onDev = m.open.filter((i) => stageOf(i) === 'dev');
+  return el('div', { class: 'wk-tiles' },
+    tile({
+      label: 'Needs you', value: owner.length, tone: owner.length ? 'warn' : 'ok',
+      sub: owner.length ? owner[0].what : 'Nothing waiting',
+      onclick: () => openPanel({
+        title: 'Needs you', sub: 'Things only you can do or decide.',
+        groups: [{ label: 'Waiting on you', nodes: owner.map((x) => el('div', { class: 'wk-note' }, el('strong', {}, x.what), el('p', { class: 'meta' }, x.why))) }],
+      }),
+    }),
+    tile({
+      label: 'In progress', value: m.active.length, tone: 'plain',
+      sub: `Plus ${onDev.length} on dev, waiting for release`,
+      onclick: () => openPanel({
+        title: 'In progress', sub: 'Everything being built, reviewed or fixed right now.',
+        groups: [
+          { label: 'Fixing', items: m.active.filter((i) => stOf(i) === 'issues found').sort(byKey) },
+          { label: 'In review', items: m.active.filter((i) => ['pr open', 'in review'].includes(stOf(i))).sort(byKey) },
+          { label: 'Building', items: m.active.filter((i) => ['started', 'in progress'].includes(stOf(i))).sort(byKey) },
+          { label: 'On dev, waiting for release', items: onDev.sort(byKey) },
+        ],
+      }),
+    }),
+    tile({
+      label: 'Due in 48 hours', value: m.soon.length, tone: m.soon.length ? 'warn' : 'ok',
+      sub: m.soon[0] ? m.soon[0].name : 'Nothing due',
+      onclick: () => openPanel({
+        title: 'Deadlines', sub: 'Open work by due date.',
+        groups: [
+          { label: 'Late', items: m.week.filter((i) => i.due < m.now && stageOf(i) !== 'dev') },
+          { label: 'Past due date, already on dev', items: m.week.filter((i) => i.due < m.now && stageOf(i) === 'dev') },
+          { label: 'Next 48 hours', items: m.soon.filter((i) => i.due >= m.now) },
+          { label: 'Rest of the week', items: m.week.filter((i) => i.due >= m.now + 2 * DAY) },
+        ],
+      }),
+    }),
+    tile({
+      label: 'Problems', value: nProblems, tone: nProblems ? 'err' : 'ok',
+      sub: nProblems ? [pr.failing.length && `${pr.failing.length} PRs failing CI`, pr.late.length && `${pr.late.length} late`, pr.fixing.length && `${pr.fixing.length} with issues`, pr.stale.length && `${pr.stale.length} gone quiet`].filter(Boolean).join(' · ') : 'None',
+      onclick: () => openPanel({
+        title: 'Problems', sub: 'What is going wrong and needs a push.',
+        groups: [
+          { label: 'Late', items: pr.late },
+          { label: 'Issues found', hint: 'Testing found problems; the task comments list them.', items: pr.fixing },
+          { label: 'PRs failing CI', nodes: pr.failing.map((p) => prNote(p)) },
+          { label: 'In progress, no update for 3+ days', items: pr.stale },
+          { label: 'PRs untouched for 3+ days', nodes: pr.oldPrs.map((p) => prNote(p, agoMs(m.now - p.updated))) },
+        ],
+      }),
     }));
 }
 
-function owner(m) {
-  const rows = m.notes.owner || [];
-  if (!rows.length) return null;
-  return el('section', { class: 'panel stack is-warn' },
-    el('h3', { class: 'h3' }, 'Waiting on you'),
-    el('div', { class: 'ag-list' }, rows.map((x) => el('div', { class: 'ag-row wk-owner' },
-      el('span', { class: 'dot dot--warn' }),
-      el('span', { class: 'ag-row-name', title: x.what }, x.what),
-      el('span', { class: 'meta', title: x.why }, x.why)))));
+function personCard(m, name) {
+  const mine = m.open.filter((i) => i.people.includes(name));
+  const n = (k) => mine.filter((i) => stageOf(i) === k).length;
+  const active = mine.filter((i) => stageOf(i) === 'active').sort(byKey);
+  const top = active[0] || mine.filter((i) => stageOf(i) === 'queued').sort(byKey)[0];
+  const late = mine.filter((i) => i.due && i.due < m.now && stageOf(i) !== 'dev').length;
+  const prs = m.prs.filter((p) => (name === ME ? p.person === OWNER : short(p.person) === name));
+  const segs = [['active', 'in progress'], ['dev', 'on dev'], ['queued', 'not started']];
+  const total = Math.max(1, n('active') + n('dev') + n('queued'));
+  return el('button', {
+    class: 'wk-person', type: 'button',
+    onclick: () => openPanel({
+      title: name, sub: `${plural(mine.length, 'open item')}${prs.length ? ` · ${plural(prs.length, 'open PR')}` : ''}`,
+      groups: [
+        { label: 'In progress', items: active },
+        { label: 'On dev, waiting for release', items: mine.filter((i) => stageOf(i) === 'dev').sort(byKey) },
+        { label: 'Open PRs', nodes: prs.map((p) => prNote(p)) },
+        { label: 'Not started', items: mine.filter((i) => stageOf(i) === 'queued').sort(byKey) },
+        { label: 'On hold', items: mine.filter((i) => stageOf(i) === 'held').sort(byKey) },
+      ],
+    }),
+  },
+    el('span', { class: 'wk-person-top' },
+      el('span', { class: 'wk-avatar', 'aria-hidden': 'true' }, name === ME ? 'C' : name[0]),
+      el('span', { class: 'wk-person-name' }, name),
+      late ? el('span', { class: 'wk-flag' }, `${late} late`) : null),
+    el('span', { class: 'wk-person-count' }, el('strong', {}, String(n('active'))), ' in progress'),
+    el('span', { class: 'wk-bar', 'aria-hidden': 'true' },
+      segs.map(([k]) => (n(k) ? el('span', { class: `wk-seg wk-seg--${k}`, style: `flex:${n(k) / total}` }) : null))),
+    el('span', { class: 'wk-person-legend' }, `${n('dev')} on dev · ${n('queued')} not started`),
+    el('span', { class: 'wk-person-now' }, top ? `${stageOf(top) === 'active' ? 'Now' : 'Next'}: ${top.name}` : 'Nothing assigned'));
 }
 
-function order(m) {
-  const byId = Object.fromEntries(m.items.map((i) => [i.id, i]));
-  const rows = (m.notes.focus || []).map((id) => byId[id]).filter((i) => i && !isDone(i));
-  if (!rows.length) return null;
-  return el('section', { class: 'panel stack' },
-    el('div', { class: 'ag-panel-head' },
-      el('h3', { class: 'h3' }, "This week's order"),
-      el('span', { class: 'meta' }, 'priority and deadline together, blockers first')),
-    el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
-      el('thead', {}, el('tr', {}, ['#', 'Story', 'Due', 'Stage', 'Who', 'Next step', 'Blocked by'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, rows.map((i, n) => el('tr', {},
-        el('td', { class: 'num' }, String(n + 1)),
-        el('td', {}, el('a', { href: taskUrl(i.id), target: '_blank', rel: 'noopener' }, i.name)),
-        el('td', {}, dueChip(i, m.now)),
-        el('td', {}, stageChip(i.status)),
-        el('td', {}, i.who),
-        el('td', {}, i.note?.next || ''),
-        el('td', {}, i.note?.blocker || '-')))))));
+function people(m) {
+  const names = [...new Set(m.open.filter((i) => stageOf(i) !== 'held').flatMap((i) => i.people))]
+    .sort((a, b) => (a === ME ? -1 : b === ME ? 1 : a.localeCompare(b)));
+  return el('section', { class: 'wk-section' },
+    el('h3', { class: 'wk-h' }, 'Who is on what'),
+    el('div', { class: 'wk-people' }, names.map((nm) => personCard(m, nm))));
 }
 
-function deadlines(m) {
-  const rows = m.items.filter((i) => !isDone(i) && i.due && i.due < m.now + 7 * DAY).sort((a, b) => a.due - b.due);
-  return el('section', { class: 'panel stack' },
-    el('div', { class: 'ag-panel-head' }, el('h3', { class: 'h3' }, 'Deadlines, next 7 days'), el('span', { class: 'meta' }, `${rows.length}`)),
-    rows.length ? el('div', { class: 'ag-list' }, rows.map((i) => el('div', { class: 'ag-row wk-dl' },
-      dueChip(i, m.now),
-      el('a', { class: 'ag-row-name wk-name', href: taskUrl(i.id), target: '_blank', rel: 'noopener', title: i.name }, i.name),
-      el('span', { class: 'meta' }, i.who),
-      stageChip(i.status)))) : el('p', { class: 'meta' }, 'Nothing due in the next 7 days.'));
+function upcoming(m) {
+  const rows = m.week.slice(0, 5);
+  return el('section', { class: 'wk-section' },
+    el('div', { class: 'wk-h-row' },
+      el('h3', { class: 'wk-h' }, 'Coming up'),
+      m.week.length > 5 ? el('button', {
+        class: 'btn btn--ghost btn--sm', type: 'button',
+        onclick: () => openPanel({ title: 'Deadlines', sub: 'Open work due in the next 7 days.', groups: [{ label: 'Next 7 days', items: m.week }] }),
+      }, `See all ${m.week.length}`) : null),
+    rows.length ? el('div', { class: 'wk-upcoming' }, rows.map((i) => {
+      const due = dueText(i, m.now);
+      return el('button', {
+        class: 'wk-up', type: 'button',
+        onclick: () => openPanel({ title: i.name, sub: `${i.kind} · ${i.where}`, groups: [{ label: 'Task', items: [i] }] }),
+      },
+        el('span', { class: `wk-due wk-due--${due.kind}` }, due.txt),
+        el('span', { class: 'wk-up-name' }, i.name),
+        el('span', { class: 'wk-up-who' }, i.who));
+    })) : el('p', { class: 'meta' }, 'Nothing due in the next 7 days.'));
 }
 
-function listsPanel(m) {
-  const ORDER = ['Task Planning', 'Confidential Sprint', 'Bug Reports', 'Feature Requests'];
-  const rank = (n) => { const i = ORDER.indexOf(n); return i < 0 ? (n.startsWith('Sprint ') && n.includes('(') ? 1.5 : 1.7) : i; };
-  return el('section', { class: 'panel stack' },
-    el('h3', { class: 'h3' }, 'Lists'),
-    el('div', { class: 'ag-list' }, m.lists.slice().sort((a, b) => rank(a.name) - rank(b.name)).map((l) => {
-      const by = {};
-      for (const t of l.tasks) by[String(t.status).toLowerCase()] = (by[String(t.status).toLowerCase()] || 0) + 1;
+function lists(m) {
+  const order = ['Task Planning', 'Confidential Sprint', 'Bug Reports', 'Feature Requests'];
+  const rank = (nm) => { const i = order.indexOf(nm); return i < 0 ? (nm.includes('(') ? 1.5 : 1.7) : i; };
+  return el('details', { class: 'wk-section wk-lists' },
+    el('summary', { class: 'wk-h' }, 'Progress by list'),
+    m.lists.slice().sort((a, b) => rank(a.name) - rank(b.name)).map((l) => {
       const total = l.tasks.length || 1;
-      const order = ['released', 'closed', 'deployed to dev', 'pr open', 'issues found', 'started', 'to do'];
-      const keys = [...order.filter((k) => by[k]), ...Object.keys(by).filter((k) => !order.includes(k))];
-      return el('div', { class: 'wk-list' },
-        el('div', { class: 'wk-list-head' },
-          el('span', {}, l.name),
-          el('span', { class: 'meta' }, `${l.tasks.filter((t) => !isDone(t)).length} open of ${l.tasks.length}`)),
-        el('div', { class: 'wk-bar', role: 'img', 'aria-label': keys.map((k) => `${k} ${by[k]}`).join(', ') },
-          keys.map((k) => el('span', {
-            class: `wk-seg wk-stage--${(STAGE[k] || [, 'idle'])[1]}`, style: `flex:${by[k] / total}`, title: `${k}: ${by[k]}`,
-          }))),
-        el('div', { class: 'meta wk-legend' }, keys.map((k) => `${(STAGE[k] || [k])[0]} ${by[k]}`).join(' · ')));
-    })));
+      const k = { live: 0, dev: 0, active: 0, queued: 0 };
+      for (const t of l.tasks) {
+        if (isDone(t)) k.live += 1;
+        else k[stageOf(t) === 'held' ? 'queued' : stageOf(t)] += 1;
+      }
+      return el('button', {
+        class: 'wk-listrow', type: 'button',
+        onclick: () => {
+          const ids = new Set(l.tasks.map((t) => t.id));
+          const its = m.items.filter((i) => ids.has(i.id) && !isDone(i));
+          openPanel({ title: l.name, sub: `${k.live} of ${l.tasks.length} done`, groups: [
+            { label: 'In progress', items: its.filter((i) => stageOf(i) === 'active').sort(byKey) },
+            { label: 'On dev', items: its.filter((i) => stageOf(i) === 'dev').sort(byKey) },
+            { label: 'Not started', items: its.filter((i) => stageOf(i) === 'queued').sort(byKey) },
+            { label: 'On hold', items: its.filter((i) => stageOf(i) === 'held').sort(byKey) }] });
+        },
+      },
+        el('span', { class: 'wk-list-name' }, l.name),
+        el('span', { class: 'wk-bar' }, ['live', 'dev', 'active', 'queued'].map((s) => (k[s] ? el('span', { class: `wk-seg wk-seg--${s}`, style: `flex:${k[s] / total}` }) : null))),
+        el('span', { class: 'wk-list-n' }, `${k.live}/${l.tasks.length} done`));
+    }),
+    el('p', { class: 'meta wk-legend' },
+      el('span', { class: 'wk-key wk-seg--live' }), 'done', el('span', { class: 'wk-key wk-seg--dev' }), 'on dev',
+      el('span', { class: 'wk-key wk-seg--active' }), 'in progress', el('span', { class: 'wk-key wk-seg--queued' }), 'not started'));
 }
 
-function checks(m) {
-  const out = [];
-  const open = m.items.filter((i) => !isDone(i));
-  const quiet = open.filter((i) => i.kind === 'story' && i.status === 'started' && !i.note?.next);
-  if (quiet.length) out.push(['warn', `${quiet.length} started stories have no next step written`, quiet]);
-  const stale = open.filter((i) => i.kind === 'team' && i.status !== 'to do' && i.updated && m.now - i.updated > 3 * DAY);
-  if (stale.length) out.push(['warn', `${stale.length} team tasks in progress with no update for 3+ days`, stale]);
-  const failing = m.prs.filter((p) => p.ci === 'failing');
-  if (failing.length) out.push(['err', `${failing.length} open PRs fail CI`, failing]);
-  const oldPrs = m.prs.filter((p) => m.now - p.updated > 3 * DAY);
-  if (oldPrs.length) out.push(['warn', `${oldPrs.length} PRs untouched for 3+ days`, oldPrs]);
-  const fixing = open.filter((i) => i.status === 'issues found');
-  if (fixing.length) out.push(['warn', `${fixing.length} items have issues found`, fixing]);
-  if (data.errors?.length) out.push(['err', `The last build had ${data.errors.length} errors`, []]);
-  return el('section', { class: 'panel stack' },
-    el('h3', { class: 'h3' }, 'Checks'),
-    out.length ? el('div', { class: 'ag-list' }, out.map(([lvl, title, rows]) => el('details', { class: 'wk-check' },
-      el('summary', {}, el('span', { class: `dot dot--${lvl}` }), ' ', title),
-      el('div', { class: 'wk-check-body' }, rows.map((r) => (r.repo ? prChip(r)
-        : el('a', { class: 'wk-chiplink', href: taskUrl(r.id), target: '_blank', rel: 'noopener' }, r.name)))))))
-      : el('p', { class: 'meta' }, 'Nothing to flag.'));
+function footer(api) {
+  const s = session && !session.error ? session : null;
+  const busy = s && s.alive && s.state === 'running';
+  const state = !s ? 'not reachable' : s.question ? 'waiting on a question' : busy ? 'working' : s.alive ? 'between turns' : 'not running';
+  return el('footer', { class: 'wk-foot' },
+    el('span', { class: 'wk-foot-item' }, el('span', { class: `dot dot--${!s ? 'err' : busy ? 'live' : s.question ? 'warn' : 'ok'}` }), `Claude is ${state}`),
+    el('span', { class: 'wk-foot-item meta' }, `Updated ${agoMs(data.fileAgeMs)} from ClickUp and GitHub`),
+    sweepMsg && sweepMsg !== '…' ? el('span', { class: 'wk-foot-item meta wk-sweepmsg' }, sweepMsg) : null,
+    el('span', { class: 'wk-foot-actions' },
+      data.doc ? el('a', { class: 'btn btn--ghost btn--sm', href: `https://app.clickup.com/90152575282/v/dc/${data.doc.doc}/${data.doc.page}`, target: '_blank', rel: 'noopener' }, 'Work Plan doc') : null,
+      el('button', {
+        class: 'btn btn--ghost btn--sm', type: 'button', disabled: !!busy || sweepMsg === '…',
+        title: busy ? 'Claude is mid-turn; the work loop sends the sweep when it is free' : 'Ask Claude to run the sweep now',
+        onclick: async () => {
+          sweepMsg = '…'; rerenderRef();
+          try { const r = await api('/work/sweep', { method: 'POST' }); sweepMsg = r?.error ? r.error : 'Sweep sent to Claude.'; } catch (e) { sweepMsg = e.message; }
+          await loadSession(api); rerenderRef();
+        },
+      }, 'Sweep now')));
+}
+
+function headline(m) {
+  const pr = m.problems;
+  const bad = pr.failing.length + pr.late.length + pr.fixing.length;
+  const parts = [];
+  const nOwner = (m.notes.owner || []).length;
+  if (nOwner) parts.push(nOwner === 1 ? '1 thing needs you' : `${nOwner} things need you`);
+  if (m.soon.length) parts.push(`${m.soon.length} due within 48 hours`);
+  if (bad) parts.push(plural(bad, 'problem'));
+  const text = parts.length ? `${parts.join(', ')}.` : 'All clear: nothing needs you and nothing is late.';
+  return el('p', { class: 'wk-headline' }, text.charAt(0).toUpperCase() + text.slice(1));
 }
 
 /* ── module surface ─────────────────────────────────────────────────── */
-
-let rerenderRef = () => {};
 
 async function loadSession(api) {
   try { session = await api('/work/session'); } catch (e) { session = { error: e.message }; }
@@ -346,11 +411,18 @@ export async function loadWork(api) {
   }
 }
 
+/** True while the detail panel is open: a timed refresh then waits, so it does not close what is being read. */
+export const workBusy = () => !!panel;
+
+function onKey(e) { if (e.key === 'Escape' && panel) closePanel(); }
+
 export function viewWork(api, rerender) {
   rerenderRef = rerender;
+  document.removeEventListener('keydown', onKey);
+  document.addEventListener('keydown', onKey);
   if (!data) {
     loadWork(api).then(rerender);
-    return el('div', { class: 'stack-lg' }, el('span', { class: 'skeleton', style: 'height:56px;display:block' }),
+    return el('div', { class: 'stack-lg' }, el('span', { class: 'skeleton', style: 'height:120px;display:block' }),
       el('span', { class: 'skeleton', style: 'height:240px;display:block' }));
   }
   if (data.error) {
@@ -358,7 +430,6 @@ export function viewWork(api, rerender) {
       el('div', { class: 'ag-problem' }, el('strong', {}, 'The work picture is not available'), el('p', { class: 'meta' }, data.error)));
   }
   const m = model(data);
-  return el('div', { class: 'stack-lg wk' },
-    header(m, api, rerender), stats(m), owner(m), people(m), order(m),
-    el('div', { class: 'grid grid--2' }, deadlines(m), checks(m)), listsPanel(m));
+  return el('div', { class: 'wk' },
+    headline(m), tiles(m), people(m), upcoming(m), lists(m), footer(api), viewPanel(m));
 }
