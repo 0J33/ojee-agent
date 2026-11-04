@@ -28,7 +28,7 @@ const { Tmux } = require('./tmux');
 const { Accounts, cleanEnv } = require('./accounts');
 const { Notifier } = require('./notify');
 const { Sessions } = require('./sessions');
-const { Tail, toMessages, readRange, listSessions, findTranscript } = require('./transcript');
+const { Tail, toMessages, readRange, listSessions, findTranscript, listSubagents, subagentFile } = require('./transcript');
 const { parseScreen } = require('./screen');
 const logins = require('./logins');
 const { bridge } = require('./terminal');
@@ -382,40 +382,76 @@ function createRunner(overrides = {}) {
     res.json(await sessions.remove(s, { purge: req.query.purge === '1' }));
   }));
 
-  app.get('/api/sessions/:id/transcript', auth, wrap(async (req, res) => {
-    const s = need(req);
-    if (!sessions.hasTranscript(s)) return res.json({ messages: [], cursor: 0, start: 0, file: null });
-    const size = fs.statSync(s.transcript).size;
+  /**
+   * A transcript file, read the way the console asks: the tail first, then
+   * what is new after `cursor`, or (detail) whole lines before `before`.
+   * The main session's file and a subagent's are served the same way.
+   */
+  function sendTranscript(file, req, res, { sidechain = false } = {}) {
+    const size = fs.statSync(file).size;
     const detail = req.query.detail === '1';
+    const opts = { detail, sidechain };
     if (detail && req.query.before != null) {
       // Paging back: the whole lines that end at `before`, about 2 MB of them.
       const before = Math.min(size, Math.max(0, Number(req.query.before) || 0));
-      const r = readRange(s.transcript, Math.max(0, before - 2 * 1024 * 1024), before);
-      return res.json({ messages: toMessages(r.entries, { detail }), start: r.start, truncated: r.start > 0, file: s.transcript });
+      const r = readRange(file, Math.max(0, before - 2 * 1024 * 1024), before);
+      return res.json({ messages: toMessages(r.entries, opts), start: r.start, truncated: r.start > 0, file });
     }
     let cursor = req.query.cursor != null ? Number(req.query.cursor) : null;
     let truncated = false;
     if (detail && (cursor == null || !Number.isFinite(cursor) || cursor > size)) {
       // First load, detailed: the last 2 MB as whole lines, every message in
       // them, and where they start, so the reader can page back from there.
-      const r = readRange(s.transcript, Math.max(0, size - 2 * 1024 * 1024), size);
-      return res.json({ messages: toMessages(r.entries, { detail }), cursor: r.end, start: r.start, truncated: r.start > 0, file: s.transcript });
+      const r = readRange(file, Math.max(0, size - 2 * 1024 * 1024), size);
+      return res.json({ messages: toMessages(r.entries, opts), cursor: r.end, start: r.start, truncated: r.start > 0, file });
     }
     // First load: the tail only. A long session's file runs to hundreds of MB.
     if (cursor == null || !Number.isFinite(cursor) || cursor > size) {
       cursor = Math.max(0, size - 3 * 1024 * 1024);
       truncated = cursor > 0;
     }
-    const tail = new Tail(s.transcript, cursor);
+    const tail = new Tail(file, cursor);
     const entries = tail.read(8 * 1024 * 1024);
     // Starting mid-file, the first line is almost always a fragment.
-    const messages = toMessages(entries, { detail });
-    res.json({
+    const messages = toMessages(entries, opts);
+    return res.json({
       messages: req.query.cursor == null ? messages.slice(-400) : messages,
       cursor: tail.offset - Buffer.byteLength(tail.partial),
       truncated: truncated || (req.query.cursor == null && messages.length > 400),
-      file: s.transcript,
+      file,
     });
+  }
+
+  app.get('/api/sessions/:id/transcript', auth, wrap(async (req, res) => {
+    const s = need(req);
+    if (!sessions.hasTranscript(s)) return res.json({ messages: [], cursor: 0, start: 0, file: null });
+    sendTranscript(s.transcript, req, res);
+  }));
+
+  /**
+   * The session's subagents (Task/Agent runs, background agents), newest
+   * first: id, type, description, the call that launched it, and whether it
+   * is still running (the hooks say so, or its file changed a moment ago).
+   */
+  app.get('/api/sessions/:id/agents', auth, wrap(async (req, res) => {
+    const s = need(req);
+    if (!sessions.hasTranscript(s)) return res.json({ agents: [] });
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 40));
+    const live = new Set((s.background || []).filter((t) => t.type === 'subagent').map((t) => t.id));
+    const now = Date.now();
+    res.json({
+      agents: listSubagents(s.transcript, { limit }).map((a) => ({
+        ...a,
+        running: live.has(a.id) || now - a.modified < 20_000,
+      })),
+    });
+  }));
+
+  app.get('/api/sessions/:id/agents/:agentId/transcript', auth, wrap(async (req, res) => {
+    const s = need(req);
+    const file = sessions.hasTranscript(s) ? subagentFile(s.transcript, req.params.agentId) : null;
+    if (!file) return res.status(404).json({ error: 'No such subagent' });
+    sendTranscript(file, req, res, { sidechain: true });
   }));
 
   /**

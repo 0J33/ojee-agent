@@ -106,3 +106,23 @@ test('readRange returns whole lines and pages back without losing one', () => {
   assert.deepEqual(seen, lines.map((_, i) => i));
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('subagents are listed from <session>/subagents with their meta, and read as sidechain', () => {
+  const { listSubagents, subagentFile } = require('../src/transcript');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ojee-claude-sub-'));
+  const main = path.join(dir, 'abc.jsonl');
+  fs.writeFileSync(main, '');
+  fs.mkdirSync(path.join(dir, 'abc', 'subagents'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'abc', 'subagents', 'agent-a1.jsonl'), `${JSON.stringify({ type: 'user', isSidechain: true, message: { content: 'do it' } })}\n`);
+  fs.writeFileSync(path.join(dir, 'abc', 'subagents', 'agent-a1.meta.json'), JSON.stringify({ agentType: 'general-purpose', description: 'Run the suite', toolUseId: 'tu1' }));
+  const list = listSubagents(main);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].description, 'Run the suite');
+  assert.equal(list[0].toolUseId, 'tu1');
+  assert.equal(subagentFile(main, '../x'), null);
+  const f = subagentFile(main, 'a1');
+  const entries = fs.readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(toMessages(entries).length, 0);
+  assert.equal(toMessages(entries, { sidechain: true })[0].text, 'do it');
+  fs.rmSync(dir, { recursive: true, force: true });
+});

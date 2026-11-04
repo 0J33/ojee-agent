@@ -122,10 +122,11 @@ const tag = (text, name) => {
  * call and clipped longer, command output, background-task notices and how
  * long each turn took. Without it the shape is exactly what it always was.
  */
-function toMessages(entries, { detail = false } = {}) {
+function toMessages(entries, { detail = false, sidechain = false } = {}) {
   const out = [];
   for (const e of entries) {
-    if (!e || e.isSidechain) continue;
+    // A subagent's own file is all sidechain: read it when asked to.
+    if (!e || (e.isSidechain && !sidechain)) continue;
     const at = e.timestamp || null;
 
     if (e.type === 'assistant') {
@@ -293,4 +294,50 @@ function listSessions(projectDirs, { limit = 60 } = {}) {
     .filter(Boolean);
 }
 
-module.exports = { findTranscript, Tail, toMessages, readRange, describe, listSessions, toolSummary, toolInput };
+/**
+ * A session's subagents: Claude Code writes each one's conversation to
+ * <projects>/<dir>/<sessionId>/subagents/agent-<agentId>.jsonl, with a
+ * .meta.json beside it (agentType, description, the toolUseId that launched
+ * it). Newest first, at most `limit`: a long session has thousands.
+ */
+function subagentDir(transcript) {
+  if (!transcript) return null;
+  return path.join(path.dirname(transcript), path.basename(transcript, '.jsonl'), 'subagents');
+}
+
+function listSubagents(transcript, { limit = 40 } = {}) {
+  const dir = subagentDir(transcript);
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  const files = [];
+  for (const n of names) {
+    const m = /^agent-([A-Za-z0-9_-]+)\.jsonl$/.exec(n);
+    if (!m) continue;
+    let st;
+    try { st = fs.statSync(path.join(dir, n)); } catch { continue; }
+    files.push({ id: m[1], file: path.join(dir, n), size: st.size, modified: st.mtimeMs, created: st.birthtimeMs || st.ctimeMs });
+  }
+  files.sort((a, b) => b.modified - a.modified);
+  return files.slice(0, limit).map((f) => {
+    let meta = {};
+    try { meta = JSON.parse(fs.readFileSync(path.join(dir, `agent-${f.id}.meta.json`), 'utf8')); } catch { /* none */ }
+    return {
+      id: f.id,
+      type: meta.agentType || null,
+      description: clip(meta.description || '', 200) || null,
+      toolUseId: meta.toolUseId || null,
+      size: f.size,
+      modified: f.modified,
+      created: f.created,
+    };
+  });
+}
+
+/** One subagent's file, or null. The id is checked: it becomes a path. */
+function subagentFile(transcript, agentId) {
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(String(agentId || ''))) return null;
+  const f = path.join(subagentDir(transcript) || '', `agent-${agentId}.jsonl`);
+  return transcript && fs.existsSync(f) ? f : null;
+}
+
+module.exports = { findTranscript, Tail, toMessages, readRange, describe, listSessions, toolSummary, toolInput, listSubagents, subagentFile };
