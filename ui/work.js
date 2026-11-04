@@ -411,6 +411,23 @@ function fromClaude() {
       : el('p', { class: 'meta' }, 'No messages yet. Releases, moved deadlines and decisions show up here.'));
 }
 
+/** CI health from the host (ci-health.json): one line, red when anything waits too long. */
+function ciLine() {
+  const c = data.ci;
+  if (!c) return null;
+  const q = Number(c.queue ?? c.queued ?? 0);
+  const oldest = Number(c.oldestWaitMin ?? c.oldest_wait_min ?? 0);
+  const busy = c.runnersBusy ?? c.runners_busy;
+  const total = c.runnersTotal ?? c.runners_total;
+  const med = c.medianResultMin ?? c.median_result_min;
+  const bad = oldest > 30 || q > 3;
+  return el('div', { class: `wk-ci ${bad ? 'is-bad' : ''}` },
+    el('span', { class: `dot dot--${bad ? 'err' : q ? 'warn' : 'ok'}` }),
+    el('span', { class: 'wk-ci-main' }, q ? `CI: ${plural(q, 'job')} waiting, oldest ${Math.round(oldest)} min` : 'CI: nothing waiting'),
+    total != null ? el('span', { class: 'meta' }, `runners ${busy ?? 0}/${total} busy`) : null,
+    med != null ? el('span', { class: 'meta' }, `median result ${Math.round(med)} min`) : null);
+}
+
 function headline(m) {
   const pr = m.problems;
   const bad = pr.failing.length + pr.late.length + pr.fixing.length;
@@ -465,5 +482,5 @@ export function viewWork(api, rerender) {
   }
   const m = model(data);
   return el('div', { class: 'wk' },
-    headline(m), tiles(m), fromClaude(), people(m), upcoming(m), lists(m), footer(api), viewPanel(m));
+    headline(m), ciLine(), tiles(m), fromClaude(), people(m), upcoming(m), lists(m), footer(api), viewPanel(m));
 }

@@ -461,3 +461,6 @@
   .wk-foot { gap: var(--s-2); }
   .wk-foot-actions { width: 100%; }
 }
+.wk-ci { display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--s-3); padding: 10px var(--s-3); border: 1px solid var(--line-2); background: var(--bg-2); font-size: 0.78rem; color: var(--ink-2); min-width: 0; }
+.wk-ci.is-bad { border-color: var(--err); }
+.wk-ci-main { color: var(--ink); font-weight: 700; }
