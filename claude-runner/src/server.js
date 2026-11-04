@@ -28,7 +28,8 @@ const { Tmux } = require('./tmux');
 const { Accounts, cleanEnv } = require('./accounts');
 const { Notifier } = require('./notify');
 const { Sessions } = require('./sessions');
-const { Tail, toMessages, listSessions, findTranscript } = require('./transcript');
+const { Tail, toMessages, readRange, listSessions, findTranscript } = require('./transcript');
+const { parseScreen } = require('./screen');
 const logins = require('./logins');
 const { bridge } = require('./terminal');
 const { Governor } = require('./governor');
@@ -383,10 +384,23 @@ function createRunner(overrides = {}) {
 
   app.get('/api/sessions/:id/transcript', auth, wrap(async (req, res) => {
     const s = need(req);
-    if (!sessions.hasTranscript(s)) return res.json({ messages: [], cursor: 0, file: null });
+    if (!sessions.hasTranscript(s)) return res.json({ messages: [], cursor: 0, start: 0, file: null });
     const size = fs.statSync(s.transcript).size;
+    const detail = req.query.detail === '1';
+    if (detail && req.query.before != null) {
+      // Paging back: the whole lines that end at `before`, about 2 MB of them.
+      const before = Math.min(size, Math.max(0, Number(req.query.before) || 0));
+      const r = readRange(s.transcript, Math.max(0, before - 2 * 1024 * 1024), before);
+      return res.json({ messages: toMessages(r.entries, { detail }), start: r.start, truncated: r.start > 0, file: s.transcript });
+    }
     let cursor = req.query.cursor != null ? Number(req.query.cursor) : null;
     let truncated = false;
+    if (detail && (cursor == null || !Number.isFinite(cursor) || cursor > size)) {
+      // First load, detailed: the last 2 MB as whole lines, every message in
+      // them, and where they start, so the reader can page back from there.
+      const r = readRange(s.transcript, Math.max(0, size - 2 * 1024 * 1024), size);
+      return res.json({ messages: toMessages(r.entries, { detail }), cursor: r.end, start: r.start, truncated: r.start > 0, file: s.transcript });
+    }
     // First load: the tail only. A long session's file runs to hundreds of MB.
     if (cursor == null || !Number.isFinite(cursor) || cursor > size) {
       cursor = Math.max(0, size - 3 * 1024 * 1024);
@@ -395,13 +409,66 @@ function createRunner(overrides = {}) {
     const tail = new Tail(s.transcript, cursor);
     const entries = tail.read(8 * 1024 * 1024);
     // Starting mid-file, the first line is almost always a fragment.
-    const messages = toMessages(entries);
+    const messages = toMessages(entries, { detail });
     res.json({
       messages: req.query.cursor == null ? messages.slice(-400) : messages,
       cursor: tail.offset - Buffer.byteLength(tail.partial),
       truncated: truncated || (req.query.cursor == null && messages.length > 400),
       file: s.transcript,
     });
+  }));
+
+  /**
+   * What the terminal shows right now that the transcript cannot: an open
+   * menu (permission prompt, question, /model), the spinner line, background
+   * agents, the permission mode, unsent input. Read from the screen.
+   */
+  app.get('/api/sessions/:id/prompt', auth, wrap(async (req, res) => {
+    const s = need(req);
+    const alive = await sessions.isAlive(s);
+    if (!alive) return res.json({ alive, menu: null, activity: null, agents: [], mode: null, draft: null });
+    res.json({ alive, ...parseScreen(await tmux.capture(s.tmux)) });
+  }));
+
+  /**
+   * Keys for the session's terminal, from a console with no terminal open:
+   * Esc, arrows, Tab, a menu's option, a slash command. Body, any of:
+   *   keys:   tmux key names, from the list below
+   *   text:   typed literally (newlines become Ctrl+J)
+   *   enter:  press Enter after the text
+   *   choose: an option number of the menu on screen, picked with the arrows
+   *           and Enter the way a person would
+   * Unlike /message it never restarts, resumes or switches model: it is the
+   * keyboard, nothing more.
+   */
+  const KEY_NAMES = /^(Escape|Enter|Tab|BTab|Up|Down|Left|Right|PPage|NPage|Home|End|Space|BSpace|DC|C-[a-z]|M-[a-z]|[0-9]|[a-zA-Z])$/;
+  app.post('/api/sessions/:id/keys', auth, wrap(async (req, res) => {
+    const s = need(req);
+    const b = req.body || {};
+    const keys = Array.isArray(b.keys) ? b.keys.map(String) : [];
+    if (keys.length > 40 || keys.some((k) => !KEY_NAMES.test(k))) return res.status(400).json({ error: 'Unknown key' });
+    const text = typeof b.text === 'string' ? b.text : '';
+    if (text.length > 20000) return res.status(400).json({ error: 'Too long' });
+    if (!(await sessions.isAlive(s))) return res.status(409).json({ error: 'The session is not running. Resume it first.' });
+    if (b.choose != null) {
+      const n = Number(b.choose);
+      const { menu } = parseScreen(await tmux.capture(s.tmux));
+      const want = menu?.options.findIndex((o) => o.n === n);
+      if (!menu || want == null || want < 0) return res.status(409).json({ error: 'That menu is no longer open' });
+      const cur = Math.max(0, menu.options.findIndex((o) => o.selected));
+      const d = want - cur;
+      const moves = d > 0 ? Array(d).fill('Down') : Array(-d).fill('Up');
+      if (moves.length) await tmux.keys(s.tmux, ...moves);
+      await new Promise((r) => setTimeout(r, 150));
+      await tmux.keys(s.tmux, 'Enter');
+    } else {
+      if (keys.length) await tmux.keys(s.tmux, ...keys);
+      if (text) await tmux.type(s.tmux, text);
+      if (text && b.enter) { await new Promise((r) => setTimeout(r, 150)); await tmux.keys(s.tmux, 'Enter'); }
+      else if (!text && b.enter) await tmux.keys(s.tmux, 'Enter');
+    }
+    sessions.touch(s);
+    res.json(sessions.view(s));
   }));
 
   /**
@@ -427,7 +494,10 @@ function createRunner(overrides = {}) {
 
   app.get('/api/sessions/:id/screen', auth, wrap(async (req, res) => {
     const s = need(req);
-    res.json({ alive: await sessions.isAlive(s), screen: await tmux.capture(s.tmux) });
+    // ?history=N adds that many lines of scrollback, joined where the pane
+    // wrapped them (for copying out of it). Without it: the screen, as ever.
+    const history = Math.min(5000, Math.max(0, Number(req.query.history) || 0));
+    res.json({ alive: await sessions.isAlive(s), screen: await tmux.capture(s.tmux, history ? { history, join: true } : {}) });
   }));
 
   /* ── history: every conversation on the machine ──────────────────── */

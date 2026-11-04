@@ -83,6 +83,32 @@ function toolSummary(name, input = {}) {
   return clip(typeof pick === 'string' ? pick : JSON.stringify(i), 400);
 }
 
+/** The tool input a reader needs to see what a call did, clipped. */
+function toolInput(name, input) {
+  const i = input && typeof input === 'object' ? input : {};
+  const c = (v, n = 8000) => (typeof v === 'string' ? clip(v, n) : v);
+  switch (name) {
+    case 'Bash': return { command: c(i.command, 4000), description: c(i.description, 300), background: !!i.run_in_background };
+    case 'Edit': return { file_path: i.file_path, old_string: c(i.old_string), new_string: c(i.new_string), replace_all: !!i.replace_all };
+    case 'MultiEdit': return { file_path: i.file_path, edits: (i.edits || []).slice(0, 20).map((e) => ({ old_string: c(e.old_string, 3000), new_string: c(e.new_string, 3000) })) };
+    case 'Write': return { file_path: i.file_path, content: c(i.content) };
+    case 'Read': return { file_path: i.file_path, offset: i.offset, limit: i.limit };
+    case 'TodoWrite': return { todos: (i.todos || []).slice(0, 60).map((t) => ({ content: clip(t.content || t.activeForm || '', 300), status: t.status })) };
+    case 'Task': case 'Agent': return { description: c(i.description, 300), subagent_type: i.subagent_type, prompt: c(i.prompt, 6000) };
+    default: {
+      let j;
+      try { j = JSON.stringify(i, null, 2); } catch { j = ''; }
+      return { json: clip(j, 6000) };
+    }
+  }
+}
+
+const stripAnsi = (t) => String(t || '').replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '');
+const tag = (text, name) => {
+  const m = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text);
+  return m ? m[1].trim() : null;
+};
+
 /**
  * Turn raw transcript entries into what a person reads: prompts, replies, the
  * tools in between, and failures. Everything else Claude Code records
@@ -90,8 +116,13 @@ function toolSummary(name, input = {}) {
  *
  * Sidechain entries belong to subagents and are left out: the main thread is
  * the conversation, and a subagent's failure surfaces there anyway.
+ *
+ * `detail` (the console's transcript view asks for it) adds what the plain
+ * list leaves out: thinking, each call's input and id, results tied to their
+ * call and clipped longer, command output, background-task notices and how
+ * long each turn took. Without it the shape is exactly what it always was.
  */
-function toMessages(entries) {
+function toMessages(entries, { detail = false } = {}) {
   const out = [];
   for (const e of entries) {
     if (!e || e.isSidechain) continue;
@@ -103,7 +134,13 @@ function toMessages(entries) {
       const model = e.message?.model && e.message.model !== '<synthetic>' ? e.message.model : null;
       for (const b of e.message?.content || []) {
         if (b.type === 'text' && b.text?.trim()) out.push({ role: 'assistant', text: b.text, model, at, uuid: e.uuid });
-        else if (b.type === 'tool_use') out.push({ role: 'tool', tool: b.name, text: toolSummary(b.name, b.input), at, uuid: e.uuid });
+        else if (b.type === 'tool_use') {
+          const m = { role: 'tool', tool: b.name, text: toolSummary(b.name, b.input), at, uuid: e.uuid };
+          if (detail) { m.id = b.id || null; m.input = toolInput(b.name, b.input); }
+          out.push(m);
+        } else if (detail && (b.type === 'thinking' || b.type === 'redacted_thinking')) {
+          out.push({ role: 'thinking', text: clip(b.thinking || '', 20000), at, uuid: e.uuid });
+        }
       }
       continue;
     }
@@ -115,24 +152,80 @@ function toMessages(entries) {
           if (b.type !== 'tool_result') continue;
           const body = typeof b.content === 'string' ? b.content
             : Array.isArray(b.content) ? b.content.filter((x) => x.type === 'text').map((x) => x.text).join('\n') : '';
-          out.push({ role: 'result', text: clip(body, 600), error: !!b.is_error, at, uuid: e.uuid });
+          const m = { role: 'result', text: clip(body, detail ? 6000 : 600), error: !!b.is_error, at, uuid: e.uuid };
+          if (detail) { m.toolUseId = b.tool_use_id || null; m.size = body.length; }
+          out.push(m);
         }
         continue;
       }
       const text = textOf(e.message);
       if (!text.trim()) continue;
       const cmd = /<command-name>([^<]+)<\/command-name>/.exec(text);
-      if (cmd) { out.push({ role: 'command', text: cmd[1], at, uuid: e.uuid }); continue; }
-      if (/^<local-command-stdout>|^<local-command-caveat>/.test(text)) continue;
-      out.push({ role: 'user', text, at, uuid: e.uuid });
+      if (cmd) {
+        const m = { role: 'command', text: cmd[1], at, uuid: e.uuid };
+        if (detail) { const a = tag(text, 'command-args'); if (a) m.args = clip(a, 2000); }
+        out.push(m);
+        continue;
+      }
+      if (/^<local-command-stdout>|^<local-command-stderr>/.test(text)) {
+        if (detail) {
+          const body = stripAnsi(tag(text, 'local-command-stdout') ?? tag(text, 'local-command-stderr') ?? '');
+          if (body.trim()) out.push({ role: 'command-out', text: clip(body, 6000), at, uuid: e.uuid });
+        }
+        continue;
+      }
+      if (/^<local-command-caveat>/.test(text)) continue;
+      if (detail && /^\s*<task-notification>/.test(text)) {
+        const summary = tag(text, 'summary') || tag(text, 'status') || 'A background task finished';
+        out.push({ role: 'note', kind: 'task', text: clip(summary, 600), status: tag(text, 'status'), at, uuid: e.uuid });
+        continue;
+      }
+      const m = { role: 'user', text, at, uuid: e.uuid };
+      if (detail && Array.isArray(c)) { const n = c.filter((b) => b.type === 'image').length; if (n) m.images = n; }
+      out.push(m);
       continue;
     }
 
     if (e.type === 'system' && e.subtype === 'compact_boundary') {
       out.push({ role: 'note', text: 'Conversation compacted', at, uuid: e.uuid });
+    } else if (detail && e.type === 'system') {
+      if (e.subtype === 'turn_duration' && e.durationMs) out.push({ role: 'turn', ms: Number(e.durationMs) || 0, at, uuid: e.uuid });
+      else if (e.subtype === 'informational' && e.content) out.push({ role: 'note', kind: e.level || 'info', text: clip(e.content, 600), at, uuid: e.uuid });
+      else if (e.subtype === 'scheduled_task_fire' && e.content) out.push({ role: 'note', kind: 'schedule', text: clip(e.content, 300), at, uuid: e.uuid });
     }
   }
   return out;
+}
+
+/**
+ * Whole lines between two byte offsets. A start inside a line skips to the
+ * next one (the caller pages back from it again); the end is where the last
+ * complete line stops. Returns the entries and the offsets actually covered.
+ */
+function readRange(file, start, end) {
+  const len = Math.max(0, end - start);
+  const buf = Buffer.alloc(len);
+  const fd = fs.openSync(file, 'r');
+  try { fs.readSync(fd, buf, 0, len, start); } finally { fs.closeSync(fd); }
+  let from = 0;
+  if (start > 0) {
+    // Is `start` itself a line start? Only if the byte before it is a newline.
+    const prev = Buffer.alloc(1);
+    const fd2 = fs.openSync(file, 'r');
+    try { fs.readSync(fd2, prev, 0, 1, start - 1); } finally { fs.closeSync(fd2); }
+    if (prev[0] !== 0x0a) {
+      const nl = buf.indexOf(0x0a);
+      from = nl < 0 ? len : nl + 1;
+    }
+  }
+  const last = buf.lastIndexOf(0x0a);
+  const to = last < from ? from : last + 1;
+  const entries = [];
+  for (const l of buf.subarray(from, to).toString('utf8').split('\n')) {
+    if (!l.trim()) continue;
+    try { entries.push(JSON.parse(l)); } catch { /* a corrupt line is skipped */ }
+  }
+  return { entries, start: start + from, end: start + to };
 }
 
 /**
@@ -200,4 +293,4 @@ function listSessions(projectDirs, { limit = 60 } = {}) {
     .filter(Boolean);
 }
 
-module.exports = { findTranscript, Tail, toMessages, describe, listSessions, toolSummary };
+module.exports = { findTranscript, Tail, toMessages, readRange, describe, listSessions, toolSummary, toolInput };
