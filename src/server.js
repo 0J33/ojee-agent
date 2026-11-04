@@ -25,6 +25,7 @@ const { exec } = require('child_process');
 /* The Assistant: OpenCode's Zen gateway, hosted on this stack as
    `opencode serve` and reached through OPENCODE_URL. */
 const assistantModule = require('./assistant');
+const mountWork = require('./work');
 
 const PORT = process.env.PORT || 8080;
 const TIMEZONE = process.env.TIMEZONE || 'UTC';
@@ -153,6 +154,7 @@ const execP = (cmd, timeout = 6000) => new Promise((resolve) => {
 
 const VIEWS = [
   { id: 'overview', label: 'Overview', icon: 'i-grid' },
+  { id: 'work', label: 'Work', icon: 'i-summary' },
   { id: 'claude', label: 'Claude', icon: 'i-log' },
   { id: 'assistant', label: 'Assistant', icon: 'i-assistant' },
   { id: 'workflows', label: 'Workflows', icon: 'i-auto' },
@@ -356,6 +358,10 @@ async function odysseus() {
 }
 
 app.get('/api/odysseus', auth, async (_req, res) => res.json(await odysseus()));
+
+/* ── Work: the Forsa work picture (src/work.js) ──────────────────────── */
+
+mountWork(app, auth, RUNNERS);
 
 /* ── the Claude runners ───────────────────────────────────────────────── */
 

@@ -1,12 +1,13 @@
 /* ============================================================
    ojee-agent — the AI and automation module.
 
-   Six views over the AI and automation stack: an overview led by
+   Seven views over the AI and automation stack: an overview led by
    the Claude Code sessions on the host, those sessions themselves
    (claude.js), the Assistant — OpenCode's free models, hosted as
    opencode serve and opened from here (assistant.js) — n8n's
    workflows and their recent runs, Odysseus, and the stack's own
-   containers.
+   containers, and Work: the Forsa work picture from ClickUp and GitHub
+   (work.js).
 
    What is NOT here any more: CPU graphs, memory bars, a list of
    every container on the box, and a whitelist of restart commands
@@ -19,6 +20,7 @@
 import { mountClaude, routeClaude, unmountClaude, stateDot, stateTag } from './claude.js';
 import { ensureIcons } from './claude-icons.js';
 import { mountAssistant, routeAssistant, unmountAssistant } from './assistant.js';
+import { loadWork, viewWork } from './work.js';
 
 const el = (tag, attrs = {}, ...kids) => {
   const n = document.createElement(tag);
@@ -607,6 +609,11 @@ function go(view) {
 function render() {
   if (!root || state.view === 'claude' || state.view === 'assistant') return;
   root.replaceChildren();
+  // Work loads its own data (a file the host rebuilds), so it never waits on n8n.
+  if (state.view === 'work') {
+    root.append(viewWork(api, render));
+    return;
+  }
   if (!state.services.length && state.workflows === null) {
     root.append(el('div', { class: 'stack-lg' },
       el('span', { class: 'skeleton', style: 'height:56px;display:block' }),
@@ -645,6 +652,8 @@ export default {
     } else if (state.view === 'assistant') {
       assistantOpen = true;
       await mountAssistant(root, ctx);
+    } else if (state.view === 'work') {
+      render();
     } else {
       render();
       await refresh();
@@ -653,6 +662,7 @@ export default {
     // enough to see a run land without polling a workflow engine to death.
     timer = setInterval(() => {
       if (document.hidden || state.view === 'claude' || state.view === 'assistant') return;
+      if (state.view === 'work') { loadWork(api).then(render); return; }
       refresh();
     }, 60_000);
     // Sessions change by the second; the overview keeps up with them.
@@ -682,6 +692,7 @@ export default {
     if (claudeOpen) { unmountClaude(); claudeOpen = false; }
     if (assistantOpen) { unmountAssistant(); assistantOpen = false; }
     render();
+    if (state.view === 'work') return;
     if (!state.services.length && state.workflows === null) await refresh();
   },
 
