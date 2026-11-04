@@ -372,7 +372,6 @@ function footer(api) {
     el('span', { class: 'wk-foot-item meta' }, `Updated ${agoMs(data.fileAgeMs)} from ClickUp and GitHub`),
     sweepMsg && sweepMsg !== '…' ? el('span', { class: 'wk-foot-item meta wk-sweepmsg' }, sweepMsg) : null,
     el('span', { class: 'wk-foot-actions' },
-      data.doc ? el('a', { class: 'btn btn--ghost btn--sm', href: `https://app.clickup.com/90152575282/v/dc/${data.doc.doc}/${data.doc.page}`, target: '_blank', rel: 'noopener' }, 'Work Plan doc') : null,
       el('button', {
         class: 'btn btn--ghost btn--sm', type: 'button', disabled: !!busy || sweepMsg === '…',
         title: busy ? 'Claude is mid-turn; the work loop sends the sweep when it is free' : 'Ask Claude to run the sweep now',
