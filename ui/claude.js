@@ -1462,7 +1462,7 @@ function paintLive(s) {
   const agents = p?.agents || [];
   // Rebuild only on a change, and keep the agents list open across rebuilds:
   // it folded shut every two seconds while a session worked.
-  const sig = JSON.stringify([state, main, sub, agents, p?.mode, p?.draft]);
+  const sig = JSON.stringify([state, main, sub, agents, p?.mode, p?.draft, p?.suggestion]);
   if (box.dataset.sig === sig && box.firstChild) return;
   box.dataset.sig = sig;
   box.replaceChildren(...[
@@ -1474,6 +1474,14 @@ function paintLive(s) {
       el('div', { class: 'ag-cl-live-agentlist' }, agents.map((a) => el('div', { title: `${a.name}: ${a.doing}${a.meta ? ` · ${a.meta}` : ''}` }, el('b', {}, a.name), ` ${a.doing}`, a.meta ? el('span', { class: 'meta' }, ` · ${a.meta}`) : null)))) : null,
     p?.mode ? el('span', { class: 'ag-cl-live-mode', title: 'Permission mode (Shift+Tab switches it)' }, p.mode) : null,
     p?.draft ? el('span', { class: 'ag-cl-live-draft', title: 'Typed in the terminal and not sent. A message from here is added after it.' }, `Unsent in the terminal: ${ONE_LINE(p.draft, 60)}`) : null,
+    // Claude Code's suggested next message (faint in its input box; Tab takes it there).
+    p?.suggestion ? el('span', { class: 'ag-cl-live-sug', title: p.suggestion },
+      el('span', { class: 'ag-cl-live-sugk' }, 'Suggested'),
+      el('span', { class: 'ag-cl-live-sugt' }, ONE_LINE(p.suggestion, 90)),
+      el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Put it in the message box to edit', onpointerdown: (e) => e.preventDefault(),
+        onclick: () => { const t = root.querySelector('.ag-cl-input'); if (!t) return; t.value = p.suggestion; t.dispatchEvent(new Event('input')); t.focus(); } }, 'Use'),
+      el('button', { class: 'btn btn--sm', type: 'button', title: 'Send it as it is',
+        onclick: () => { const t = root.querySelector('.ag-cl-input'); if (!t) return; t.value = p.suggestion; send(s.id); } }, 'Send')) : null,
   ].filter(Boolean));
 }
 

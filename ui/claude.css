@@ -798,3 +798,9 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-t-pending:empty { display: none; }
 .ag-cl-t-user.is-pending { opacity: 0.6; border-style: dashed; }
 .ag-cl-t-queued { font-family: var(--hud, var(--mono)); font-size: 0.55rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--warn); }
+
+/* Claude Code's suggested next message, on the live line: Use it or Send it. */
+.ag-cl-live-sug { display: inline-flex; align-items: center; gap: 6px; flex: 1 1 100%; min-width: 0; padding: 4px 0 2px; border-top: 1px dashed var(--line-2); }
+.ag-cl-live-sugk { flex: none; font-family: var(--hud, var(--mono)); font-size: 0.55rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); }
+.ag-cl-live-sugt { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); font-style: italic; }
+.ag-cl-live-sug .btn { flex: none; min-height: 30px; padding: 2px 10px; }

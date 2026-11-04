@@ -164,8 +164,11 @@ class Tmux {
   }
 
   /** The visible screen as plain text (no colour codes). */
-  async capture(name, { history = 0, join = false } = {}) {
+  async capture(name, { history = 0, join = false, ansi = false } = {}) {
     const args = ['capture-pane', '-p', '-t', this.target(name)];
+    // -e keeps the colour codes: the only way to tell faint text (a
+    // suggestion, a placeholder) from what was typed.
+    if (ansi) args.push('-e');
     // -J rejoins lines the pane wrapped, so a long URL comes back whole.
     if (join) args.push('-J');
     if (history) args.push('-S', `-${history}`);

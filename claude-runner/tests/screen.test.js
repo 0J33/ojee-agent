@@ -126,3 +126,18 @@ test('subagents are listed from <session>/subagents with their meta, and read as
   assert.equal(toMessages(entries, { sidechain: true })[0].text, 'do it');
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('parseScreen: faint text in the input box is a suggestion, typed text is a draft', () => {
+  const G = '\x1b[38;2;153;153;153m'; const R = '\x1b[39m';
+  const frame = (inputLine) => ['', '  Some output', '─'.repeat(40), inputLine, '─'.repeat(40), '  ⏵⏵ bypass permissions on (shift+tab to cycle)'].join('\n');
+  const sug = parseScreen(frame(`${G}❯ ${R}${G}also check the CI queue${R}`));
+  assert.equal(sug.suggestion, 'also check the CI queue');
+  assert.equal(sug.draft, null, 'a suggestion is not an unsent message');
+  const typed = parseScreen(frame(`${G}❯ ${R}fix the login page`));
+  assert.equal(typed.draft, 'fix the login page');
+  assert.equal(typed.suggestion, null);
+  const dim = parseScreen(frame(`${G}❯ ${R}\x1b[2mrun the tests\x1b[22m`));
+  assert.equal(dim.suggestion, 'run the tests', 'dim text is faint too');
+  const plain = parseScreen(frame('❯ fix the login page'));
+  assert.equal(plain.draft, 'fix the login page', 'without colour codes the old reading stands');
+});

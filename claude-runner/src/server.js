@@ -463,7 +463,7 @@ function createRunner(overrides = {}) {
     const s = need(req);
     const alive = await sessions.isAlive(s);
     if (!alive) return res.json({ alive, menu: null, activity: null, agents: [], mode: null, draft: null });
-    res.json({ alive, ...parseScreen(await tmux.capture(s.tmux)) });
+    res.json({ alive, ...parseScreen(await tmux.capture(s.tmux, { ansi: true })) });
   }));
 
   /**

@@ -118,10 +118,57 @@ function inputBox(lines) {
 
 /**
  * @param {string} text  a captured screen
- * @returns {{ menu, activity, agents, mode, draft }}
+ * @returns {{ menu, activity, agents, mode, draft, suggestion }}
  */
+const SGR = /\x1b\[([0-9;]*)m/g;
+
+/**
+ * Whether every visible character after the input mark is drawn faint (dim,
+ * or a grey colour): Claude Code's suggested next message and its
+ * placeholders, as opposed to text someone typed. Needs a capture with -e.
+ */
+function faintInput(rawLine) {
+  const at = rawLine.indexOf('❯');
+  if (at < 0) return false;
+  let dim = false; let grey = false; let seen = false; let faint = true;
+  const s = rawLine;
+  // Walk the line, tracking the SGR state, judging only characters after the mark.
+  let pos = 0;
+  const parts = [];
+  SGR.lastIndex = 0;
+  let m;
+  while ((m = SGR.exec(s))) { parts.push([s.slice(pos, m.index), null]); parts.push([null, m[1]]); pos = SGR.lastIndex; }
+  parts.push([s.slice(pos), null]);
+  let after = false;
+  for (const [txt, code] of parts) {
+    if (code != null) {
+      const c = code === '' ? ['0'] : code.split(';');
+      for (let k = 0; k < c.length; k++) {
+        const n = Number(c[k]);
+        if (n === 0) { dim = false; grey = false; }
+        else if (n === 2) dim = true;
+        else if (n === 22) dim = false;
+        else if (n === 39) grey = false;
+        else if (n === 90) grey = true;
+        else if ((n >= 30 && n <= 37) || (n >= 91 && n <= 97)) grey = false;
+        else if (n === 38 && c[k + 1] === '5') { const v = Number(c[k + 2]); grey = (v >= 238 && v <= 250) || v === 8; k += 2; }
+        else if (n === 38 && c[k + 1] === '2') { const [r, g, b] = [c[k + 2], c[k + 3], c[k + 4]].map(Number); grey = Math.abs(r - g) < 12 && Math.abs(g - b) < 12 && r < 190; k += 4; }
+      }
+      continue;
+    }
+    for (const ch of txt) {
+      if (!after) { if (ch === '❯') after = true; continue; }
+      if (ch.trim() === '' || ch === '\u00a0') continue;
+      seen = true;
+      if (!dim && !grey) faint = false;
+    }
+  }
+  return seen && faint;
+}
+
 function parseScreen(text) {
-  const lines = String(text || '').replace(/\r/g, '').split('\n');
+  const raw = String(text || '').replace(/\r/g, '').split('\n');
+  const lines = raw.map((l) => l.replace(SGR, ''));
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
   const box = inputBox(lines);
   const menu = parseMenu(box > 0 ? lines.slice(0, box - 1).concat(lines.slice(box + 2)) : lines);
@@ -134,13 +181,18 @@ function parseScreen(text) {
   }
 
   let draft = null;
+  let suggestion = null;
   let mode = null;
   const agents = [];
   if (box > 0) {
     const d = lines[box].replace(/^\s*❯\s?/, '').trimEnd();
     // A placeholder is drawn dim, which capture-pane cannot tell apart; the
     // ones Claude Code shows start with "Try" in quotes.
-    if (d.trim() && !/^Try "/.test(d.trim())) draft = d.trim();
+    // With colour codes, faint text is Claude Code's suggestion (Tab takes
+    // it), never something typed. Without them, the old guess stands.
+    const hasAnsi = raw[box] !== lines[box];
+    if (d.trim() && hasAnsi && faintInput(raw[box])) { if (!/^Try "/.test(d.trim())) suggestion = d.trim(); }
+    else if (d.trim() && !/^Try "/.test(d.trim())) draft = d.trim();
     for (let i = box + 1; i < lines.length; i++) {
       const t = lines[i].trim();
       const mm = MODE.exec(t);
@@ -149,7 +201,7 @@ function parseScreen(text) {
       if (a && a[1] !== 'main') agents.push({ name: a[1], doing: a[2].trim(), meta: a[3] ? a[3].trim() : null });
     }
   }
-  return { menu, activity, agents, mode, draft };
+  return { menu, activity, agents, mode, draft, suggestion };
 }
 
 module.exports = { parseScreen, parseMenu };
