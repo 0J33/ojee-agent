@@ -876,22 +876,54 @@ function typeAnywhere(e) {
 /**
  * An image pasted or dropped on the terminal or the message box: uploaded to
  * the box, where the runner pastes its path into Claude, which attaches it as
- * [Image #n], exactly as dragging a file into a local terminal does.
+ * [Image #n], exactly as dragging a file into a local terminal does. Any other
+ * file (a PDF, a video, a log) is saved there too and its path pasted as text.
  */
-async function sendImage(dev, id, file) {
-  if (!file) return;
-  if (file.size > 20 * 1024 * 1024) { ctx.toast?.('err', 'Image too large', 'The limit is 20 MB.'); return; }
-  try {
-    await ctx.api(`/claude/d/${encodeURIComponent(dev)}/sessions/${id}/image`, {
-      method: 'POST',
-      headers: { 'content-type': file.type || 'image/png' },
-      body: file,
-    });
-    ctx.toast?.('ok', 'Image attached', 'Add your message and send it.');
-    if (S.pane === 'terminal') S.term?.focus();
-  } catch (e) {
-    ctx.toast?.('err', 'Could not attach the image', e.message);
+const IMAGE_MIME = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+async function sendImage(dev, id, file) { return sendFiles(dev, id, [file]); }
+async function sendFiles(dev, id, files) {
+  const list = [...(files || [])].filter(Boolean);
+  if (!list.length) return;
+  let done = 0;
+  for (const file of list) {
+    const image = IMAGE_MIME.includes(file.type);
+    const max = image ? 20 : 100;
+    const label = file.name || (image ? 'The image' : 'The file');
+    if (file.size > max * 1024 * 1024) { ctx.toast?.('err', `${label} is too large`, `The limit is ${max} MB.`); continue; }
+    try {
+      await ctx.api(`/claude/d/${encodeURIComponent(dev)}/sessions/${id}/${image ? 'image' : 'file'}`, {
+        method: 'POST',
+        headers: { 'content-type': file.type || 'application/octet-stream', ...(image ? {} : { 'x-file-name': encodeURIComponent(file.name || '') }) },
+        body: file,
+      });
+      done++;
+    } catch (e) {
+      const old = !image && /404|not found/i.test(e.message);
+      ctx.toast?.('err', `Could not attach ${file.name || 'the file'}`, old ? 'This device\'s runner is older than the console: restart ojee-claude there to attach files other than images.' : e.message);
+    }
   }
+  if (done) ctx.toast?.('ok', done === 1 ? 'Attached' : `${done} files attached`, 'Add your message and send it.');
+  if (S.pane === 'terminal') S.term?.focus();
+}
+
+/** The paste button: whatever media the clipboard holds (not its text). */
+async function pasteMedia(dev, id) {
+  if (!navigator.clipboard?.read) { ctx.toast?.('err', 'This browser cannot read the clipboard', 'Paste with Ctrl+V in the message box instead.'); return; }
+  let items;
+  try { items = await navigator.clipboard.read(); } catch (e) {
+    ctx.toast?.('err', 'Clipboard not readable', e.name === 'NotAllowedError' ? 'Allow clipboard access for this site, or paste with Ctrl+V.' : e.message);
+    return;
+  }
+  const files = [];
+  for (const item of items) {
+    const type = item.types.find((t) => t.startsWith('image/')) || item.types.find((t) => !t.startsWith('text/') && t !== 'web text/html');
+    if (!type) continue;
+    const blob = await item.getType(type);
+    const ext = (type.split('/')[1] || 'bin').replace(/[^\w]+/g, '');
+    files.push(new File([blob], `clipboard.${ext}`, { type }));
+  }
+  if (!files.length) { ctx.toast?.('err', 'No image or file on the clipboard', 'Copy an image or a screenshot first.'); return; }
+  await sendFiles(dev, id, files);
 }
 
 function setMax(on) {
@@ -1764,20 +1796,20 @@ function composer(s) {
       if (cur?.alive) sendKey(cur, 'Escape');
     }
   });
-  const imageOf = (list) => [...(list || [])].find((f) => f && f.type && f.type.startsWith('image/'));
   text.addEventListener('paste', (e) => {
-    const item = [...(e.clipboardData?.items || [])].find((i) => i.kind === 'file' && i.type.startsWith('image/'));
-    if (!item) return;
+    const files = [...(e.clipboardData?.items || [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile());
+    if (!files.length) return;
     e.preventDefault();
-    sendImage(s.device, s.id, item.getAsFile());
+    sendFiles(s.device, s.id, files);
   });
   text.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.items || [])].some((i) => i.kind === 'file')) e.preventDefault(); });
   text.addEventListener('drop', (e) => {
-    const f = imageOf(e.dataTransfer?.files);
-    if (!f) return;
+    const files = [...(e.dataTransfer?.files || [])];
+    if (!files.length) return;
     e.preventDefault();
-    sendImage(s.device, s.id, f);
+    sendFiles(s.device, s.id, files);
   });
+  const picker = el('input', { type: 'file', multiple: true, hidden: true, onchange: () => { sendFiles(s.device, s.id, picker.files); picker.value = ''; } });
 
   const box = el('div', { class: 'ag-cl-compose', hidden: !composeShown() },
     el('div', { class: 'ag-cl-live', 'aria-live': 'polite' }),
@@ -1793,6 +1825,23 @@ function composer(s) {
         onpointerdown: (e) => e.preventDefault(),
         onclick: () => { if (!text.value.startsWith('/')) text.value = '/'; pick = 0; text.focus(); grow(); drawSlash(); },
       }, '/'),
+      picker,
+      el('button', {
+        class: 'btn btn--ghost btn--sm ag-cl-sq ag-cl-attachbtn',
+        type: 'button',
+        title: 'Attach images or files',
+        'aria-label': 'Attach images or files',
+        onpointerdown: (e) => e.preventDefault(),
+        onclick: () => picker.click(),
+      }, svg('attach')),
+      el('button', {
+        class: 'btn btn--ghost btn--sm ag-cl-sq ag-cl-attachbtn',
+        type: 'button',
+        title: 'Paste an image or file from the clipboard',
+        'aria-label': 'Paste media from the clipboard',
+        onpointerdown: (e) => e.preventDefault(),
+        onclick: () => pasteMedia(s.device, s.id),
+      }, svg('paste')),
       text,
       el('button', { class: 'btn btn--ghost btn--sm ag-cl-sq ag-cl-stopbtn', type: 'button', title: 'Stop the turn (Esc)', 'aria-label': 'Stop the turn', hidden: true, onclick: () => interrupt(session(s.id) || s) }, svg('stop')),
       el('button', { class: 'btn btn--sm ag-cl-send', type: 'button', onpointerdown: (e) => e.preventDefault(), onclick: () => send(s.id) }, 'Send')),

@@ -31,6 +31,18 @@ const { Sessions } = require('./sessions');
 const { Tail, toMessages, readRange, listSessions, findTranscript, listSubagents, subagentFile, finishedAgents } = require('./transcript');
 const { parseScreen } = require('./screen');
 const { enterWhenTyped } = require('./submit');
+
+/** A browser file name made safe for a path: no folders, no shell-hostile characters. */
+function safeName(raw, type) {
+  let name = '';
+  try { name = decodeURIComponent(String(raw || '')); } catch { name = String(raw || ''); }
+  name = name.split(/[\\/]/).pop().replace(/[^\w.-]+/g, '_').replace(/^[.]+/, '').slice(-80);
+  if (!name) {
+    const sub = String(type || '').split(';')[0].split('/')[1] || 'bin';
+    name = `pasted.${sub.replace(/[^\w]+/g, '').slice(0, 10) || 'bin'}`;
+  }
+  return name;
+}
 const logins = require('./logins');
 const { bridge } = require('./terminal');
 const { Governor } = require('./governor');
@@ -519,21 +531,33 @@ function createRunner(overrides = {}) {
    * An image pasted in the browser. Saved on this machine, then its path is
    * pasted into the session as a bracketed paste — tested: Claude Code turns
    * a pasted image path into an [Image #n] attachment (typing it would not).
+   * Any other file (a PDF, a video, a log) is saved the same way and its path
+   * pasted as text, so Claude can open it with its own tools.
    */
   const IMAGE_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+  const pastePath = async (s, buf, name, tail = '') => {
+    const dir = path.join(config.STATE_DIR, 'uploads', s.id);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const file = path.join(dir, `${stamp}-${name}`);
+    fs.writeFileSync(file, buf, { mode: 0o600 });
+    await tmux.run(['load-buffer', '-b', 'ojee-image', '-'], { input: `${file}${tail}` });
+    await tmux.run(['paste-buffer', '-p', '-d', '-b', 'ojee-image', '-t', `=${s.tmux}:`]);
+    return file;
+  };
   app.post('/api/sessions/:id/image', auth, express.raw({ type: 'image/*', limit: '20mb' }), wrap(async (req, res) => {
     const s = need(req);
     const ext = IMAGE_TYPES[String(req.get('content-type') || '').split(';')[0].trim()];
     if (!ext) return res.status(415).json({ error: 'PNG, JPEG, GIF or WebP only' });
     if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'empty image' });
     if (!(await sessions.isAlive(s))) return res.status(409).json({ error: 'The session is not running — resume it first.' });
-    const dir = path.join(config.STATE_DIR, 'uploads', s.id);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const file = path.join(dir, `pasted-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`);
-    fs.writeFileSync(file, req.body, { mode: 0o600 });
-    await tmux.run(['load-buffer', '-b', 'ojee-image', '-'], { input: file });
-    await tmux.run(['paste-buffer', '-p', '-d', '-b', 'ojee-image', '-t', `=${s.tmux}:`]);
-    res.json({ ok: true, path: file });
+    res.json({ ok: true, path: await pastePath(s, req.body, `pasted.${ext}`) });
+  }));
+  app.post('/api/sessions/:id/file', auth, express.raw({ type: () => true, limit: '100mb' }), wrap(async (req, res) => {
+    const s = need(req);
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'empty file' });
+    if (!(await sessions.isAlive(s))) return res.status(409).json({ error: 'The session is not running — resume it first.' });
+    res.json({ ok: true, path: await pastePath(s, req.body, safeName(req.get('x-file-name'), req.get('content-type')), ' ') });
   }));
 
   app.get('/api/sessions/:id/screen', auth, wrap(async (req, res) => {

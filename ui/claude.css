@@ -596,6 +596,7 @@ button.ag-cl-row:hover { background: var(--accent-03); }
      its row everywhere else, which here made / and Stop as tall as the box. */
   flex: none; align-self: flex-end; height: 44px; min-height: 44px;
 }
+.ag-cl-attachbtn { width: 40px; padding: 0; justify-content: center; }
 .ag-cl-slashbtn { font-family: var(--mono); font-size: 0.9rem; width: 44px; justify-content: center; }
 .ag-cl-stopbtn[hidden] { display: none; }
 .ag-cl-stopbtn .ic { width: 15px; height: 15px; }

@@ -404,13 +404,15 @@ function runnerRequest(runner, rest, req, res) {
       stream = true;
       headers['content-type'] = type;
       if (req.get('content-length')) headers['content-length'] = req.get('content-length');
+      if (req.get('x-file-name')) headers['x-file-name'] = req.get('x-file-name');
     }
   }
   const events = String(req.get('accept') || '').includes('text/event-stream') || /\/events(\?|$)/.test(rest);
   const up = http.request({
     hostname: target.hostname, port: target.port, path: target.pathname + target.search, method: req.method, headers,
     // A laptop that is asleep answers nothing at all: give up rather than hang.
-    timeout: events ? 0 : 15_000,
+    // An upload over the tailnet can take longer than an answer.
+    timeout: events ? 0 : stream ? 180_000 : 15_000,
   }, (r) => {
     res.status(r.statusCode || 502);
     for (const k of ['content-type', 'cache-control']) if (r.headers[k]) res.setHeader(k, r.headers[k]);
