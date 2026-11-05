@@ -111,11 +111,14 @@ module.exports = function mountWork(app, auth, runners, emitNotify = () => {}) {
       const s = found.session;
       // The scheduled call skips quietly and tries again ten minutes later; the button says why.
       if (s.question) return ifDue ? res.json({ skipped: 'question open' }) : res.status(409).json({ error: 'The session is waiting on a question. Answer it in the Claude view first.' });
-      if (s.alive && !SAFE.has(s.state)) return ifDue ? res.json({ skipped: `busy (${s.state})` }) : res.status(409).json({ error: `The session is busy (${s.state}). The work loop sends the sweep when it is free.` });
+      // A busy session gets it too: Claude Code queues a message typed mid-turn
+      // and reads it when the turn ends. Waiting for "between turns" meant the
+      // Conductor, which is never idle for long, went a day without a sweep.
+      const queued = s.alive && !SAFE.has(s.state);
       const text = fs.readFileSync(PROMPT_FILE, 'utf8').trim();
       await runner(found.runner, 'POST', `/sessions/${encodeURIComponent(s.id)}/message`, { text });
       writeStamp(Date.now());
-      res.json({ ok: true, session: s.id, wasState: s.state });
+      res.json({ ok: true, queued, session: s.id, wasState: s.state });
     } catch (e) {
       res.status(502).json({ error: e.message });
     }

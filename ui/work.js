@@ -373,11 +373,11 @@ function footer(api) {
     sweepMsg && sweepMsg !== '…' ? el('span', { class: 'wk-foot-item meta wk-sweepmsg' }, sweepMsg) : null,
     el('span', { class: 'wk-foot-actions' },
       el('button', {
-        class: 'btn btn--ghost btn--sm', type: 'button', disabled: !!busy || sweepMsg === '…',
-        title: busy ? 'Claude is mid-turn; the work loop sends the sweep when it is free' : 'Ask Claude to run the sweep now',
+        class: 'btn btn--ghost btn--sm', type: 'button', disabled: sweepMsg === '…' || !!s?.question,
+        title: s?.question ? 'Claude is waiting on a question: answer it in the Claude view first' : busy ? 'Claude is mid-turn: the sweep is queued and runs when this turn ends' : 'Ask Claude to run the sweep now',
         onclick: async () => {
           sweepMsg = '…'; rerenderRef();
-          try { const r = await api('/work/sweep', { method: 'POST' }); sweepMsg = r?.error ? r.error : 'Sweep sent to Claude.'; } catch (e) { sweepMsg = e.message; }
+          try { const r = await api('/work/sweep', { method: 'POST' }); sweepMsg = r?.error ? r.error : r?.queued ? 'Sweep queued: Claude runs it after the current turn.' : 'Sweep sent to Claude.'; } catch (e) { sweepMsg = e.message; }
           await loadSession(api); rerenderRef();
         },
       }, 'Sweep now')));
