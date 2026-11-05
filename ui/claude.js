@@ -1496,10 +1496,14 @@ function paintLive(s) {
     p?.suggestion ? el('span', { class: 'ag-cl-live-sug', title: p.suggestion },
       el('span', { class: 'ag-cl-live-sugk' }, 'Suggested'),
       el('span', { class: 'ag-cl-live-sugt' }, ONE_LINE(p.suggestion, 90)),
+      // Only "Use": it never sends, and it never replaces what is already typed.
+      // (A Send here once replaced a typed message with the suggestion, 5 Nov.)
       el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Put it in the message box to edit', onpointerdown: (e) => e.preventDefault(),
-        onclick: () => { const t = root.querySelector('.ag-cl-input'); if (!t) return; t.value = p.suggestion; t.dispatchEvent(new Event('input')); t.focus(); } }, 'Use'),
-      el('button', { class: 'btn btn--sm', type: 'button', title: 'Send it as it is',
-        onclick: () => { const t = root.querySelector('.ag-cl-input'); if (!t) return; t.value = p.suggestion; send(s.id); } }, 'Send')) : null,
+        onclick: () => {
+          const t = root.querySelector('.ag-cl-input'); if (!t) return;
+          if (t.value.trim()) { ctx.toast?.('err', 'Your message is kept', 'Clear the message box first to use the suggestion.'); t.focus(); return; }
+          t.value = p.suggestion; t.dispatchEvent(new Event('input')); t.focus();
+        } }, 'Use')) : null,
   ].filter(Boolean));
 }
 

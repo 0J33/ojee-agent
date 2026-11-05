@@ -28,6 +28,7 @@ const path = require('path');
 const { randomUUID } = require('crypto');
 const { classify, retryAt, family } = require('./limits');
 const { findTranscript, Tail } = require('./transcript');
+const { enterWhenTyped } = require('./submit');
 
 /** States in which a claude process is expected to exist. */
 const LIVE = new Set(['starting', 'running', 'idle', 'waiting', 'blocked', 'done', 'paused']);
@@ -602,8 +603,9 @@ class Sessions extends EventEmitter {
 
   async type(s, text) {
     await this.tmux.type(s.tmux, text);
-    await delay(200);
-    await this.tmux.keys(s.tmux, 'Enter');
+    if (!(await enterWhenTyped(this.tmux, s.tmux))) {
+      throw Object.assign(new Error('Typed into the terminal but not sent: its input box still showed Claude Code\'s suggestion. Check the terminal before sending again.'), { status: 409 });
+    }
     s.lastPromptAt = Date.now();
     s.question = null;
     this.touch(s);

@@ -30,6 +30,7 @@ const { Notifier } = require('./notify');
 const { Sessions } = require('./sessions');
 const { Tail, toMessages, readRange, listSessions, findTranscript, listSubagents, subagentFile, finishedAgents } = require('./transcript');
 const { parseScreen } = require('./screen');
+const { enterWhenTyped } = require('./submit');
 const logins = require('./logins');
 const { bridge } = require('./terminal');
 const { Governor } = require('./governor');
@@ -507,7 +508,7 @@ function createRunner(overrides = {}) {
     } else {
       if (keys.length) await tmux.keys(s.tmux, ...keys);
       if (text) await tmux.type(s.tmux, text);
-      if (text && b.enter) { await new Promise((r) => setTimeout(r, 150)); await tmux.keys(s.tmux, 'Enter'); }
+      if (text && b.enter) { if (!(await enterWhenTyped(tmux, s.tmux))) return res.status(409).json({ error: 'Typed but not sent: the input box still showed Claude Code\'s suggestion. Check the terminal.' }); }
       else if (!text && b.enter) await tmux.keys(s.tmux, 'Enter');
     }
     sessions.touch(s);
