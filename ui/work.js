@@ -78,6 +78,18 @@ const agoMs = (ms) => {
   return `${Math.round(s / 86400)} d ago`;
 };
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many || `${one}s`}`;
+// "Sprint 6 (11/1 - 11/10)" -> [start, end) in ms, Cairo days (UTC+2).
+function sprintSpan(name, now) {
+  const m = /Sprint\s+\d+\s*\((\d+)\/(\d+)\s*-\s*(\d+)\/(\d+)\)/.exec(name || '');
+  if (!m) return null;
+  const y = new Date(now).getUTCFullYear();
+  const at = (yy, mo, d) => Date.UTC(yy, mo - 1, d) - 2 * 3600000;
+  let a = at(y, +m[1], +m[2]);
+  let b = at(y, +m[3], +m[4] + 1);
+  if (a - now > 180 * DAY) { a = at(y - 1, +m[1], +m[2]); b = at(y - 1, +m[3], +m[4] + 1); }
+  if (b < a) b = at(y + 1, +m[3], +m[4] + 1);
+  return [a, b];
+}
 const byKey = (a, b) => ((a.priority || 9) - (b.priority || 9)) || ((a.due || 9e15) - (b.due || 9e15));
 const byDue = (a, b) => (a.due || 9e15) - (b.due || 9e15);
 
@@ -137,6 +149,7 @@ function model(d) {
   }
   for (const [name, tasks] of Object.entries(byList)) lists.push({ id: name, name, tasks });
   const open = items.filter((i) => !isDone(i));
+  const cur = Object.keys(byList).find((nm) => { const sp = sprintSpan(nm, now); return sp && sp[0] <= now && now < sp[1]; }) || null;
   const prs = d.prs || [];
   const problems = {
     failing: prs.filter((p) => p.ci === 'failing'),
@@ -147,7 +160,7 @@ function model(d) {
     oldPrs: prs.filter((p) => now - p.updated > 3 * DAY),
   };
   return {
-    now, notes, items, open, lists, prs, problems,
+    now, notes, items, open, lists, prs, problems, cur,
     active: open.filter((i) => stageOf(i) === 'active'),
     soon: open.filter((i) => i.due && i.due < now + 2 * DAY).sort(byDue),
     week: open.filter((i) => i.due && i.due < now + 7 * DAY).sort(byDue),
@@ -270,9 +283,12 @@ function tiles(m) {
 
 function personCard(m, name) {
   const mine = m.open.filter((i) => i.people.includes(name));
-  const n = (k) => mine.filter((i) => stageOf(i) === k).length;
+  // Not started counts only this sprint's work; later sprints and the backlog are shown apart.
+  const queuedNow = mine.filter((i) => stageOf(i) === 'queued' && (!m.cur || i.where === m.cur)).sort(byKey);
+  const later = mine.filter((i) => stageOf(i) === 'queued' && m.cur && i.where !== m.cur).sort(byKey);
+  const n = (k) => (k === 'queued' ? queuedNow.length : mine.filter((i) => stageOf(i) === k).length);
   const active = mine.filter((i) => stageOf(i) === 'active').sort(byKey);
-  const top = active[0] || mine.filter((i) => stageOf(i) === 'queued').sort(byKey)[0];
+  const top = active[0] || queuedNow[0] || later[0];
   const late = mine.filter((i) => i.due && i.due < m.now && stageOf(i) !== 'dev').length;
   const prs = m.prs.filter((p) => (name === ME ? p.person === OWNER : short(p.person) === name));
   const segs = [['active', 'in progress'], ['dev', 'on dev'], ['queued', 'not started']];
@@ -285,7 +301,8 @@ function personCard(m, name) {
         { label: 'In progress', items: active },
         { label: 'On dev, waiting for release', items: mine.filter((i) => stageOf(i) === 'dev').sort(byKey) },
         { label: 'Open PRs', nodes: prs.map((p) => prNote(p)) },
-        { label: 'Not started', items: mine.filter((i) => stageOf(i) === 'queued').sort(byKey) },
+        { label: m.cur ? `Not started, ${m.cur.split(' (')[0]}` : 'Not started', items: queuedNow },
+        { label: 'Later sprints and backlog', items: later },
         { label: 'On hold', items: mine.filter((i) => stageOf(i) === 'held').sort(byKey) },
       ],
     }),
@@ -297,7 +314,7 @@ function personCard(m, name) {
     el('span', { class: 'wk-person-count' }, el('strong', {}, String(n('active'))), ' in progress'),
     el('span', { class: 'wk-bar', 'aria-hidden': 'true' },
       segs.map(([k]) => (n(k) ? el('span', { class: `wk-seg wk-seg--${k}`, style: `flex:${n(k) / total}` }) : null))),
-    el('span', { class: 'wk-person-legend' }, `${n('dev')} on dev · ${n('queued')} not started`),
+    el('span', { class: 'wk-person-legend' }, `${n('dev')} done on dev · ${n('queued')} not started${later.length ? ` · ${later.length} later` : ''}`),
     el('span', { class: 'wk-person-now' }, top ? `${stageOf(top) === 'active' ? 'Now' : 'Next'}: ${top.name}` : 'Nothing assigned'));
 }
 
