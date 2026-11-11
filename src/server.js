@@ -542,7 +542,10 @@ app.get('/api/claude/all/events', auth, (req, res) => {
     connect();
     return link;
   });
-  const ping = setInterval(() => { if (!closed) res.write(': ping\n\n'); }, 20_000);
+  // A data frame, not a comment: the browser's EventSource hides comments,
+  // and the Claude view needs to see the stream is alive to notice one that
+  // died silently (a phone asleep, a network change) and reconnect.
+  const ping = setInterval(() => { if (!closed) res.write(`event: ping\ndata: ${Date.now()}\n\n`); }, 20_000);
   res.on('close', () => {
     closed = true;
     clearInterval(ping);

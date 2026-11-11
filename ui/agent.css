@@ -469,3 +469,41 @@ button.wk-ci:hover { border-color: var(--line-strong); }
 .wk-ci-pr { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .wk-ci-pr a { color: var(--ink); }
 .wk-ci-act { color: var(--ink-2) !important; }
+
+/* ── Work, 11 Nov: top bar, Needs you, Activity, actions ─────────────── */
+.wk-foot-actions[hidden] { display: none; }
+.wk-top { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); flex-wrap: wrap; padding-bottom: var(--s-2); border-bottom: 1px solid var(--line-2); }
+.wk-top-age { display: inline-flex; align-items: center; gap: 8px; font-size: 0.72rem; color: var(--ink-2); }
+.wk-top-age.is-stale { color: var(--warn); }
+.wk-top-acts { display: inline-flex; gap: var(--s-2); }
+.wk-acts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
+.wk-warn { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent); background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.wk-warn > strong { color: var(--warn); font-size: 0.8rem; }
+.wk-warn > .btn { justify-self: start; margin-top: 4px; }
+.wk-need-list { display: grid; gap: var(--s-2); }
+.wk-need { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--line-strong); background: var(--bg-1); }
+.wk-need.is-answered { border-style: dashed; border-color: var(--line-2); background: transparent; }
+.wk-need-main { display: grid; gap: 4px; min-width: 0; }
+.wk-need-title { font-size: 0.82rem; color: var(--ink); overflow-wrap: anywhere; }
+.wk-need-body { margin: 0; overflow-wrap: anywhere; }
+.wk-need-form { display: grid; gap: 6px; }
+.wk-reply-in.textarea { min-height: 40px; max-height: 160px; resize: vertical; font-size: 0.8rem; }
+.wk-need-ans { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.wk-acts-list { display: grid; }
+.wk-act { display: grid; gap: 3px; padding: 8px 0; border-bottom: 1px solid var(--line-2); min-width: 0; }
+.wk-act:last-child { border-bottom: 0; }
+.wk-act-top { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.wk-act-to { font-weight: 700; font-size: 0.74rem; color: var(--ink); }
+.wk-act-at { margin-left: auto; white-space: nowrap; }
+.wk-act-sum { font-size: 0.74rem; color: var(--ink-2); overflow-wrap: anywhere; }
+.wk-act-sum a, .wk-act-reply a { color: inherit; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+.wk-act-reply { display: grid; gap: 2px; padding-left: 10px; border-left: 2px solid var(--ok); font-size: 0.72rem; color: var(--ink); overflow-wrap: anywhere; }
+.wk-act-rk { font-size: 0.62rem; color: var(--ok); text-transform: uppercase; letter-spacing: 0.08em; }
+.wk-act-none { font-size: 0.62rem; }
+@media (pointer: coarse), (max-width: 560px) { .wk-reply-in.textarea { font-size: 16px; } .wk-top-acts { width: 100%; } .wk-top-acts .btn { flex: 1 1 0; justify-content: center; } }
+/* .wk button inherits colour for the plain rows; a filled .btn keeps its own ink. */
+.wk .btn:not(.btn--ghost) { color: var(--on-accent); }
+.wk .btn--sm { font-family: var(--mono); font-size: 0.66rem; padding: 6px 12px; min-height: 32px; }
+.wk-need-form .textarea[hidden] { display: none; }
+.wk-need { padding: 10px 12px; gap: 6px; }
+.wk-need-body { font-size: 0.68rem; }

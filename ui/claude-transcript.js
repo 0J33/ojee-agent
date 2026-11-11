@@ -16,7 +16,33 @@ import { copyText } from './claude-term.js';
 
 const STEP = 120;
 
-export function createTranscript({ el, svg, modelLabel, toast, onEarlier, onAgent }) {
+export function createTranscript({ el, svg, modelLabel, toast, onEarlier, onAgent, onPath }) {
+  /* ── paths: every absolute or ~ path is a link that opens the explorer ── */
+
+  const PATH = /(?<![\w:/.~-])((?:~\/|\/)(?:[\w.@+-]+\/)*[\w.@+-]*[\w@+-](?::\d+(?::\d+)?)?)/g;
+  const pathLink = (p) => el('a', {
+    class: 'ag-cl-path', href: '#', title: `Open ${p} in the explorer`,
+    onclick: (e) => { e.preventDefault(); e.stopPropagation(); onPath?.(p); },
+  }, p);
+  /** Text with its paths as links (only paths with a folder in them: "/" alone is not one). */
+  function withPaths(text) {
+    const t = String(text ?? '');
+    if (!onPath) return [t];
+    const out = [];
+    let last = 0;
+    for (const m of t.matchAll(PATH)) {
+      const p = m[1];
+      if (!/\/[^/]/.test(p.replace(/^~/, '')) || p.length < 3) continue;
+      if (m.index > last) out.push(t.slice(last, m.index));
+      out.push(pathLink(p));
+      last = m.index + p.length;
+    }
+    if (last < t.length) out.push(t.slice(last));
+    return out;
+  }
+  // A big output is linked only up to here: past it, plain text.
+  const LINK_MAX = 200_000;
+
   /* ── Markdown ─────────────────────────────────────────────── */
 
   const INLINE = /`([^`\n]+)`|\*\*([^*\n]+?)\*\*|(?<![\w*])\*([^*\s][^*\n]*?)\*(?![\w*])|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"`])/g;
@@ -24,8 +50,8 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier, onAgen
     const out = [];
     let last = 0;
     for (const m of String(text).matchAll(INLINE)) {
-      if (m.index > last) out.push(text.slice(last, m.index));
-      if (m[1] != null) out.push(el('code', { class: 'ag-cl-md-c' }, m[1]));
+      if (m.index > last) out.push(...withPaths(text.slice(last, m.index)));
+      if (m[1] != null) out.push(el('code', { class: 'ag-cl-md-c' }, ...withPaths(m[1])));
       else if (m[2] != null) out.push(el('strong', { class: 'ag-cl-md-b' }, ...inline(m[2])));
       else if (m[3] != null) out.push(el('em', { class: 'ag-cl-md-i' }, ...inline(m[3])));
       else {
@@ -34,7 +60,7 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier, onAgen
       }
       last = m.index + m[0].length;
     }
-    if (last < text.length) out.push(text.slice(last));
+    if (last < text.length) out.push(...withPaths(text.slice(last)));
     return out;
   }
 
@@ -139,7 +165,39 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier, onAgen
     });
     return el('div', { class: 'ag-cl-clampwrap' }, node, more);
   }
-  const pre = (text, cls = '') => el('pre', { class: `ag-cl-t-pre ${cls}`.trim() }, text);
+  /**
+   * What you wrote. A long paste reads like Claude Code's own
+   * "[Pasted text #1 +N lines]": the words around it as written, the paste
+   * as one chip that opens to the text in a bounded, scrolling block, so a
+   * thousand-line paste never stretches the page.
+   */
+  function userText(text) {
+    const t = String(text ?? '');
+    const lines = t.split('\n');
+    if (lines.length <= 12 && t.length <= 1500) return el('div', { class: 'ag-cl-t-text' }, ...withPaths(t));
+    // The paste is the longest run of lines; a short note before it stays as text.
+    let head = '';
+    let body = t;
+    const firstBreak = t.indexOf('\n\n');
+    if (firstBreak > 0 && firstBreak < 400 && lines.length > 14) { head = t.slice(0, firstBreak); body = t.slice(firstBreak + 2); }
+    const n = body.split('\n').length;
+    const full = el('pre', { class: 'ag-cl-t-paste-body', hidden: true }, body);
+    const chip = el('button', { class: 'ag-cl-t-paste', type: 'button', 'aria-expanded': 'false', title: 'Show the pasted text' },
+      el('span', { class: 'ag-cl-t-chev' }, svg('chevron')),
+      el('span', { class: 'ag-cl-t-paste-k' }, 'Pasted text'),
+      el('span', { class: 'ag-cl-t-paste-n' }, `${n} line${n === 1 ? '' : 's'} · ${body.length.toLocaleString('en-GB')} characters`),
+      el('span', { class: 'ag-cl-t-paste-prev' }, body.replace(/\s+/g, ' ').slice(0, 120)));
+    chip.addEventListener('click', () => {
+      const open = full.hidden;
+      full.hidden = !open;
+      chip.setAttribute('aria-expanded', String(open));
+      chip.classList.toggle('is-open', open);
+    });
+    return el('div', { class: 'ag-cl-t-text' }, head ? el('div', {}, ...withPaths(head)) : null, chip, full);
+  }
+
+  const pre = (text, cls = '') => el('pre', { class: `ag-cl-t-pre ${cls}`.trim() }, ...(String(text ?? '').length <= LINK_MAX ? withPaths(text) : [text]));
+  const pathDiv = (p, ...rest) => el('div', { class: 'ag-cl-t-path' }, onPath && p ? pathLink(p) : p, ...rest);
 
   /**
    * A line diff of an edit: the lines the edit kept are context, the rest
@@ -178,11 +236,12 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier, onAgen
     switch (m.tool) {
       case 'Bash': return el('div', { class: 'ag-cl-t-in' },
         i.background ? el('div', { class: 'ag-cl-t-desc' }, 'Runs in the background') : null,
-        el('div', { class: 'ag-cl-t-cmd' }, el('span', { class: 'ag-cl-t-prompt' }, '$'), el('pre', { class: 'ag-cl-t-pre' }, i.command || ''), copyBtn(() => i.command || '', 'Copy command')));
-      case 'Edit': return el('div', { class: 'ag-cl-t-in' }, el('div', { class: 'ag-cl-t-path' }, i.file_path, i.replace_all ? ' (every match)' : ''), diff(i.old_string, i.new_string));
-      case 'MultiEdit': return el('div', { class: 'ag-cl-t-in' }, el('div', { class: 'ag-cl-t-path' }, i.file_path), (i.edits || []).map((e) => diff(e.old_string, e.new_string)));
-      case 'Write': return el('div', { class: 'ag-cl-t-in' }, el('div', { class: 'ag-cl-t-path' }, i.file_path, ` (${lineCount(i.content)} lines)`), clamp(pre(i.content || ''), lineCount(i.content), 30));
-      case 'Read': return el('div', { class: 'ag-cl-t-in' }, el('div', { class: 'ag-cl-t-path' }, i.file_path, i.offset || i.limit ? ` (lines ${i.offset || 1} to ${(i.offset || 1) + (i.limit || 0)})` : ''));
+        el('div', { class: 'ag-cl-t-cmd' }, el('span', { class: 'ag-cl-t-prompt' }, '$'), pre(i.command || ''), copyBtn(() => i.command || '', 'Copy command')));
+      case 'Edit': return el('div', { class: 'ag-cl-t-in' }, pathDiv(i.file_path, i.replace_all ? ' (every match)' : ''), diff(i.old_string, i.new_string));
+      case 'MultiEdit': return el('div', { class: 'ag-cl-t-in' }, pathDiv(i.file_path), (i.edits || []).map((e) => diff(e.old_string, e.new_string)));
+      case 'Write': return el('div', { class: 'ag-cl-t-in' }, pathDiv(i.file_path, ` (${lineCount(i.content)} lines)`), clamp(el('pre', { class: 'ag-cl-t-pre' }, i.content || ''), lineCount(i.content), 30));
+      case 'Read': return el('div', { class: 'ag-cl-t-in' }, pathDiv(i.file_path, i.offset || i.limit ? ` (lines ${i.offset || 1} to ${(i.offset || 1) + (i.limit || 0)})` : ''));
+      case 'Glob': case 'Grep': return el('div', { class: 'ag-cl-t-in' }, el('div', { class: 'ag-cl-t-desc' }, [i.pattern ? `pattern ${i.pattern}` : null, i.glob ? `files ${i.glob}` : null].filter(Boolean).join(' · ')), i.path ? pathDiv(i.path) : null);
       case 'TodoWrite': return el('div', { class: 'ag-cl-t-in ag-cl-todos' }, (i.todos || []).map((t) => el('div', { class: `ag-cl-todo is-${t.status}` }, el('span', {}, TODO[t.status] || '☐'), el('span', {}, t.content))));
       case 'Task': case 'Agent': return el('div', { class: 'ag-cl-t-in' },
         onAgent && m.id ? el('button', { class: 'btn btn--ghost btn--sm ag-cl-t-agentbtn', type: 'button', onclick: (e) => { e.preventDefault(); onAgent(m.id); } }, svg('log'), 'Open its transcript') : null,
@@ -274,18 +333,36 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier, onAgen
           el('div', { class: 'ag-cl-t-head' }, el('span', { class: 'ag-cl-t-who' }, 'You'), el('span', { class: 'ag-cl-t-time' }, time(m.at)),
             m.images ? el('span', { class: 'ag-cl-t-dim' }, `${m.images} image${m.images === 1 ? '' : 's'}`) : null,
             copyBtn(() => m.text, 'Copy message')),
-          clamp(el('div', { class: 'ag-cl-t-text' }, m.text), n, 16));
+          n > 12 || String(m.text || '').length > 1500 ? userText(m.text) : clamp(el('div', { class: 'ag-cl-t-text' }, ...withPaths(m.text)), n, 16));
       }
       case 'assistant':
         return el('div', { class: 'ag-cl-t-asst' },
           el('div', { class: 'ag-cl-t-head' }, el('span', { class: 'ag-cl-t-who' }, modelLabel(m.model) || 'Claude'), el('span', { class: 'ag-cl-t-time' }, time(m.at)),
             copyBtn(() => m.text, 'Copy reply')),
           md(m.text));
-      case 'thinking':
-        if (!m.text?.trim()) return el('div', { class: 'ag-cl-t-think is-empty', title: 'The model thought here; it does not save the text' }, el('span', { class: 'ag-cl-t-thinkmark' }, '∴'), el('span', {}, 'Thought'));
-        return el('details', { class: 'ag-cl-t-think' },
-          el('summary', { class: 'ag-cl-t-thinksum' }, el('span', { class: 'ag-cl-t-thinkrow' }, el('span', { class: 'ag-cl-t-thinkmark' }, '∴'), el('span', {}, 'Thinking'), el('span', { class: 'ag-cl-t-thinkprev' }, m.text.replace(/\s+/g, ' ').slice(0, 140)))),
-          el('div', { class: 'ag-cl-t-thinkbody' }, md(m.text)));
+      case 'thinking': {
+        // A button, not a <summary>: Safari did not open a summary laid out
+        // as a block, so thinking could not be expanded on the phone.
+        const empty = !m.text?.trim();
+        const box = el('div', { class: `ag-cl-t-think${empty ? ' is-empty' : ''}` });
+        const bodyEl = el('div', { class: 'ag-cl-t-thinkbody', hidden: true });
+        const btn = el('button', { class: 'ag-cl-t-thinksum', type: 'button', 'aria-expanded': 'false' },
+          el('span', { class: 'ag-cl-t-thinkrow' }, el('span', { class: 'ag-cl-t-chev' }, svg('chevron')), el('span', { class: 'ag-cl-t-thinkmark' }, '∴'), el('span', {}, empty ? 'Thought' : 'Thinking'),
+            el('span', { class: 'ag-cl-t-thinkprev' }, empty ? 'not saved' : m.text.replace(/\s+/g, ' ').slice(0, 140))));
+        btn.addEventListener('click', () => {
+          const open = bodyEl.hidden;
+          if (open && !bodyEl.firstChild) {
+            bodyEl.append(empty
+              ? el('p', { class: 'ag-cl-t-dim' }, 'The model thought here, but this thinking was not written to the conversation file (the API returns it summarised or encrypted, and Claude Code keeps only a signature). Claude Code cannot show it either once the turn is over.')
+              : md(m.text));
+          }
+          bodyEl.hidden = !open;
+          box.classList.toggle('is-open', open);
+          btn.setAttribute('aria-expanded', String(open));
+        });
+        box.append(btn, bodyEl);
+        return box;
+      }
       case 'tool': return toolRow(m);
       case 'result': {
         const first = String(m.text || '').split('\n')[0];
@@ -545,11 +622,20 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier, onAgen
       });
     },
     /** Draw the queued messages (newest last), or none. */
+    /**
+     * Messages not in the conversation yet, at the end: each { text, at,
+     * label, warn, actions: [{ label, title, run, primary }] }.
+     */
     setPending(queued) {
       const stick = follow || nearBottom();
-      pendingBox.replaceChildren(...(queued || []).map((q) => el('div', { class: 'ag-cl-t-user is-pending' },
-        el('div', { class: 'ag-cl-t-head' }, el('span', { class: 'ag-cl-t-who' }, 'You'), el('span', { class: 'ag-cl-t-queued' }, 'Queued: sends when Claude finishes this step'), el('span', { class: 'ag-cl-t-time' }, time(q.at))),
-        el('div', { class: 'ag-cl-t-text' }, q.text))));
+      pendingBox.replaceChildren(...(queued || []).map((q) => el('div', { class: `ag-cl-t-user is-pending${q.warn ? ' is-stuck' : ''}` },
+        el('div', { class: 'ag-cl-t-head' }, el('span', { class: 'ag-cl-t-who' }, 'You'),
+          el('span', { class: 'ag-cl-t-queued' }, q.label || 'Queued'),
+          el('span', { class: 'ag-cl-t-time' }, time(q.at))),
+        userText(q.text),
+        (q.actions || []).length ? el('div', { class: 'ag-cl-t-pendacts' }, q.actions.map((x) => el('button', {
+          class: `btn ${x.primary ? '' : 'btn--ghost'} btn--sm`, type: 'button', title: x.title || null, onclick: x.run,
+        }, x.label))) : null)));
       if (stick) toBottom(true);
     },
     /** Whether this conversation launched any subagents. */

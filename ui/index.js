@@ -611,7 +611,7 @@ function render() {
   root.replaceChildren();
   // Work loads its own data (a file the host rebuilds), so it never waits on n8n.
   if (state.view === 'work') {
-    root.append(viewWork(api, render));
+    root.append(viewWork(api, render, ctx?.toast));
     return;
   }
   if (!state.services.length && state.workflows === null) {

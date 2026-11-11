@@ -70,7 +70,8 @@ const S = {
   fs: null,
   hidden: false,
   form: null,
-  pane: pref('ag-cl-pane') === 'transcript' ? 'transcript' : 'terminal', // in a session, remembered
+  // The transcript is the main view (owner, 11 Nov); the terminal is one tap away.
+  pane: pref('ag-cl-pane2') === 'terminal' ? 'terminal' : 'transcript', // in a session, remembered
   term: null,
   termState: null,
   // The transcript being read: its view, the file offset the next poll reads
@@ -83,6 +84,9 @@ const S = {
   // has no /keys, /prompt or detailed transcript, and the view falls back.
   caps: {},
   sent: {},             // messages sent per session, for Up to recall
+  cmds: {},             // each session's slash commands and skills, from its runner
+  attach: {},           // files waiting in each session's message box
+  sugGone: {},          // the suggestion typed over, per session: it stays dismissed
 
   login: null,          // { id, state, timer, term }
   busy: new Set(),
@@ -183,6 +187,15 @@ const at = (ms) => {
   const t = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   return same ? t : `${d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} ${t}`;
 };
+/** A long path cut at the front, keeping its last folders: "…/forsa-work/team". */
+const tailPath = (p, max = 44) => {
+  const t = String(p || '');
+  if (t.length <= max) return t;
+  const parts = t.split('/');
+  let out = parts.pop();
+  while (parts.length && out.length + parts[parts.length - 1].length + 1 <= max - 2) out = `${parts.pop()}/${out}`;
+  return `…/${out}`;
+};
 const shortPath = (p, dev) => {
   const home = dataOf(dev)?.runner?.home;
   return home && p?.startsWith(home) ? `~${p.slice(home.length)}` : p;
@@ -258,10 +271,49 @@ async function load() {
   }
 }
 
+/**
+ * The stream can die without saying so: a phone asleep, the app in the
+ * background, a network change. Then every state on screen (a "needs you",
+ * an error, an account that needs logging in) stayed as it was until the
+ * app was restarted. The module sends a ping every 20 s; silence for a
+ * minute, the page coming back into view, or the network returning reloads
+ * the whole state and reconnects.
+ */
+let beat = 0;
+let beatTimer = null;
+let resyncing = false;
+async function resync() {
+  if (!root || resyncing) return;
+  resyncing = true;
+  try {
+    await load();
+    if (!root) return;
+    listen();
+    paint(S.detail ? 'session' : S.tab === 'new' ? 'device' : S.tab === 'settings' ? 'session' : null);
+  } finally { resyncing = false; }
+}
+const onWake = () => { if (!document.hidden) resync(); };
+function watchStream() {
+  clearInterval(beatTimer);
+  beatTimer = setInterval(() => { if (!document.hidden && root && Date.now() - beat > 60_000) resync(); }, 15_000);
+  document.addEventListener('visibilitychange', onWake);
+  window.addEventListener('online', onWake);
+  window.addEventListener('pageshow', onWake);
+}
+function unwatchStream() {
+  clearInterval(beatTimer);
+  beatTimer = null;
+  document.removeEventListener('visibilitychange', onWake);
+  window.removeEventListener('online', onWake);
+  window.removeEventListener('pageshow', onWake);
+}
+
 function listen() {
   sse?.stop();
-  sse = ctx.sse('/claude/all/events', {
-    events: {
+  beat = Date.now();
+  const alive = (fn) => (arg) => { beat = Date.now(); fn(arg); };
+  const events = {
+      ping: () => {},
       state: ({ device, data }) => {
         const d = devOf(device);
         if (!d || !data) return;
@@ -299,8 +351,10 @@ function listen() {
         d.error = error || null;
         paint('device');
       },
-    },
-    onError: () => { /* reconnects on its own; the last state stays on screen */ },
+  };
+  sse = ctx.sse('/claude/all/events', {
+    events: Object.fromEntries(Object.entries(events).map(([k, fn]) => [k, alive(fn)])),
+    onError: () => { /* reconnects on its own; the last state stays on screen, and the watchdog reloads it */ },
   });
 }
 
@@ -598,7 +652,10 @@ function detailHead(s) {
         multi() ? el('span', { class: 'ag-cl-chip ag-cl-chip--dev', title: 'Device' }, devLabel(dev)) : null,
         el('span', { class: 'ag-cl-chip', title: 'Model' }, modelLabel(s.model?.current), fell ? ' · fallback' : '', actual ? ` (answered by ${modelLabel(actual)})` : ''),
         el('span', { class: 'ag-cl-chip', title: 'Account' }, acctLabel(s.account, dev)),
-        el('span', { class: 'ag-cl-chip ag-cl-chip--path', title: s.cwd }, shortPath(s.cwd, dev)))),
+        // The folder: the end of a long path stays visible (the start is
+        // cut), the whole path is its title, and a tap opens it in the explorer.
+        el('button', { class: 'ag-cl-chip ag-cl-chip--path ag-cl-chip--btn', type: 'button', title: `${s.cwd}\nOpen in the explorer`, onclick: () => explore(dev, s.cwd, s.cwd) },
+          tailPath(shortPath(s.cwd, dev))))),
     el('div', { class: 'ag-cl-head-actions' }, ...actionButtons(s)));
 }
 
@@ -665,6 +722,7 @@ function paintDetail(reason) {
     updateComposer(s);
     paintLive(s);
     paintMenu(s);
+    if (!S.agents.viewing) paintQueued(s);
     sizeTerminal();
     // A session that came back (resumed, relaunched into a new tmux session)
     // gets its terminal back; one that is gone gets the "not running" card.
@@ -923,6 +981,10 @@ async function pasteMedia(dev, id) {
     files.push(new File([blob], `clipboard.${ext}`, { type }));
   }
   if (!files.length) { ctx.toast?.('err', 'No image or file on the clipboard', 'Copy an image or a screenshot first.'); return; }
+  // With the message box open, they wait there (previewed) until Send;
+  // from the terminal they go straight in, as a paste there does.
+  const s = session(id);
+  if (s && composeShown() && root?.querySelector('.ag-cl-compose:not([hidden])')) { addAttachments(s, files); root.querySelector('.ag-cl-input')?.focus(); return; }
   await sendFiles(dev, id, files);
 }
 
@@ -998,7 +1060,9 @@ function sizeTerminal() {
     keepComposerInView(view);
     return;
   }
-  const min = 300;
+  // A floor for the pane that still leaves room for a grown message box on
+  // a short screen: the page must not start scrolling because the box grew.
+  const min = Math.round(Math.min(300, Math.max(160, visible * 0.3)));
   const h = Math.floor(visible - bottomChrome(view, visible) - top - below - 10);
   view.style.setProperty('--ag-cl-termh', `${Math.max(min, h)}px`);
   // Whatever still sits below it in the page (the host's padding, a status
@@ -1046,6 +1110,21 @@ function onViewport() {
     && view.contains(document.activeElement);
   const was = view.classList.contains('is-kb');
   view.classList.toggle('is-kb', keyboard);
+  // The keyboard opening moves the message box (the typing layout lifts it
+  // over the keyboard). iOS leaves the caret where the box was, so the first
+  // tap seemed to miss and it took a tap out and back in. Put the caret back
+  // in the box once it has moved.
+  if (keyboard && !was) {
+    const a = document.activeElement;
+    if (a && a.matches?.('textarea, input') && view.contains(a)) {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (document.activeElement !== a) return;
+        try { const n = a.selectionEnd ?? a.value.length; a.setSelectionRange(n, n); } catch { /* not a text field */ }
+        a.style.transform = 'translateZ(0)';
+        requestAnimationFrame(() => { a.style.transform = ''; });
+      }));
+    }
+  }
   // The keyboard going away leaves the page wherever the browser scrolled it
   // to reveal the input; the normal view fits from the top.
   if (was && !keyboard && !S.max) window.scrollTo(0, 0);
@@ -1110,8 +1189,8 @@ function paneTabs(s) {
   const term = S.pane === 'terminal';
   return [
     el('div', { class: 'segctl ag-cl-pane-tabs', role: 'group', 'aria-label': 'View' },
-      el('button', { type: 'button', 'aria-pressed': String(term), onclick: () => switchPane('terminal') }, svg('terminal'), 'Terminal'),
-      el('button', { type: 'button', 'aria-pressed': String(!term), onclick: () => switchPane('transcript') }, svg('log'), 'Transcript')),
+      el('button', { type: 'button', 'aria-pressed': String(!term), onclick: () => switchPane('transcript') }, svg('log'), 'Chat'),
+      el('button', { type: 'button', 'aria-pressed': String(term), onclick: () => switchPane('terminal') }, svg('terminal'), 'Terminal')),
     el('div', { class: 'ag-cl-term-bar' },
       term ? el('span', { class: 'meta ag-cl-term-state' }, !online(s.device) ? 'offline' : S.termState || (s.alive ? 'connecting…' : 'not running')) : null,
       el('button', {
@@ -1140,7 +1219,7 @@ function switchPane(pane) {
   const s = session(S.detail);
   if (!s) return;
   S.pane = pane;
-  pref('ag-cl-pane', pane);
+  pref('ag-cl-pane2', pane);
   const view = root.querySelector('.ag-cl-detail');
   view?.classList.toggle('is-tx', pane === 'transcript');
   root.querySelector('.ag-cl-panes')?.replaceChildren(...paneTabs(s));
@@ -1242,6 +1321,7 @@ function mountTranscript(s, body) {
       modelLabel: (id) => (id ? modelLabel(id) : null),
       toast: ctx.toast,
       onEarlier: (before) => api(s.device, `${base}?detail=1&before=${before}`),
+      onPath: (p) => explore(s.device, p, s.cwd),
       onAgent: agent ? null : (toolUseId) => openAgentFor(s, toolUseId),
     });
   }
@@ -1345,10 +1425,66 @@ function setQueued(id, list) { try { if (list.length) sessionStorage.setItem(QUE
 /** Drop the queued messages that have arrived (or are two hours old), then draw the rest. */
 function paintQueued(s) {
   const view = S.transcript.id === s.id && !S.agents.viewing ? S.transcript.view : null;
-  let list = queued(s.id).filter((q) => Date.now() - q.at < 7200000);
-  if (view) list = list.filter((q) => !view.hasUserText(q.text, q.at));
-  setQueued(s.id, list);
-  view?.setPending(list);
+  // Two kinds: messages the runner holds until the turn ends (s.outbox:
+  // they can be sent now, taken back to edit, or removed), and ones that
+  // were typed into the terminal but whose Enter never landed.
+  let local = queued(s.id).filter((q) => Date.now() - q.at < 7200000);
+  if (view) local = local.filter((q) => !view.hasUserText(q.text, q.at));
+  setQueued(s.id, local);
+  const draft = S.prompt.id === s.id ? S.prompt.data?.draft || '' : '';
+  const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
+  const out = (s.outbox || []).map((m) => ({
+    text: m.text, at: m.at, label: 'Queued: goes in when Claude finishes this turn',
+    actions: [
+      { label: 'Send now', title: 'Type it in now: Claude reads it at its next step', run: () => outboxAct(s, 'send', m.at) },
+      { label: 'Edit', title: 'Back to the message box (it is not sent)', run: () => editQueued(s, m.at) },
+      { label: 'Remove', title: 'Do not send it', run: () => outboxAct(s, 'take', m.at) },
+    ],
+  }));
+  const stuck = local.map((q) => {
+    const inBox = !!draft && norm(q.text).startsWith(norm(draft).slice(0, 40));
+    const drop = () => { setQueued(s.id, queued(s.id).filter((x) => x.at !== q.at)); paintQueued(s); };
+    return {
+      text: q.text, at: q.at, warn: true,
+      label: inBox ? 'Not sent: it is in the terminal\'s input box' : 'Not sent',
+      actions: [
+        inBox ? { label: 'Send it', primary: true, title: 'Press Enter in the terminal', run: () => { drop(); sendKey(session(s.id) || s, 'Enter'); kick(); } }
+          : { label: 'Send again', primary: true, run: () => { drop(); send(s.id, q.text); } },
+        { label: 'Dismiss', title: 'Forget it here (the terminal is not touched)', run: drop },
+      ],
+    };
+  });
+  view?.setPending([...out, ...stuck]);
+}
+
+async function outboxAct(s, what, at) {
+  try {
+    const r = await post(s.device, `/sessions/${s.id}/outbox/${what}`, { at });
+    upsert(s.device, r.session || r);
+    paint('session');
+    if (what === 'send') kick();
+  } catch (e) {
+    if (missingRoute(e)) oldRunner(s); else ctx.toast?.('err', 'That did not work', e.message);
+  }
+}
+
+/** Up in the box (or Edit): the newest queued message comes back to edit. It is never sent by this. */
+async function editQueued(s, at = null) {
+  const input = root?.querySelector('.ag-cl-input');
+  if (!input) return false;
+  try {
+    const r = await post(s.device, `/sessions/${s.id}/outbox/take`, { at });
+    upsert(s.device, r.session);
+    const t = r.message?.text || '';
+    input.value = input.value ? `${t}\n${input.value}` : t;
+    input.dispatchEvent(new Event('input'));
+    input.focus();
+    paint('session');
+    return true;
+  } catch (e) {
+    if (!/nothing waiting/i.test(e.message)) ctx.toast?.('err', 'Could not take it back', e.message);
+    return false;
+  }
 }
 
 const AGENT_KEY = 'ag-cl-agent:';
@@ -1477,6 +1613,7 @@ function watchPrompt(s) {
     if (P.gen !== gen) return;
     paintMenu(cur);
     paintLive(cur);
+    if (!S.agents.viewing) paintQueued(cur);
     if (cap(cur.device).prompt === false) return;
     const busy = ['running', 'starting', 'waiting'].includes(cur.state) || P.data?.menu || Date.now() < (P.fastUntil || 0);
     P.timer = setTimeout(run, document.hidden ? 10000 : busy ? 1200 : 4000);
@@ -1512,7 +1649,15 @@ function paintLive(s) {
   const agents = p?.agents || [];
   // Rebuild only on a change, and keep the agents list open across rebuilds:
   // it folded shut every two seconds while a session worked.
-  const sig = JSON.stringify([state, main, sub, agents, p?.mode, p?.draft, p?.suggestion]);
+  const modeBtn = root.querySelector('.ag-cl-modebtn');
+  if (modeBtn) {
+    modeBtn.hidden = !(s.alive && p && online(s.device));
+    const mode = String(p?.mode || '').toLowerCase();
+    modeBtn.textContent = !mode ? 'Ask first' : mode.includes('bypass') ? 'Bypass' : mode.includes('accept') ? 'Auto-edit' : mode.includes('plan') ? 'Plan' : mode;
+    modeBtn.title = `Permission mode: ${p?.mode || 'default (asks before edits)'}. Tap to cycle it (Shift+Tab in Claude Code).`;
+  }
+  paintGhost(s);
+  const sig = JSON.stringify([state, main, sub, agents, p?.mode, p?.draft]);
   if (box.dataset.sig === sig && box.firstChild) return;
   box.dataset.sig = sig;
   box.replaceChildren(...[
@@ -1522,20 +1667,12 @@ function paintLive(s) {
     agents.length ? el('details', { class: 'ag-cl-live-agents', open: S.liveAgentsOpen || false, ontoggle: (e) => { S.liveAgentsOpen = e.currentTarget.open; } },
       el('summary', { title: agents.map((a) => `${a.name}: ${a.doing}`).join('\n') }, `${agents.length} agent${agents.length === 1 ? '' : 's'}`),
       el('div', { class: 'ag-cl-live-agentlist' }, agents.map((a) => el('div', { title: `${a.name}: ${a.doing}${a.meta ? ` · ${a.meta}` : ''}` }, el('b', {}, a.name), ` ${a.doing}`, a.meta ? el('span', { class: 'meta' }, ` · ${a.meta}`) : null)))) : null,
-    p?.mode ? el('span', { class: 'ag-cl-live-mode', title: 'Permission mode (Shift+Tab switches it)' }, p.mode) : null,
-    p?.draft ? el('span', { class: 'ag-cl-live-draft', title: 'Typed in the terminal and not sent. A message from here is added after it.' }, `Unsent in the terminal: ${ONE_LINE(p.draft, 60)}`) : null,
-    // Claude Code's suggested next message (faint in its input box; Tab takes it there).
-    p?.suggestion ? el('span', { class: 'ag-cl-live-sug', title: p.suggestion },
-      el('span', { class: 'ag-cl-live-sugk' }, 'Suggested'),
-      el('span', { class: 'ag-cl-live-sugt' }, ONE_LINE(p.suggestion, 90)),
-      // Only "Use": it never sends, and it never replaces what is already typed.
-      // (A Send here once replaced a typed message with the suggestion, 5 Nov.)
-      el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Put it in the message box to edit', onpointerdown: (e) => e.preventDefault(),
-        onclick: () => {
-          const t = root.querySelector('.ag-cl-input'); if (!t) return;
-          if (t.value.trim()) { ctx.toast?.('err', 'Your message is kept', 'Clear the message box first to use the suggestion.'); t.focus(); return; }
-          t.value = p.suggestion; t.dispatchEvent(new Event('input')); t.focus();
-        } }, 'Use')) : null,
+    // Typed into the terminal and not sent (an edge case once left a
+    // message there for good): send it from here, or look at it.
+    p?.draft ? el('span', { class: 'ag-cl-live-draft', title: p.draft },
+      el('span', { class: 'ag-cl-live-sugk' }, 'In the terminal, not sent'),
+      el('span', { class: 'ag-cl-live-sugt' }, ONE_LINE(p.draft, 80)),
+      el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Press Enter in the terminal: send what is in its input box', onpointerdown: (e) => e.preventDefault(), onclick: () => sendKey(session(s.id) || s, 'Enter') }, 'Send it')) : null,
   ].filter(Boolean));
 }
 
@@ -1634,6 +1771,83 @@ function linkified(text) {
 }
 
 /**
+ * The explorer: a folder or a file on the session's machine, opened from a
+ * path anywhere in the view (the session's folder, a path in a command or
+ * in a tool's output). Folders list and open; a text file shows its first
+ * 512 KB; an image shows itself. Read only, and every path can be copied.
+ */
+async function explore(dev, p, cwd) {
+  const home = dataOf(dev)?.runner?.home;
+  let start = String(p || '').trim().replace(/[),.;:'"`]+$/, '');
+  const at = /^(.*?):(\d+)(?::\d+)?$/.exec(start);
+  let line = null;
+  if (at && !/^[a-z]+$/i.test(at[1])) { start = at[1]; line = Number(at[2]); }
+  if (start.startsWith('~') && home) start = home + start.slice(1);
+  if (!start.startsWith('/') && cwd) start = `${cwd.replace(/\/$/, '')}/${start.replace(/^\.\//, '')}`;
+  const head = el('div', { class: 'ag-cl-ex-head' });
+  const body = el('div', { class: 'ag-cl-ex-body' });
+  const wrap = el('div', { class: 'stack ag-cl-ex' }, head, body);
+  let blobUrl = null;
+  const parentOf = (x) => (x === '/' ? null : x.replace(/\/[^/]*\/?$/, '') || '/');
+  const copyPath = (x) => el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Copy the full path', onclick: async (e) => { const ok = await copyText(x); e.currentTarget.textContent = ok ? 'Copied' : 'Copy failed'; } }, svg('copy'), 'Copy path');
+  const header = (x, isFile) => {
+    const up = isFile ? parentOf(x) : parentOf(x);
+    head.replaceChildren(
+      el('div', { class: 'ag-cl-ex-path', title: x }, x),
+      el('div', { class: 'ag-cl-ex-acts' },
+        copyPath(x),
+        up ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => go2(up) }, svg('back'), isFile ? 'Its folder' : 'Up') : null,
+        isFile ? el('a', { class: 'btn btn--ghost btn--sm', href: rawUrl(x), target: '_blank', rel: 'noopener' }, 'Open raw') : null));
+  };
+  const rawUrl = (x) => `${ctx.base}/api/claude/d/${encodeURIComponent(dev)}/fs/file?raw=1&path=${encodeURIComponent(x)}`;
+  const fail = (x, msg) => { header(x, false); body.replaceChildren(problem('Cannot open this', msg)); };
+  async function listDir(x) {
+    let r;
+    try { r = await api(dev, `/fs?files=1&hidden=1&path=${encodeURIComponent(x)}`); } catch (e) { fail(x, e.message); return; }
+    header(r.path, false);
+    const rows = (r.entries || []).map((e) => el('button', { class: `ag-cl-ex-row${e.file ? ' is-file' : ''}${e.hidden ? ' is-hidden' : ''}`, type: 'button', onclick: () => go2(e.path) },
+      svg(e.file ? 'file' : 'folder'), el('span', { class: 'ag-cl-ex-name' }, e.name),
+      el('span', { class: 'ag-cl-ex-meta' }, e.file ? (e.size != null ? fmtSize(e.size) : '') : e.git ? 'git' : '')));
+    body.replaceChildren(rows.length ? el('div', { class: 'ag-cl-ex-list' }, rows) : el('p', { class: 'meta' }, 'An empty folder.'),
+      r.truncated ? el('p', { class: 'meta' }, 'Only the first 1000 entries are listed.') : null);
+  }
+  async function go2(x) {
+    if (blobUrl) { URL.revokeObjectURL(blobUrl); blobUrl = null; }
+    body.replaceChildren(el('p', { class: 'meta' }, 'Loading…'));
+    let r;
+    try { r = await api(dev, `/fs/file?path=${encodeURIComponent(x)}`); } catch (e) {
+      // An older runner only lists folders.
+      if (missingRoute(e)) { await listDir(x); return; }
+      fail(x, e.message);
+      return;
+    }
+    if (r.dir) { await listDir(r.path); return; }
+    header(r.path, true);
+    const meta = el('p', { class: 'meta' }, [fmtSize(r.size || 0), r.mtime ? `changed ${ago(r.mtime)}` : null, r.truncated ? 'only the first 512 KB is shown' : null].filter(Boolean).join(' · '));
+    if (r.kind === 'image') {
+      const img = el('img', { class: 'ag-cl-ex-img', alt: r.path });
+      body.replaceChildren(meta, img);
+      try {
+        const res = await fetch(rawUrl(r.path), { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        blobUrl = URL.createObjectURL(await res.blob());
+        img.src = blobUrl;
+      } catch (e) { body.append(problem('The image did not load', e.message)); }
+      return;
+    }
+    if (r.kind !== 'text') { body.replaceChildren(meta, el('p', { class: 'meta' }, r.kind === 'pdf' ? 'A PDF: use Open raw.' : 'Not text: use Open raw to download it.')); return; }
+    const lines = String(r.text || '').split('\n');
+    const pre = el('pre', { class: 'ag-cl-ex-pre' }, lines.map((l, i) => el('span', { class: `ag-cl-ex-line${line === i + 1 ? ' is-hit' : ''}` }, el('span', { class: 'ag-cl-ex-ln' }, String(i + 1)), `${l}\n`)));
+    body.replaceChildren(meta, pre);
+    if (line) requestAnimationFrame(() => pre.querySelector('.is-hit')?.scrollIntoView({ block: 'center' }));
+  }
+  const done = ctx.modal({ title: 'Explorer', body: wrap, actions: [{ label: 'Close', value: false, variant: 'ghost' }] });
+  go2(start);
+  await done;
+  if (blobUrl) URL.revokeObjectURL(blobUrl);
+}
+
+/**
  * The terminal as plain text in a sheet, where a phone's own selection
  * handles (or a mouse) pick what to copy and links open on a tap. The text
  * is tmux's: the screen and its scrollback, wrapped lines joined.
@@ -1679,9 +1893,9 @@ async function pickText(s) {
 /* ── the message box ────────────────────────────────────────────────── */
 
 /**
- * The commands people reach for. Anything else can be typed: the box sends
- * whatever starts with "/" to Claude Code as it is. [name, what it does,
- * takes words after it]
+ * The commands people reach for, until the runner's full list arrives (and
+ * for an older runner that has no list). The runner's list has every
+ * Claude Code command, custom command and skill the session can take.
  */
 const SLASH = [
   ['/compact', 'Summarise the conversation to free context; words after it say what to keep', true],
@@ -1706,9 +1920,101 @@ const SLASH = [
   ['/hooks', 'Hooks'],
   ['/doctor', 'Check the installation'],
   ['/help', 'Every command'],
-];
+].map(([name, desc, args]) => ({ name, desc, args: !!args, source: 'Claude Code' }));
 
 const touch = () => window.matchMedia('(pointer: coarse)').matches;
+
+/** The session's commands and skills, from its runner; the short list until then. */
+function commandsFor(s) {
+  const c = S.cmds[s.id];
+  if (Array.isArray(c)) return c;
+  if (c !== 'loading' && online(s.device) && cap(s.device).commands !== false) {
+    S.cmds[s.id] = 'loading';
+    api(s.device, `/sessions/${s.id}/commands`).then((r) => {
+      S.cmds[s.id] = Array.isArray(r?.commands) && r.commands.length ? r.commands : SLASH;
+      cap(s.device).commands = true;
+      root?.querySelector('.ag-cl-input')?.dispatchEvent(new Event('slashlist'));
+    }).catch((e) => {
+      if (missingRoute(e)) cap(s.device).commands = false;
+      S.cmds[s.id] = SLASH;
+    });
+  }
+  return SLASH;
+}
+
+/** Claude Code's suggested next message, while the box is empty and it was not typed over. */
+function ghostOf(s) {
+  const p = S.prompt.id === s.id ? S.prompt.data : null;
+  const sug = p?.suggestion && s.alive ? p.suggestion : null;
+  return sug && S.sugGone[s.id] !== sug ? sug : null;
+}
+
+/** The suggestion as the box's placeholder: faint, like Claude Code's own. */
+function paintGhost(s) {
+  const input = root?.querySelector('.ag-cl-input');
+  if (!input) return;
+  const sug = !input.value ? ghostOf(s) : null;
+  const box = input.closest('.ag-cl-compose');
+  box?.classList.toggle('has-ghost', !!sug);
+  if (sug) {
+    input.placeholder = sug;
+    input.title = touch() ? 'Suggested by Claude Code: Send sends it, or start typing your own' : 'Suggested by Claude Code: Tab to edit it, Enter to send it, or type your own';
+  } else {
+    input.removeAttribute('title');
+    input.placeholder = input.dataset.ph || '';
+  }
+  const hint = root.querySelector('.ag-cl-ghosthint');
+  if (hint) hint.hidden = !sug;
+}
+
+/* ── attachments: shown in the box until the message goes ─────────── */
+
+const fmtSize = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+const attachments = (id) => (S.attach[id] ||= []);
+function addAttachments(s, files) {
+  const list = attachments(s.id);
+  for (const file of [...(files || [])].filter(Boolean)) {
+    const image = IMAGE_MIME.includes(file.type);
+    const max = image ? 20 : 100;
+    if (file.size > max * 1024 * 1024) { ctx.toast?.('err', `${file.name || 'That file'} is too large`, `The limit is ${max} MB.`); continue; }
+    list.push({ id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, file, image, url: image ? URL.createObjectURL(file) : null });
+  }
+  paintTray(s);
+}
+function dropAttachment(s, id) {
+  const list = attachments(s.id);
+  const i = list.findIndex((a) => a.id === id);
+  if (i >= 0) { if (list[i].url) URL.revokeObjectURL(list[i].url); list.splice(i, 1); }
+  paintTray(s);
+}
+function clearAttachments(id) {
+  for (const a of S.attach[id] || []) if (a.url) URL.revokeObjectURL(a.url);
+  S.attach[id] = [];
+}
+function paintTray(s) {
+  const tray = root?.querySelector('.ag-cl-tray');
+  if (!tray) return;
+  const list = attachments(s.id);
+  tray.replaceChildren(...list.map((a) => el('div', { class: `ag-cl-att${a.image ? ' is-img' : ''}`, title: `${a.file.name || 'pasted'} · ${fmtSize(a.file.size)}` },
+    a.image ? el('img', { src: a.url, alt: a.file.name || 'Pasted image' })
+      : el('span', { class: 'ag-cl-att-file' }, svg('attach'), el('span', { class: 'ag-cl-att-name' }, a.file.name || 'file'), el('span', { class: 'ag-cl-att-size' }, fmtSize(a.file.size))),
+    el('button', { class: 'ag-cl-att-x', type: 'button', title: 'Remove', 'aria-label': `Remove ${a.file.name || 'attachment'}`, onpointerdown: (e) => e.preventDefault(), onclick: () => dropAttachment(s, a.id) }, '×'))));
+  tray.hidden = !list.length;
+  requestAnimationFrame(sizeTerminal);
+}
+
+/** Upload what is in the tray: the runner pastes each path into Claude Code's box ([Image #n]). */
+async function uploadAttachments(s) {
+  const list = attachments(s.id).slice();
+  for (const a of list) {
+    await ctx.api(`/claude/d/${encodeURIComponent(s.device)}/sessions/${s.id}/${a.image ? 'image' : 'file'}`, {
+      method: 'POST',
+      headers: { 'content-type': a.file.type || 'application/octet-stream', ...(a.image ? {} : { 'x-file-name': encodeURIComponent(a.file.name || '') }) },
+      body: a.file,
+    });
+  }
+  return list.length;
+}
 
 function composer(s) {
   const text = el('textarea', {
@@ -1716,16 +2022,18 @@ function composer(s) {
     rows: '1',
     enterkeyhint: touch() ? 'enter' : 'send',
     autocomplete: 'off',
+    autocapitalize: 'sentences',
     'aria-label': 'Message',
   });
   const slash = el('div', { class: 'ag-cl-slash', role: 'listbox', 'aria-label': 'Commands', hidden: true });
   let pick = 0;
   let matches = [];
-  // Grows with what is typed, up to a share of what is visible: on a phone a
-  // tall box would push itself under the bottom bar or the keyboard.
+  // Grows with what is typed up to a cap, then scrolls inside: the page
+  // itself never scrolls because the box got tall.
   const grow = () => {
     const visible = window.visualViewport?.height || innerHeight;
-    const cap = innerWidth <= 560 || touch() ? Math.max(66, Math.min(160, Math.round(visible * 0.24))) : 220;
+    const phone = innerWidth <= 560 || touch();
+    const cap = phone ? Math.max(44, Math.min(120, Math.round(visible * 0.2))) : Math.min(200, Math.max(88, Math.round(visible * 0.28)));
     text.style.height = 'auto';
     text.style.height = `${Math.min(text.scrollHeight + 2, cap)}px`;
   };
@@ -1734,17 +2042,23 @@ function composer(s) {
     const v = text.value;
     const m = /^\/(\S*)$/.exec(v);
     if (!m) { closeSlash(); return; }
-    matches = SLASH.filter(([n]) => n.slice(1).startsWith(m[1].toLowerCase()));
+    const q = m[1].toLowerCase();
+    const all = commandsFor(session(s.id) || s);
+    const starts = all.filter((c) => c.name.slice(1).toLowerCase().startsWith(q));
+    const inside = q ? all.filter((c) => !starts.includes(c) && c.name.toLowerCase().includes(q)) : [];
+    matches = [...starts, ...inside].slice(0, 80);
     if (!matches.length) { closeSlash(); return; }
     pick = Math.min(pick, matches.length - 1);
-    slash.replaceChildren(...matches.map(([n, d], i) => el('button', {
+    slash.replaceChildren(...matches.map((c, i) => el('button', {
       class: `ag-cl-slash-item${i === pick ? ' is-cur' : ''}`,
       type: 'button',
       role: 'option',
       'aria-selected': String(i === pick),
+      title: `${c.name}${c.desc ? `: ${c.desc}` : ''}`,
       onpointerdown: (e) => e.preventDefault(),
       onclick: () => useSlash(i, true),
-    }, el('span', { class: 'ag-cl-slash-name' }, n), el('span', { class: 'ag-cl-slash-desc' }, d))));
+    }, el('span', { class: 'ag-cl-slash-name' }, c.name), el('span', { class: 'ag-cl-slash-desc' }, c.desc || ''),
+    c.source && c.source !== 'Claude Code' ? el('span', { class: 'ag-cl-slash-src' }, c.source) : null)));
     slash.hidden = false;
     slash.querySelector('.is-cur')?.scrollIntoView({ block: 'nearest' });
   };
@@ -1753,12 +2067,18 @@ function composer(s) {
     const c = matches[i];
     if (!c) return;
     closeSlash();
-    if (c[2] || !go) { text.value = `${c[0]} `; grow(); text.focus(); return; }
-    text.value = c[0];
+    if (c.args || !go) { text.value = `${c.name} `; grow(); text.focus(); return; }
+    text.value = c.name;
     send(s.id);
   };
   let hist = -1;
-  text.addEventListener('input', () => { pick = 0; hist = -1; grow(); drawSlash(); });
+  text.addEventListener('input', () => {
+    pick = 0; hist = -1; grow(); drawSlash();
+    // Typing over the suggestion dismisses it, as in Claude Code.
+    if (text.value) { const g = ghostOf(session(s.id) || s); if (g) S.sugGone[s.id] = g; }
+    paintGhost(session(s.id) || s);
+  });
+  text.addEventListener('slashlist', () => { if (!slash.hidden || /^\/\S*$/.test(text.value)) drawSlash(); });
   text.addEventListener('blur', () => setTimeout(closeSlash, 150));
   text.addEventListener('keydown', (e) => {
     e.stopPropagation(); // the console's own shortcuts stay out of the box
@@ -1773,9 +2093,27 @@ function composer(s) {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !touch()) { e.preventDefault(); useSlash(pick, true); return; }
       if (e.key === 'Escape') { e.preventDefault(); closeSlash(); return; }
     }
+    const ghost = !text.value ? ghostOf(session(s.id) || s) : null;
+    // Tab takes the suggestion into the box to keep editing it.
+    if (e.key === 'Tab' && !e.shiftKey && ghost) {
+      e.preventDefault();
+      text.value = ghost;
+      S.sugGone[s.id] = ghost;
+      grow();
+      paintGhost(session(s.id) || s);
+      return;
+    }
     if (e.key === 'Enter' && !e.isComposing && ((e.ctrlKey || e.metaKey) || (!e.shiftKey && !e.altKey && !touch()))) {
       e.preventDefault();
       send(s.id);
+      return;
+    }
+    // Up in an empty box with a message queued: that message comes back here
+    // to edit and leaves the queue, as in Claude Code. It never sends.
+    const cur0 = session(s.id) || s;
+    if (e.key === 'ArrowUp' && !text.value && !e.shiftKey && (cur0.outbox || []).length) {
+      e.preventDefault();
+      editQueued(cur0);
       return;
     }
     // Up and Down in an empty (or recalled) box walk back through what was sent.
@@ -1786,6 +2124,7 @@ function composer(s) {
       hist = Math.max(-1, Math.min(sent.length - 1, hist + (e.key === 'ArrowUp' ? 1 : -1)));
       text.value = hist < 0 ? '' : sent[sent.length - 1 - hist];
       grow();
+      paintGhost(session(s.id) || s);
       return;
     }
     // Esc in an empty box is the terminal's Esc: it stops the turn or
@@ -1796,61 +2135,54 @@ function composer(s) {
       if (cur?.alive) sendKey(cur, 'Escape');
     }
   });
+  // Pasted or dropped files wait in the box, previewed, until Send.
   text.addEventListener('paste', (e) => {
     const files = [...(e.clipboardData?.items || [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile());
     if (!files.length) return;
     e.preventDefault();
-    sendFiles(s.device, s.id, files);
+    addAttachments(session(s.id) || s, files);
   });
   text.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.items || [])].some((i) => i.kind === 'file')) e.preventDefault(); });
   text.addEventListener('drop', (e) => {
     const files = [...(e.dataTransfer?.files || [])];
     if (!files.length) return;
     e.preventDefault();
-    sendFiles(s.device, s.id, files);
+    addAttachments(session(s.id) || s, files);
   });
-  const picker = el('input', { type: 'file', multiple: true, hidden: true, onchange: () => { sendFiles(s.device, s.id, picker.files); picker.value = ''; } });
+  const picker = el('input', { type: 'file', multiple: true, hidden: true, onchange: () => { addAttachments(session(s.id) || s, picker.files); picker.value = ''; } });
+  const keep = (e) => e.preventDefault();
 
   const box = el('div', { class: 'ag-cl-compose', hidden: !composeShown() },
     el('div', { class: 'ag-cl-live', 'aria-live': 'polite' }),
     el('div', { class: 'ag-cl-menu' }),
     el('div', { class: 'ag-cl-txkeys' }),
-    el('div', { class: 'ag-cl-compose-row' },
-      slash,
+    el('div', { class: 'ag-cl-tray', hidden: true, 'aria-label': 'Attachments' }),
+    el('div', { class: 'ag-cl-compose-row' }, slash, text),
+    // The buttons sit in their own row under the box, so a tall box stays a
+    // clean rectangle and the buttons stay where the thumb expects them.
+    el('div', { class: 'ag-cl-tools' },
       el('button', {
         class: 'btn btn--ghost btn--sm ag-cl-sq ag-cl-slashbtn',
         type: 'button',
-        title: 'Commands: /compact, /model and the rest',
+        title: 'Commands and skills',
         'aria-label': 'Commands',
-        onpointerdown: (e) => e.preventDefault(),
+        onpointerdown: keep,
         onclick: () => { if (!text.value.startsWith('/')) text.value = '/'; pick = 0; text.focus(); grow(); drawSlash(); },
       }, '/'),
       picker,
-      el('button', {
-        class: 'btn btn--ghost btn--sm ag-cl-sq ag-cl-attachbtn',
-        type: 'button',
-        title: 'Attach images or files',
-        'aria-label': 'Attach images or files',
-        onpointerdown: (e) => e.preventDefault(),
-        onclick: () => picker.click(),
-      }, svg('attach')),
-      el('button', {
-        class: 'btn btn--ghost btn--sm ag-cl-sq ag-cl-attachbtn',
-        type: 'button',
-        title: 'Paste an image or file from the clipboard',
-        'aria-label': 'Paste media from the clipboard',
-        onpointerdown: (e) => e.preventDefault(),
-        onclick: () => pasteMedia(s.device, s.id),
-      }, svg('paste')),
-      text,
-      el('button', { class: 'btn btn--ghost btn--sm ag-cl-sq ag-cl-stopbtn', type: 'button', title: 'Stop the turn (Esc)', 'aria-label': 'Stop the turn', hidden: true, onclick: () => interrupt(session(s.id) || s) }, svg('stop')),
-      el('button', { class: 'btn btn--sm ag-cl-send', type: 'button', onpointerdown: (e) => e.preventDefault(), onclick: () => send(s.id) }, 'Send')),
-    el('div', { class: 'ag-cl-compose-bar' },
+      el('button', { class: 'btn btn--ghost btn--sm ag-cl-sq ag-cl-attachbtn', type: 'button', title: 'Attach images or files', 'aria-label': 'Attach images or files', onpointerdown: keep, onclick: () => picker.click() }, svg('attach')),
+      el('button', { class: 'btn btn--ghost btn--sm ag-cl-sq ag-cl-attachbtn', type: 'button', title: 'Paste an image or file from the clipboard', 'aria-label': 'Paste media from the clipboard', onpointerdown: keep, onclick: () => pasteMedia(s.device, s.id) }, svg('paste')),
+      el('button', { class: 'btn btn--ghost btn--sm ag-cl-modebtn', type: 'button', title: 'Permission mode: Shift+Tab in Claude Code cycles it', 'aria-label': 'Switch permission mode', hidden: true, onpointerdown: keep, onclick: () => { const cur = session(s.id); if (cur) sendKey(cur, 'BTab'); } }),
       el('span', { class: 'meta ag-cl-compose-note' }),
-      el('span', { class: 'meta ag-cl-compose-hint' }, touch() ? '/ for commands · Keys for Esc and arrows' : 'Enter sends · Shift+Enter new line · / commands · Esc stops · ↑ last message')));
+      el('span', { class: 'meta ag-cl-ghosthint', hidden: true }, touch() ? 'Suggested · Send sends it' : 'Suggested · Tab edits · Enter sends'),
+      el('button', { class: 'btn btn--ghost btn--sm ag-cl-sq ag-cl-stopbtn', type: 'button', title: 'Stop the turn (Esc)', 'aria-label': 'Stop the turn', hidden: true, onclick: () => interrupt(session(s.id) || s) }, svg('stop')),
+      el('button', { class: 'btn btn--sm ag-cl-send', type: 'button', onpointerdown: keep, onclick: () => send(s.id) }, 'Send')),
+    el('div', { class: 'ag-cl-compose-bar' },
+      el('span', { class: 'meta ag-cl-compose-hint' }, touch() ? '/ for commands and skills · Keys for Esc and arrows' : 'Enter sends · Shift+Enter new line · / commands and skills · Esc stops · ↑ last message')));
   // The box grows with what is typed and with a menu; the pane above gives
   // way to it.
   new ResizeObserver(() => sizeTerminal()).observe(box);
+  requestAnimationFrame(() => paintTray(s));
   return box;
 }
 
@@ -1866,48 +2198,77 @@ function updateComposer(s) {
   btn.title = s.alive ? 'Send (Enter)' : 'Resume the session with this message';
   if (stop) stop.hidden = !(s.alive && s.state === 'running');
   const narrow = innerWidth <= 560;
-  input.placeholder = s.state === 'waiting' ? (narrow ? 'Answer Claude' : 'Answer Claude, or / for a command')
+  let ph = s.state === 'waiting' ? (narrow ? 'Answer Claude' : 'Answer Claude, or / for a command')
     : s.alive ? (narrow ? 'Message Claude' : 'Message Claude, or / for a command') : (narrow ? 'Message to resume' : 'Resume the session with a message');
   // Reading a subagent: the box still talks to the session, and says so.
-  if (S.agents.viewing && S.agents.id === s.id && s.alive) input.placeholder = narrow ? 'Message the main session' : 'Message the main session (subagents are read only)';
+  if (S.agents.viewing && S.agents.id === s.id && s.alive) ph = narrow ? 'Message the main session' : 'Message the main session (subagents are read only)';
+  input.dataset.ph = ph;
   note.textContent = !online(s.device) ? `${devLabel(s.device)} is offline.`
     : s.state === 'starting' ? 'Starting. Wait a moment.'
-      : s.state === 'running' ? 'Working. A message now is queued and read after this step.'
+      : s.state === 'running' ? (narrow ? 'Working: a message now is queued.' : 'Working. A message now is queued and read after this step.')
         : s.state === 'queued' ? 'Queued. A message now is added to its first prompt.'
           : s.model?.current !== s.model?.preferred ? `On ${modelLabel(s.model?.current)}; the next message goes back to ${modelLabel(s.model?.preferred)} if it is available.` : '';
+  paintGhost(s);
 }
 
-async function send(id) {
+/**
+ * Send what is in the box (or `override`: a resend, the suggestion). Files
+ * in the tray go first: the runner pastes each into Claude Code's box, and
+ * the words follow them.
+ */
+async function send(id, override = null) {
   const input = root.querySelector('.ag-cl-input');
-  const text = input?.value.trim();
-  if (!text) return;
   const s = session(id);
   if (!s) return;
+  let text = override ?? input?.value.trim();
+  const files = override == null ? attachments(id).length : 0;
+  // An empty box with Claude Code's suggestion showing sends the suggestion.
+  if (!text && !files && override == null) { text = ghostOf(s); if (text) S.sugGone[id] = text; }
+  if (!text && !files) return;
   const dev = s.device;
-  const sent = (S.sent[id] ||= []);
-  if (sent[sent.length - 1] !== text) sent.push(text);
-  if (sent.length > 50) sent.shift();
+  const key = `send:${id}`;
+  if (S.busy.has(key)) return;
+  if (files && !s.alive) { ctx.toast?.('err', 'Resume the session first', 'Files attach to a running session. Resume it, then send them.'); return; }
+  if (text) {
+    const sent = (S.sent[id] ||= []);
+    if (sent[sent.length - 1] !== text) sent.push(text);
+    if (sent.length > 50) sent.shift();
+  }
   // A slash command, a "!" shell line or a "#" memory line is keyboard input
   // for Claude Code itself, not a message: typed as it is, with no resume or
   // model switch, into a session that is running. Everything else goes as a
   // message, which also resumes a stopped session and answers a question.
-  const raw = /^[/!#]/.test(text) && s.alive && cap(dev).keys !== false;
-  const busyNow = s.alive && ['running', 'starting'].includes(s.state);
-  const r = await act(`send:${id}`, async () => {
-    if (raw) {
-      try { return await keysApi(s, { text, enter: true }); } catch (e) { if (!e.old) throw e; }
+  const raw = text && /^[/!#]/.test(text) && s.alive && cap(dev).keys !== false;
+  S.busy.add(key);
+  updateComposer(s);
+  let r = null;
+  try {
+    if (files) await uploadAttachments(s);
+    if (!text) r = await keysApi(s, { keys: ['Enter'] });
+    else if (raw || files) {
+      try { r = await keysApi(s, { text, enter: true }); } catch (e) { if (!e.old) throw e; r = await post(dev, `/sessions/${id}/message`, { text }); }
+    } else r = await post(dev, `/sessions/${id}/message`, { text });
+  } catch (e) {
+    // Typed but Enter not pressed: the words are in Claude Code's box. Say
+    // so where the message would have shown, with a way to send it.
+    const typed = /typed .*not sent/i.test(e.message);
+    if (typed && text) {
+      setQueued(id, [...queued(id).filter((q) => q.text !== text), { text, at: Date.now(), failed: 'typed' }]);
+      paintQueued(s);
+      if (override == null && input) { input.value = ''; input.style.height = ''; }
     }
-    return post(dev, `/sessions/${id}/message`, { text });
-  });
-  if (r) {
-    input.value = '';
-    input.style.height = '';
-    if (busyNow && !raw) { setQueued(id, [...queued(id), { text, at: Date.now() }]); paintQueued(s); }
-    if (S.transcript.id === id) S.transcript.view?.follow();
-    upsert(dev, r);
-    paint('session');
-    kick();
+    ctx.toast?.('err', typed ? 'Typed but not sent' : 'Not sent', typed ? 'It is in the terminal\'s input box: use "Send it" under the transcript, or press Enter in the terminal.' : e.message);
+  } finally {
+    S.busy.delete(key);
+    updateComposer(session(id) || s);
   }
+  if (!r) return;
+  if (override == null && input) { input.value = ''; input.style.height = ''; }
+  if (files) { clearAttachments(id); paintTray(s); }
+  if (S.transcript.id === id) S.transcript.view?.follow();
+  upsert(dev, r);
+  paint('session');
+  kick();
 }
 
 async function rename(s) {
@@ -2639,6 +3000,7 @@ export async function mountClaude(el0, context) {
   await load();
   routeClaude();
   listen();
+  watchStream();
 }
 
 export function unmountClaude() {
@@ -2653,5 +3015,6 @@ export function unmountClaude() {
   stopLogin();
   sse?.stop();
   sse = null;
+  unwatchStream();
   root = null;
 }
