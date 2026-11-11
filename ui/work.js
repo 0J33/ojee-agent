@@ -608,43 +608,76 @@ async function answer(api, item, action, text = '') {
   rerenderRef();
 }
 
+const ACT_WORD = { approve: 'Approved', decline: 'Declined', done: 'Done', reply: 'Replied', snooze: 'Snoozed' };
+
+/**
+ * One thing that waits on the owner: what it is, why it needs him, where it
+ * came from and how old it is; then a segmented row of quick answers and a
+ * reply field that opens into a box on focus. Answered, the row says what
+ * was answered and that the sweep acts next, with a way to change it.
+ */
 function needsCard(api, item) {
   const r = replyFor(item.id);
-  const box = el('textarea', { class: 'textarea wk-reply-in', rows: '2', placeholder: 'Reply to Claude about this', 'aria-label': `Reply about ${item.title}`, oninput: (e) => { drafts[item.id] = e.currentTarget.value; } });
-  box.value = drafts[item.id] || '';
-  const ACT = { approve: 'Approved', decline: 'Declined', done: 'Done', reply: 'Replied', snooze: 'Snoozed' };
-  return el('div', { class: `wk-need${r ? ' is-answered' : ''}` },
-    el('div', { class: 'wk-need-main' },
-      el('strong', { class: 'wk-need-title' }, item.title),
-      item.body ? el('p', { class: 'meta wk-need-body' }, item.body) : null,
-      item.link ? el('a', { class: 'wk-open', href: item.link, target: '_blank', rel: 'noopener' }, 'Open') : null),
-    r ? el('div', { class: 'wk-need-ans' },
-      el('span', { class: 'wk-stage wk-stage--live' }, ACT[r.action] || 'Answered'),
-      r.text ? el('span', { class: 'meta' }, `“${r.text}”`) : null,
-      el('span', { class: 'meta' }, `${agoMs(Date.now() - r.at)} · waiting for the sweep`),
-      el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: async () => { try { await api(`/work/replies/${encodeURIComponent(item.id)}`, { method: 'DELETE' }); replies = (await api('/work/replies'))?.replies || []; } catch (e) { flash('err', 'Not changed', e.message); } rerenderRef(); } }, 'Change'))
-      : el('div', { class: 'wk-need-form' },
-        // The reply box opens on Reply, so a list of decisions stays short.
-        (box.hidden = !drafts[item.id], box),
-        el('div', { class: 'wk-acts' },
-          el('button', { class: 'btn btn--sm', type: 'button', onclick: () => {
-            if (box.hidden) { box.hidden = false; box.focus(); return; }
-            if (!box.value.trim()) { box.focus(); flash('err', 'Write a reply first', 'Or pick Approve, Decline, Done or Snooze.'); return; }
-            answer(api, item, 'reply', box.value.trim());
-          } }, 'Reply'),
-          el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => answer(api, item, 'approve', box.value.trim()) }, 'Approve'),
-          el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => answer(api, item, 'decline', box.value.trim()) }, 'Decline'),
-          el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => answer(api, item, 'done', box.value.trim()) }, 'Done'),
-          el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Hide it for a day', onclick: () => answer(api, item, 'snooze') }, 'Snooze'))));
+  const head = el('div', { class: 'wk-need-head' },
+    el('span', { class: `wk-need-mark${r ? ' is-answered' : ''}`, 'aria-hidden': 'true' }),
+    el('span', { class: 'wk-need-title' }, item.title),
+    item.at ? el('span', { class: 'wk-need-age' }, agoMs(Date.now() - item.at)) : null);
+  const meta = el('div', { class: 'wk-need-meta' },
+    el('span', {}, item.source === 'plan' ? 'From the plan' : 'From Claude'),
+    item.link ? el('a', { href: item.link, target: '_blank', rel: 'noopener' }, 'Open the source') : null);
+  if (r) {
+    return el('div', { class: 'wk-need is-answered' }, head,
+      item.body ? el('p', { class: 'wk-need-why' }, item.body) : null,
+      el('div', { class: 'wk-need-ans' },
+        el('span', { class: 'wk-need-word' }, ACT_WORD[r.action] || 'Answered'),
+        r.text ? el('span', { class: 'wk-need-quote' }, r.text) : null,
+        el('span', { class: 'wk-need-wait' }, `${agoMs(Date.now() - r.at)} · Claude acts on it in the next sweep`),
+        el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: async () => {
+          try { await api(`/work/replies/${encodeURIComponent(item.id)}`, { method: 'DELETE' }); replies = (await api('/work/replies'))?.replies || []; } catch (e) { flash('err', 'Not changed', e.message); }
+          rerenderRef();
+        } }, 'Change')));
+  }
+  const field = el('textarea', {
+    class: 'textarea wk-reply-in', rows: '1', placeholder: 'Reply to Claude…', 'aria-label': `Reply about ${item.title}`,
+    oninput: (e) => { drafts[item.id] = e.currentTarget.value; form.classList.toggle('has-text', !!e.currentTarget.value.trim()); },
+    onfocus: () => form.classList.add('is-open'),
+    onblur: () => { if (!field.value.trim()) form.classList.remove('is-open'); },
+    onkeydown: (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && field.value.trim()) { e.preventDefault(); answer(api, item, 'reply', field.value.trim()); } },
+  });
+  field.value = drafts[item.id] || '';
+  const quick = (action, label, title) => el('button', { class: 'wk-seg-btn', type: 'button', title, onclick: () => answer(api, item, action, field.value.trim()) }, label);
+  const form = el('div', { class: `wk-need-form${field.value ? ' is-open has-text' : ''}` },
+    el('div', { class: 'wk-seg', role: 'group', 'aria-label': 'Quick answers' },
+      quick('approve', 'Approve', 'Yes: go ahead'),
+      quick('decline', 'Decline', 'No: do not do it'),
+      quick('done', 'Done', 'I have done my part'),
+      quick('snooze', 'Snooze', 'Hide it for a day')),
+    el('div', { class: 'wk-reply' }, field,
+      el('div', { class: 'wk-reply-acts' },
+        el('span', { class: 'wk-reply-hint' }, 'Ctrl+Enter sends'),
+        el('button', { class: 'btn btn--sm', type: 'button', onpointerdown: (e) => e.preventDefault(), onclick: () => {
+          if (!field.value.trim()) { field.focus(); return; }
+          answer(api, item, 'reply', field.value.trim());
+        } }, 'Send reply'))));
+  return el('div', { class: 'wk-need' }, head, item.body ? el('p', { class: 'wk-need-why' }, item.body) : null, meta, form);
 }
 
 function needsYou(api, m) {
   const items = needsItems(m);
   const open = items.filter((i) => !replyFor(i.id)).length;
+  const done = replies.filter((r) => r.handled).slice(0, 5);
   return el('section', { class: 'wk-section wk-needs' },
-    el('div', { class: 'wk-h-row' }, el('h3', { class: 'wk-h' }, 'Needs you', open ? el('span', { class: 'wk-unread' }, `${open} open`) : null)),
+    el('div', { class: 'wk-needs-head' },
+      el('h3', { class: 'wk-h' }, 'Needs you'),
+      el('span', { class: `wk-needs-count${open ? ' is-open' : ''}` }, open ? `${open} waiting` : items.length ? 'All answered' : 'Clear')),
     items.length ? el('div', { class: 'wk-need-list' }, items.map((i) => needsCard(api, i)))
-      : el('p', { class: 'meta' }, 'Nothing waits on you. Decisions Claude needs from you show up here, each with a reply box.'));
+      : el('div', { class: 'wk-empty' }, el('strong', {}, 'Nothing waits on you.'), el('span', {}, 'When Claude needs a decision it shows here, with quick answers and a reply box.')),
+    done.length ? el('details', { class: 'wk-handled' },
+      el('summary', {}, `Handled recently (${done.length})`),
+      done.map((r) => el('div', { class: 'wk-handled-row' },
+        el('span', { class: 'wk-need-word' }, ACT_WORD[r.action] || 'Answered'),
+        el('span', { class: 'wk-handled-title' }, r.title || r.id),
+        r.note ? el('span', { class: 'wk-handled-note' }, r.note) : null))) : null);
 }
 
 /* ── Activity: what was sent for you, to whom, and the replies ──────── */

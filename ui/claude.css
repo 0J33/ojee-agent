@@ -806,205 +806,179 @@ button.ag-cl-row:hover { background: var(--accent-03); }
 .ag-cl-live-sugt { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); font-style: italic; }
 .ag-cl-live-sug .btn { flex: none; min-height: 30px; padding: 2px 10px; }
 
-/* ── 11 Nov: the message box, the explorer, paths, thinking ─────────── */
+/* ── 11 Nov: the chat, the message box, the explorer, background work ──
+   On spec (ojee-console DESIGN.md, ojee-ui2): Geist Mono only; body 14px /
+   1.6; ink for content, ink-2 for names and secondary lines, dim only for
+   chrome micro-type; hue only for a state; 0 radius; the 4/8/16/24/40
+   rhythm; 44px hit areas. The chat uses the full width of its pane. */
 
-/* Thinking is a button row now (Safari would not open a block <summary>). */
+/* Head: the title first, its facts in one quiet line. */
+.ag-cl-head { padding: var(--s-2) var(--s-3); gap: var(--s-2) var(--s-3); background: transparent; border: 0; border-bottom: 1px solid var(--line-2); }
+.ag-cl-title { font-size: 1rem; font-weight: 400; line-height: 1.35; }
+.ag-cl-chips { gap: var(--s-1) var(--s-2); }
+.ag-cl-chips > .ag-cl-chip { padding: 2px 0; border: 0; background: transparent; font-size: 0.7rem; color: var(--ink-2); }
+.ag-cl-chips > .ag-cl-chip + .ag-cl-chip::before { content: '·'; margin-right: var(--s-2); color: var(--dim); }
+.ag-cl-chips > .ag-cl-chip--btn:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.ag-cl-chip--path { max-width: 100%; }
+.ag-cl-callouts:empty { display: none; }
+
+/* The chat: the full width of the pane, comfortable padding, no column. */
+.ag-cl-txwrap { background: var(--bg); border: 0; border-top: 1px solid var(--line-2); }
+.ag-cl-transcript { padding: var(--s-3) 56px var(--s-4) var(--s-4); scroll-padding-bottom: var(--s-4); }
+.ag-cl-t-top, .ag-cl-t-list, .ag-cl-t-pending { max-width: none; margin-inline: 0; }
+.ag-cl-t-list { gap: var(--s-1); }
+.ag-cl-t-head { min-height: 24px; gap: var(--s-2); }
+.ag-cl-t-who { font-size: 0.6rem; font-weight: 400; letter-spacing: 0.16em; color: var(--ink-2); }
+.ag-cl-t-time { font-size: 0.6rem; }
+/* Your turns: a panel face across the width, so a turn change reads at a glance. */
+.ag-cl-t-user { margin-top: var(--s-4); margin-bottom: var(--s-1); padding: var(--s-2) var(--s-3) var(--s-3); background: var(--panel); border: 1px solid var(--line-2); border-left: 1px solid var(--line-strong); }
+.ag-cl-t-text { font-size: 0.875rem; line-height: 1.6; }
+.ag-cl-t-asst { gap: var(--s-1); padding: var(--s-2) 0 var(--s-1); }
+.ag-cl-t-asst .ag-cl-md { font-size: 0.875rem; line-height: 1.6; gap: var(--s-2); color: var(--ink); }
+.ag-cl-md .ag-cl-md-c { padding: 1px 4px; background: var(--panel); }
+
+/* Tools and thinking: quiet one-line rows on a hairline thread. */
+.ag-cl-t-tool, .ag-cl-t-think { border: 0; background: transparent; margin-left: var(--s-1); padding-left: var(--s-2); border-left: 1px solid var(--line-2); font-family: var(--mono); }
+.ag-cl-t-tool + .ag-cl-t-tool { margin-top: 0; }
+.ag-cl-t-sum { padding: 2px var(--s-2) 2px 0; font-size: 0.7rem; color: var(--ink-2); }
+.ag-cl-t-sumrow { min-height: 32px; }
+.ag-cl-t-sum:hover { background: var(--accent-03); color: var(--ink); }
+.ag-cl-t-name { font-weight: 700; color: var(--ink-2); }
+.ag-cl-t-what { color: var(--ink-2); }
+.ag-cl-t-tool[open] { padding-bottom: var(--s-2); }
+.ag-cl-t-tool[open] > .ag-cl-t-sum .ag-cl-t-name { color: var(--ink); }
+.ag-cl-t-tool.is-bad { border-left-color: var(--err-line); }
+.ag-cl-t-tool.is-live { border-left-color: var(--accent); }
+.ag-cl-t-tool.is-flash { background: var(--accent-08); }
+.ag-cl-t-body { padding: var(--s-1) 0 var(--s-1) var(--s-4); }
+.ag-cl-t-pre, .ag-cl-diff, .ag-cl-t-cmd { background: var(--panel); border-color: var(--line-2); }
 .ag-cl-t-thinksum { display: block; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-.ag-cl-t-thinksum:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+.ag-cl-t-thinksum:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ag-cl-t-think { font-size: 0.7rem; color: var(--ink-2); }
 .ag-cl-t-think.is-empty { display: block; }
 .ag-cl-t-think .ag-cl-t-chev .ic { width: 12px; height: 12px; }
 .ag-cl-t-think.is-open .ag-cl-t-chev { transform: rotate(90deg); }
 .ag-cl-t-think.is-open .ag-cl-t-thinkprev { display: none; }
+.ag-cl-t-think.is-empty .ag-cl-t-thinkrow { min-height: 24px; }
+.ag-cl-t-think.is-empty .ag-cl-t-chev { visibility: hidden; }
+.ag-cl-t-thinkrow { min-height: 32px; }
+.ag-cl-t-thinkbody { border-left: 0; padding-left: var(--s-4); margin: 2px 0 var(--s-2); font-style: normal; }
 .ag-cl-t-thinkbody[hidden] { display: none; }
+.ag-cl-t-thinkbody .ag-cl-md { font-size: 0.8rem; color: var(--ink-2); }
+.ag-cl-t-turn { padding: var(--s-1) 0 2px; }
+.ag-cl-t-note { margin: var(--s-3) 0; }
 
-/* The message box: the field on its own row, the buttons in a row under it. */
+/* Pasted text: one row like Claude Code's "[Pasted text #1 +N lines]". */
+.ag-cl-t-paste { display: flex; align-items: center; gap: var(--s-2); width: 100%; min-height: 44px; margin: var(--s-1) 0; padding: var(--s-1) var(--s-2); border: 1px solid var(--line-strong); background: transparent; color: var(--ink-2); font: inherit; font-size: 0.7rem; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; }
+.ag-cl-t-paste:hover { color: var(--ink); border-color: var(--line-hover); background: var(--accent-03); }
+.ag-cl-t-paste.is-open .ag-cl-t-chev { transform: rotate(90deg); }
+.ag-cl-t-paste-k { flex: none; color: var(--ink); }
+.ag-cl-t-paste-n { flex: none; }
+.ag-cl-t-paste-prev { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--dim); }
+.ag-cl-t-paste-body { margin: 0; max-height: 360px; overflow: auto; padding: var(--s-2); background: var(--panel); font-size: 0.7rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
+.ag-cl-t-paste-body[hidden] { display: none; }
+
+/* Messages not in the conversation yet. */
+.ag-cl-t-user.is-pending { opacity: 1; border: 1px dashed var(--line-strong); background: transparent; }
+.ag-cl-t-user.is-stuck { border: 1px solid var(--warn); }
+.ag-cl-t-queued { color: var(--ink-2); }
+.ag-cl-t-user.is-stuck .ag-cl-t-queued { color: var(--warn); }
+.ag-cl-t-pendacts { display: flex; gap: var(--s-2); flex-wrap: wrap; margin-top: var(--s-2); }
+
+/* The message box: pinned to the bottom of the session; the field on its own row, the buttons under it. */
+.ag-cl-detail:not(.is-max):not(.is-kb) > .ag-cl-compose { position: sticky; bottom: 0; z-index: 4; padding: var(--s-2) 0; background: var(--bg); border-top: 1px solid var(--line-2); }
+.ag-cl-compose { gap: var(--s-2); }
 .ag-cl-compose-row { display: block; }
-.ag-cl-input.textarea { display: block; width: 100%; flex: none; min-height: 44px; max-height: 200px; overflow-y: auto; overscroll-behavior: contain; }
-.ag-cl-compose.has-ghost .ag-cl-input::placeholder { font-style: italic; color: var(--ink-2); opacity: 0.75; }
-.ag-cl-tools { display: flex; align-items: center; gap: 4px; min-width: 0; flex-wrap: nowrap; }
-.ag-cl-tools > .btn { flex: none; height: 36px; min-height: 36px; }
-.ag-cl-tools .ag-cl-compose-note, .ag-cl-tools .ag-cl-ghosthint { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.62rem; }
+.ag-cl-input.textarea { display: block; width: 100%; flex: none; min-height: 44px; max-height: 200px; padding: 11px var(--s-3); line-height: 1.5; font-size: 0.875rem; overflow-y: auto; overscroll-behavior: contain; }
+.ag-cl-compose.has-ghost .ag-cl-input::placeholder { color: var(--ink-2); font-style: italic; }
+.ag-cl-live { background: transparent; border: 0; padding: 0 2px; min-height: 24px; }
+.ag-cl-tools { display: flex; align-items: center; gap: var(--s-1); min-width: 0; }
+.ag-cl-tools > .btn { flex: none; min-height: 44px; }
+.ag-cl-tools .ag-cl-compose-note, .ag-cl-tools .ag-cl-ghosthint { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: var(--s-1); }
 .ag-cl-tools .ag-cl-ghosthint[hidden] { display: none; }
 .ag-cl-tools .ag-cl-ghosthint:not([hidden]) ~ .ag-cl-compose-note, .ag-cl-tools .ag-cl-compose-note:empty { display: none; }
 .ag-cl-tools .ag-cl-stopbtn { margin-left: auto; }
-.ag-cl-tools .ag-cl-send { margin-left: auto; min-width: 76px; justify-content: center; }
+.ag-cl-tools .ag-cl-send { margin-left: auto; min-width: 88px; justify-content: center; }
 .ag-cl-tools .ag-cl-stopbtn:not([hidden]) + .ag-cl-send { margin-left: 0; }
-.ag-cl-modebtn { font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.02em; text-transform: none; padding-inline: 10px; max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-cl-modebtn { max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-cl-modebtn[hidden] { display: none; }
-.ag-cl-compose-bar:has(.ag-cl-compose-hint:only-child) { min-height: 0; }
 
-/* Attachments waiting in the box, previewed until Send. */
-.ag-cl-tray { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0; }
+/* Attachments, previewed until Send. */
+.ag-cl-tray { display: flex; gap: var(--s-2); overflow-x: auto; }
 .ag-cl-tray[hidden] { display: none; }
-.ag-cl-att { position: relative; flex: none; display: flex; align-items: center; height: 56px; max-width: 220px; border: 1px solid var(--line-strong); background: var(--bg-2); }
+.ag-cl-att { position: relative; flex: none; display: flex; align-items: center; height: 56px; max-width: 240px; border: 1px solid var(--line-strong); background: var(--panel); }
 .ag-cl-att.is-img { width: 56px; }
 .ag-cl-att img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.ag-cl-att-file { display: grid; grid-template-columns: 18px minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 6px; align-items: center; padding: 4px 26px 4px 8px; min-width: 0; font-family: var(--mono); font-size: 0.64rem; }
+.ag-cl-att-file { display: grid; grid-template-columns: 16px minmax(0, 1fr); grid-template-rows: auto auto; column-gap: var(--s-2); align-items: center; padding: var(--s-1) 32px var(--s-1) var(--s-2); min-width: 0; font-size: 0.7rem; }
 .ag-cl-att-file .ic { grid-row: span 2; width: 16px; height: 16px; }
 .ag-cl-att-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
-.ag-cl-att-size { color: var(--dim); }
-.ag-cl-att-x { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line-strong); background: var(--bg-1); color: var(--ink); font: 700 0.85rem/1 var(--mono); cursor: pointer; }
+.ag-cl-att-size { color: var(--ink-2); }
+.ag-cl-att-x { position: absolute; top: 0; right: 0; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-left: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); background: var(--bg); color: var(--ink); font: inherit; cursor: pointer; }
+.ag-cl-att-x::after { content: ''; position: absolute; inset: -10px; }
 
-/* Slash list: wider names (plugin skills), and where each comes from. */
+/* Slash list: every command and skill, and where each comes from. */
 .ag-cl-slash-item { grid-template-columns: minmax(0, 24ch) minmax(0, 1fr) auto; }
 .ag-cl-slash-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ag-cl-slash-src { font-size: 0.55rem; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; }
+.ag-cl-slash-src { font-size: 0.6rem; color: var(--dim); text-transform: uppercase; letter-spacing: 0.16em; white-space: nowrap; }
 
-/* "In the terminal, not sent" on the live line, with Send it. */
-.ag-cl-live-draft { display: inline-flex; align-items: center; gap: 6px; flex: 1 1 100%; min-width: 0; padding: 4px 6px; white-space: nowrap; }
-.ag-cl-live-draft .btn { flex: none; min-height: 28px; padding: 2px 10px; }
-
-/* Messages that did not go: say so, and offer the way out. */
-.ag-cl-t-user.is-stuck { opacity: 0.9; border-color: var(--warn); }
-.ag-cl-t-pendacts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
-.ag-cl-t-pendacts:empty { display: none; }
+/* "In the terminal, not sent", with Send it. */
+.ag-cl-live-draft { display: inline-flex; align-items: center; gap: var(--s-2); flex: 1 1 100%; min-width: 0; padding: var(--s-1) var(--s-2); white-space: nowrap; }
+.ag-cl-live-sugk { flex: none; font-size: 0.6rem; letter-spacing: 0.16em; text-transform: uppercase; }
+.ag-cl-live-sugt { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
 
 /* Paths: links to the explorer. */
-.ag-cl-path { color: inherit; text-decoration: underline; text-decoration-style: dotted; text-decoration-color: var(--line-strong); text-underline-offset: 2px; cursor: pointer; overflow-wrap: anywhere; }
-.ag-cl-path:hover, .ag-cl-path:focus-visible { color: var(--accent); text-decoration-color: currentColor; }
+.ag-cl-path { color: inherit; text-decoration: underline dotted var(--line-strong); text-underline-offset: 3px; cursor: pointer; overflow-wrap: anywhere; }
+.ag-cl-path:hover, .ag-cl-path:focus-visible { color: var(--ink); text-decoration-color: currentColor; }
 
-/* The session's folder: cut at the front in claude.js; the whole path is its title and the explorer. */
-.ag-cl-chip--path { max-width: 100%; }
-
-/* The explorer sheet. */
+/* The explorer. */
 .ag-cl-ex { min-width: min(720px, 86vw); max-width: 100%; }
-.ag-cl-ex-head { display: grid; gap: 6px; }
-.ag-cl-ex-path { font-family: var(--mono); font-size: 0.72rem; color: var(--ink); overflow-wrap: anywhere; word-break: break-all; user-select: all; }
-.ag-cl-ex-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.ag-cl-ex-head { display: grid; gap: var(--s-2); }
+.ag-cl-ex-path { font-size: 0.8rem; color: var(--ink); overflow-wrap: anywhere; word-break: break-all; user-select: all; }
+.ag-cl-ex-acts { display: flex; gap: var(--s-2); flex-wrap: wrap; }
 .ag-cl-ex-body { max-height: 60vh; overflow: auto; overscroll-behavior: contain; }
 .ag-cl-ex-list { display: grid; }
-.ag-cl-ex-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; align-items: center; min-height: 36px; padding: 4px 8px; border: 0; border-bottom: 1px solid var(--line-2); background: none; color: var(--ink); font-family: var(--mono); font-size: 0.72rem; text-align: left; cursor: pointer; }
+.ag-cl-ex-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: var(--s-2); align-items: center; min-height: 44px; padding: 0 var(--s-2); border: 0; border-bottom: 1px solid var(--line-2); background: none; color: var(--ink); font: inherit; font-size: 0.8rem; text-align: left; cursor: pointer; }
 .ag-cl-ex-row:hover { background: var(--accent-03); }
-.ag-cl-ex-row .ic { width: 16px; height: 16px; color: var(--dim); }
+.ag-cl-ex-row .ic { width: 16px; height: 16px; color: var(--ink-2); }
 .ag-cl-ex-row.is-hidden { color: var(--ink-2); }
 .ag-cl-ex-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ag-cl-ex-meta { color: var(--dim); font-size: 0.62rem; }
-.ag-cl-ex-pre { margin: 0; padding: 8px 0; font-family: var(--mono); font-size: 0.68rem; line-height: 1.5; white-space: pre; overflow-x: auto; }
+.ag-cl-ex-meta { color: var(--ink-2); font-size: 0.7rem; }
+.ag-cl-ex-pre { margin: 0; padding: var(--s-2) 0; font-size: 0.7rem; line-height: 1.6; white-space: pre; overflow-x: auto; }
 .ag-cl-ex-line { display: block; }
 .ag-cl-ex-line.is-hit { background: var(--accent-08); }
-.ag-cl-ex-ln { display: inline-block; min-width: 4ch; margin-right: 10px; color: var(--dim); text-align: right; user-select: none; }
+.ag-cl-ex-ln { display: inline-block; min-width: 4ch; margin-right: var(--s-2); color: var(--dim); text-align: right; user-select: none; }
 .ag-cl-ex-img { max-width: 100%; max-height: 56vh; display: block; }
 
+/* Sessions and background work. */
+.ag-cl-bgcount { min-width: 18px; padding: 0 var(--s-1); background: var(--accent); color: var(--on-accent); text-align: center; }
+.ag-cl-bgcount[hidden] { display: none; }
+.ag-cl-bg { display: grid; gap: var(--s-4); min-width: min(720px, 86vw); max-width: 100%; max-height: 66vh; overflow: auto; overscroll-behavior: contain; }
+.ag-cl-bg-work { display: grid; gap: var(--s-4); }
+.ag-cl-bg-group { display: grid; gap: var(--s-1); }
+.ag-cl-bg-h { display: flex; align-items: baseline; gap: var(--s-2); margin: 0; font-size: 0.68rem; font-weight: 400; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-2); }
+.ag-cl-bg-n { color: var(--dim); letter-spacing: 0.1em; }
+.ag-cl-bg-list { display: grid; border-top: 1px solid var(--line-2); }
+.ag-cl-bg-row { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: var(--s-2) var(--s-3); align-items: center; min-height: 48px; padding: var(--s-2) 0; border: 0; border-bottom: 1px solid var(--line-2); background: none; color: var(--ink); font: inherit; text-align: left; }
+button.ag-cl-bg-row { cursor: pointer; }
+button.ag-cl-bg-row:hover { background: var(--accent-03); }
+.ag-cl-bg-row.is-current { background: var(--accent-08); }
+.ag-cl-bg-main { display: grid; gap: 2px; min-width: 0; }
+.ag-cl-bg-name { font-size: 0.875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-cl-bg-meta { font-size: 0.7rem; color: var(--ink-2); }
+.ag-cl-bg-sum { font-size: 0.7rem; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-cl-bg-row.is-failed .ag-cl-bg-meta { color: var(--err); }
+.ag-cl-bg-acts { display: flex; gap: var(--s-1); flex-wrap: wrap; justify-content: flex-end; }
+
 @media (pointer: coarse), (hover: none), (max-width: 560px) {
-  /* Smaller on a phone: one line, a little padding, a lower cap. */
-  .ag-cl-input.textarea { min-height: 40px; max-height: 120px; padding: 8px 10px; line-height: 1.35; }
-  .ag-cl-tools > .btn { height: 38px; min-height: 38px; }
+  .ag-cl-input.textarea { font-size: 16px; min-height: 44px; max-height: 120px; padding: 10px var(--s-2); }
+  .ag-cl-head { padding: var(--s-2); }
+  .ag-cl-transcript { padding: var(--s-2) 48px var(--s-3) var(--s-2); }
+  .ag-cl-t-user { margin-top: var(--s-3); padding: var(--s-2); }
+  .ag-cl-t-tool, .ag-cl-t-think { margin-left: 0; padding-left: var(--s-1); }
   .ag-cl-tools .ag-cl-compose-note { display: none; }
   .ag-cl-att { height: 48px; }
   .ag-cl-att.is-img { width: 48px; }
-  .ag-cl-ex { min-width: 0; }
-  .ag-cl-ex-body { max-height: 62vh; }
+  .ag-cl-ex, .ag-cl-bg { min-width: 0; }
+  .ag-cl-bg-row { grid-template-columns: 8px minmax(0, 1fr); }
+  .ag-cl-bg-acts { grid-column: 2; justify-content: flex-start; }
 }
-
-/* ── 11 Nov: a calmer Claude view ─────────────────────────────────────
-   The owner found it crowded and hard on the eyes. The system stays
-   monochrome and square; what changes is density and reading:
-   - prose (replies, your messages, thinking) is set in the platform's
-     sans at a reading size, because paragraphs in a small mono tire the
-     eye; mono stays for code, commands, paths, tools and chrome;
-   - one centred reading column, generous space between turns, and
-     hairlines instead of boxes;
-   - tool calls are quiet one-line rows on a thread line under the reply
-     they belong to; open, they show their input and output;
-   - your turns sit right, in a tinted block; Claude's sit left, unboxed;
-   - the message box is pinned to the bottom of the session. */
-
-.ag-cl-detail { --ag-prose: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
-
-/* Head: the title reads first, the facts after it in one quiet line. */
-.ag-cl-head { padding: 12px 16px; gap: 10px 16px; background: transparent; border: 0; border-bottom: 1px solid var(--line-2); }
-.ag-cl-title { font-size: 1rem; font-family: var(--ag-prose); font-weight: 650; letter-spacing: -0.005em; }
-.ag-cl-chips { gap: 4px 10px; }
-.ag-cl-chips > .ag-cl-chip { padding: 2px 0; border: 0; background: transparent; font-size: 0.66rem; color: var(--dim); }
-.ag-cl-chips > .ag-cl-chip + .ag-cl-chip::before { content: '·'; margin-right: 10px; color: var(--line-strong); }
-.ag-cl-chips > .ag-cl-chip--btn:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
-.ag-cl-callouts:empty { display: none; }
-
-/* The reading column. */
-.ag-cl-txwrap { background: var(--bg-0, var(--bg)); border: 0; border-top: 1px solid var(--line-2); }
-.ag-cl-transcript { padding: 20px 56px 28px 20px; scroll-padding-bottom: 24px; }
-.ag-cl-t-top, .ag-cl-t-list, .ag-cl-t-pending { max-width: 780px; margin-inline: auto; }
-.ag-cl-t-list { gap: 2px; }
-
-/* Turns. */
-.ag-cl-t-head { min-height: 20px; gap: 8px; }
-.ag-cl-t-who { font-size: 0.56rem; font-weight: 700; letter-spacing: 0.12em; }
-.ag-cl-t-user {
-  justify-self: end; width: fit-content; max-width: min(88%, 680px); min-width: min(240px, 100%);
-  margin-top: 28px; margin-bottom: 6px; padding: 10px 14px 12px;
-  background: var(--bg-2); border: 0; border-left: 0;
-}
-.ag-cl-t-user .ag-cl-t-head { justify-content: flex-start; }
-.ag-cl-t-text { font-family: var(--ag-prose); font-size: 0.9rem; line-height: 1.55; }
-.ag-cl-t-asst { gap: 6px; padding: 12px 0 4px; }
-.ag-cl-t-asst .ag-cl-md { font-family: var(--ag-prose); font-size: 0.92rem; line-height: 1.65; gap: 12px; color: var(--ink); }
-.ag-cl-md code, .ag-cl-md .ag-cl-md-c, .ag-cl-md pre, .ag-cl-md-code, .ag-cl-md-table { font-family: var(--mono); }
-.ag-cl-md .ag-cl-md-c { font-size: 0.86em; padding: 1px 5px; background: var(--bg-2); }
-.ag-cl-md-h1 { font-size: 1.15em; }
-.ag-cl-md-h2 { font-size: 1.06em; }
-.ag-cl-md-li { line-height: 1.6; }
-.ag-cl-md-table { font-size: 0.78rem; }
-
-/* Tools and thinking: a quiet thread under the reply. */
-.ag-cl-t-tool, .ag-cl-t-think {
-  border: 0; background: transparent; margin-left: 6px; padding-left: 12px; border-left: 1px solid var(--line-2);
-}
-.ag-cl-t-tool + .ag-cl-t-tool { margin-top: 0; }
-.ag-cl-t-sum { padding: 2px 8px 2px 0; font-size: 0.7rem; color: var(--dim); }
-.ag-cl-t-sumrow { min-height: 28px; }
-.ag-cl-t-sum:hover { background: transparent; color: var(--ink); }
-.ag-cl-t-sum:hover .ag-cl-t-name, .ag-cl-t-sum:hover .ag-cl-t-what { color: var(--ink); }
-.ag-cl-t-name { font-weight: 600; color: var(--ink-2); }
-.ag-cl-t-what { color: var(--dim); }
-.ag-cl-t-tool[open] { padding-bottom: 8px; }
-.ag-cl-t-tool[open] > .ag-cl-t-sum .ag-cl-t-name { color: var(--ink); }
-.ag-cl-t-tool.is-bad { border-left-color: var(--err-line); }
-.ag-cl-t-tool.is-live { border-left-color: var(--accent); }
-.ag-cl-t-body { padding: 4px 0 4px 22px; }
-.ag-cl-t-pre, .ag-cl-diff, .ag-cl-t-cmd { background: var(--bg-1); border-color: transparent; }
-.ag-cl-t-think { font-family: var(--mono); font-size: 0.68rem; }
-.ag-cl-t-thinkbody { border-left: 0; padding-left: 22px; margin: 2px 0 8px; font-style: normal; }
-.ag-cl-t-thinkbody .ag-cl-md { font-family: var(--ag-prose); font-size: 0.84rem; color: var(--ink-2); }
-.ag-cl-t-turn { padding: 6px 0 2px; opacity: 0.8; }
-.ag-cl-t-note { margin: 14px 0; }
-
-/* Pasted text: one chip like Claude Code's "[Pasted text #1 +N lines]". */
-.ag-cl-t-paste {
-  display: flex; align-items: center; gap: 8px; width: 100%; max-width: 100%; min-height: 34px; margin: 4px 0;
-  padding: 4px 10px; border: 1px solid var(--line-strong); background: var(--bg-1);
-  color: var(--ink-2); font-family: var(--mono); font-size: 0.68rem; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden;
-}
-.ag-cl-t-paste:hover { color: var(--ink); border-color: var(--line-hover); }
-.ag-cl-t-paste.is-open .ag-cl-t-chev { transform: rotate(90deg); }
-.ag-cl-t-paste-k { flex: none; color: var(--ink); font-weight: 600; }
-.ag-cl-t-paste-n { flex: none; color: var(--dim); }
-.ag-cl-t-paste-prev { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--dim); }
-.ag-cl-t-paste-body {
-  margin: 0; max-height: 360px; overflow: auto; padding: 8px 10px; background: var(--bg-1);
-  font-family: var(--mono); font-size: 0.68rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2);
-}
-.ag-cl-t-paste-body[hidden] { display: none; }
-.ag-cl-t-user.is-pending { opacity: 0.75; border: 1px dashed var(--line-strong); background: transparent; }
-
-/* The message box: pinned to the bottom of the session, on its own surface. */
-.ag-cl-detail:not(.is-max):not(.is-kb) > .ag-cl-compose {
-  position: sticky; bottom: 0; z-index: 4;
-  padding: 8px 0 10px; background: var(--bg, var(--bg-0)); box-shadow: 0 -1px 0 var(--line-2);
-}
-.ag-cl-compose { gap: 6px; }
-.ag-cl-input.textarea { font-family: var(--ag-prose, inherit); font-size: 0.9rem; line-height: 1.5; background: var(--bg-1); border-color: var(--line-strong); }
-.ag-cl-input.textarea:focus { border-color: var(--ink-2); }
-.ag-cl-live { background: transparent; border: 0; border-bottom: 1px solid var(--line-2); padding: 2px 2px 6px; min-height: 28px; }
-
-@media (pointer: coarse), (hover: none), (max-width: 560px) {
-  .ag-cl-input.textarea { font-size: 16px; }
-  .ag-cl-head { padding: 8px 10px; }
-  .ag-cl-title { font-size: 0.95rem; }
-  .ag-cl-transcript { padding: 12px 48px 20px 12px; }
-  .ag-cl-t-user { max-width: 94%; margin-top: 22px; }
-  .ag-cl-t-text { font-size: 0.88rem; }
-  .ag-cl-t-asst .ag-cl-md { font-size: 0.9rem; }
-  .ag-cl-t-tool, .ag-cl-t-think { margin-left: 2px; padding-left: 8px; }
-}
-.ag-cl-t-think.is-empty .ag-cl-t-thinkrow { min-height: 20px; opacity: 0.7; }
-.ag-cl-t-think.is-empty .ag-cl-t-chev { visibility: hidden; }

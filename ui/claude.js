@@ -1192,6 +1192,12 @@ function paneTabs(s) {
       el('button', { type: 'button', 'aria-pressed': String(!term), onclick: () => switchPane('transcript') }, svg('log'), 'Chat'),
       el('button', { type: 'button', 'aria-pressed': String(term), onclick: () => switchPane('terminal') }, svg('terminal'), 'Terminal')),
     el('div', { class: 'ag-cl-term-bar' },
+      el('button', {
+        class: 'btn btn--ghost btn--sm ag-cl-bgbtn', type: 'button',
+        title: 'Switch session; subagents, background commands and schedules',
+        'aria-label': 'Sessions and background work',
+        onclick: () => openBackground(session(S.detail) || s),
+      }, svg('list'), lbl('Agents'), el('span', { class: 'ag-cl-bgcount' })),
       term ? el('span', { class: 'meta ag-cl-term-state' }, !online(s.device) ? 'offline' : S.termState || (s.alive ? 'connecting…' : 'not running')) : null,
       el('button', {
         class: 'btn btn--ghost btn--sm',
@@ -1649,6 +1655,8 @@ function paintLive(s) {
   const agents = p?.agents || [];
   // Rebuild only on a change, and keep the agents list open across rebuilds:
   // it folded shut every two seconds while a session worked.
+  const bgc = root.querySelector('.ag-cl-bgcount');
+  if (bgc) { const n = runningWork(s); bgc.textContent = n ? String(n) : ''; bgc.hidden = !n; }
   const modeBtn = root.querySelector('.ag-cl-modebtn');
   if (modeBtn) {
     modeBtn.hidden = !(s.alive && p && online(s.device));
@@ -1888,6 +1896,88 @@ async function pickText(s) {
   pre.replaceChildren(...linkified(text || '(the terminal is empty)'));
   requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
   await done;
+}
+
+/* ── sessions, agents and background work ───────────────────────────── */
+
+const dur = (ms) => {
+  if (ms == null || ms < 0) return '-';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+};
+const BG_KIND = { agent: 'Subagent', shell: 'Command', monitor: 'Monitor', schedule: 'Schedule' };
+const BG_DOT = { running: 'live', done: 'ok', failed: 'err', scheduled: 'info', 'no result': null };
+
+/** What runs beside a session: the transcript's record, with the runner's subagent list where it knows better. */
+function workOf(s) {
+  const view = S.transcript.id === s.id ? S.transcript.view : null;
+  const list = view?.backgroundWork?.() || [];
+  const live = S.agents.id === s.id ? S.agents.list || [] : [];
+  for (const w of list) {
+    if (w.kind !== 'agent') continue;
+    const a = live.find((x) => x.toolUseId === w.id);
+    if (!a) continue;
+    w.agentId = a.id;
+    if (a.running) w.status = 'running';
+    else if (w.status === 'running') { w.status = 'done'; w.ended = w.ended || a.modified || null; }
+  }
+  return list;
+}
+const runningWork = (s) => workOf(s).filter((w) => w.status === 'running').length;
+
+/**
+ * The panel: every session to switch to, then this session's subagents,
+ * background commands, monitors and schedules, newest first. Each row has
+ * its state, when it started, how long it ran, and a way to open it.
+ */
+async function openBackground(s) {
+  const body = el('div', { class: 'ag-cl-bg' });
+  const draw = () => {
+    const cur = session(s.id) || s;
+    const work = workOf(cur).slice().reverse();
+    const now = Date.now();
+    const row = (w) => el('div', { class: `ag-cl-bg-row is-${w.status.replace(' ', '-')}` },
+      el('span', { class: BG_DOT[w.status] ? `dot dot--${BG_DOT[w.status]}` : 'dot' }),
+      el('span', { class: 'ag-cl-bg-main' },
+        el('span', { class: 'ag-cl-bg-name', title: w.name }, w.name),
+        el('span', { class: 'ag-cl-bg-meta' }, [BG_KIND[w.kind], w.status, w.started ? `started ${at(w.started)}` : null,
+          w.status === 'running' ? `for ${dur(now - (w.started || now))}` : w.ended ? `took ${dur(w.ended - w.started)}` : null,
+          w.fires ? `fired ${w.fires}×` : null].filter(Boolean).join(' · ')),
+        w.summary && w.status !== 'running' ? el('span', { class: 'ag-cl-bg-sum' }, w.summary) : null),
+      el('span', { class: 'ag-cl-bg-acts' },
+        w.kind === 'agent' ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Read its transcript (read only)', onclick: () => { done(); if (S.pane !== 'transcript') switchPane('transcript'); openAgentFor(cur, w.id); } }, 'Transcript') : null,
+        w.outputFile ? el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: w.outputFile, onclick: () => explore(cur.device, w.outputFile, cur.cwd) }, 'Output') : null,
+        el('button', { class: 'btn btn--ghost btn--sm', type: 'button', title: 'Show the call in the chat', onclick: () => { done(); if (S.pane !== 'transcript') switchPane('transcript'); setTimeout(() => S.transcript.view?.reveal(w.id), 300); } }, 'In chat')));
+    const group = (label, list, empty) => el('section', { class: 'ag-cl-bg-group' },
+      el('h4', { class: 'ag-cl-bg-h' }, label, el('span', { class: 'ag-cl-bg-n' }, String(list.length))),
+      list.length ? el('div', { class: 'ag-cl-bg-list' }, list.map(row)) : el('p', { class: 'meta' }, empty));
+    const sessions = switchable(cur);
+    body.replaceChildren(
+      el('section', { class: 'ag-cl-bg-group' },
+        el('h4', { class: 'ag-cl-bg-h' }, 'Sessions', el('span', { class: 'ag-cl-bg-n' }, String(sessions.length))),
+        el('div', { class: 'ag-cl-bg-list' }, sessions.map((x) => el('button', {
+          class: `ag-cl-bg-row ag-cl-bg-sess${x.id === cur.id ? ' is-current' : ''}`, type: 'button',
+          onclick: () => { done(); if (x.id !== cur.id) go(x.id); },
+        }, online(x.device) ? dot(x.state) : dot('stopped'),
+        el('span', { class: 'ag-cl-bg-main' }, el('span', { class: 'ag-cl-bg-name' }, x.title),
+          el('span', { class: 'ag-cl-bg-meta' }, [multi() ? devLabel(x.device) : null, online(x.device) ? STATE[x.state]?.label || x.state : 'offline',
+            bgOf(x) ? bgText(bgOf(x)) : null, x.lastActivityAt ? `active ${ago(x.lastActivityAt)}` : null].filter(Boolean).join(' · '))),
+        el('span', { class: 'ag-cl-bg-acts meta' }, x.id === cur.id ? 'open' : 'switch'))))),
+      S.transcript.id !== cur.id || !S.transcript.view
+        ? el('p', { class: 'meta' }, 'Open the chat view of this session to list its subagents and background work.')
+        : el('div', { class: 'ag-cl-bg-work' },
+          group('Subagents', work.filter((w) => w.kind === 'agent'), 'No subagents in the loaded part of this conversation.'),
+          group('Background commands and monitors', work.filter((w) => w.kind === 'shell' || w.kind === 'monitor'), 'Nothing ran in the background.'),
+          group('Scheduled', work.filter((w) => w.kind === 'schedule'), 'No wakeups, loops or cron jobs.')));
+  };
+  draw();
+  const timer = setInterval(draw, 3000);
+  const done = () => body.closest('.modal')?.querySelector('.modal-foot button')?.click();
+  const closed = ctx.modal({ title: 'Sessions and background work', body, actions: [{ label: 'Close', value: false, variant: 'ghost' }] });
+  await closed;
+  clearInterval(timer);
 }
 
 /* ── the message box ────────────────────────────────────────────────── */

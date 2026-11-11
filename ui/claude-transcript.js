@@ -15,6 +15,8 @@
 import { copyText } from './claude-term.js';
 
 const STEP = 120;
+/** A task notification's summary comes XML-escaped (sometimes twice): show the words. */
+const unent = (t) => { let x = String(t ?? ''); for (let k = 0; k < 3 && /&(amp|lt|gt|quot|#39);/.test(x); k++) x = x.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&'); return x; };
 
 export function createTranscript({ el, svg, modelLabel, toast, onEarlier, onAgent, onPath }) {
   /* ── paths: every absolute or ~ path is a link that opens the explorer ── */
@@ -380,7 +382,7 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier, onAgen
         return el('div', { class: 'ag-cl-t-err' }, el('div', { class: 'ag-cl-t-head' }, el('span', { class: 'ag-cl-t-who' }, `Request failed · ${m.kind}`), el('span', { class: 'ag-cl-t-time' }, time(m.at))), el('div', { class: 'ag-cl-t-text' }, m.text));
       case 'note':
       default:
-        return el('div', { class: `ag-cl-t-note${m.kind === 'warning' ? ' is-warn' : ''}` }, el('span', {}, m.kind === 'task' ? `Background task: ${m.text}` : m.text));
+        return el('div', { class: `ag-cl-t-note${m.kind === 'warning' ? ' is-warn' : ''}` }, el('span', {}, m.kind === 'task' ? `Background task: ${unent(m.text)}` : m.text));
     }
   }
 
@@ -637,6 +639,68 @@ export function createTranscript({ el, svg, modelLabel, toast, onEarlier, onAgen
           class: `btn ${x.primary ? '' : 'btn--ghost'} btn--sm`, type: 'button', title: x.title || null, onclick: x.run,
         }, x.label))) : null)));
       if (stick) toBottom(true);
+    },
+    /**
+     * Work running beside the conversation, read from the record: subagents
+     * (Agent/Task calls), background commands (Bash run_in_background),
+     * monitors, and schedules (wakeups, loops, cron), each with its state.
+     * A background call returns at once; its end is the task notification
+     * that names it (by tool-use id on a current runner, by its words on an
+     * older one).
+     */
+    backgroundWork() {
+      const ms = (v) => (typeof v === 'number' ? v : Date.parse(v) || null);
+      const notes = items.filter((m) => m.role === 'note' && (m.kind === 'task' || m.kind === 'schedule'));
+      const used = new Set();
+      const out = [];
+      for (const m of items) {
+        if (m.role !== 'tool') continue;
+        const i = m.input || {};
+        let j = {};
+        if (i.json) { try { j = JSON.parse(i.json); } catch { /* clipped */ } }
+        let kind = null;
+        if (m.tool === 'Agent' || m.tool === 'Task') kind = 'agent';
+        else if (m.tool === 'Bash' && i.background) kind = 'shell';
+        else if (/^monitor$/i.test(m.tool)) kind = 'monitor';
+        else if (/schedule|wakeup|cron|loop/i.test(m.tool) && !/delete|list|stop/i.test(m.tool)) kind = 'schedule';
+        if (!kind) continue;
+        const name = kind === 'agent' ? [i.subagent_type, i.description].filter(Boolean).join(': ') || 'Subagent'
+          : kind === 'shell' ? (i.description || String(i.command || '').split('\n')[0].slice(0, 90))
+            : String(j.description || j.prompt || j.command || j.cron || j.schedule || m.text || m.tool).split('\n')[0].slice(0, 90);
+        const words = [i.description, String(i.command || '').slice(0, 40), j.description].filter((w) => w && w.length > 3);
+        const end = notes.find((n) => !used.has(n) && n.kind === 'task' && (n.toolUseId ? n.toolUseId === m.id
+          : ms(n.at) >= ms(m.at) && words.some((w) => String(n.text).includes(w))));
+        if (end) used.add(end);
+        const bg = kind !== 'agent' || i.background;
+        let status;
+        if (end) status = /fail|error|killed|cancel/i.test(`${end.status || ''} ${end.status ? '' : end.text}`) ? 'failed' : 'done';
+        else if (m.result?.error) status = 'failed';
+        else if (kind === 'schedule') status = m.result ? 'scheduled' : 'running';
+        else if (!bg && m.result) status = 'done';
+        else if (m.stale && !bg) status = 'no result';
+        else status = 'running';
+        const fires = kind === 'schedule' ? notes.filter((n) => n.kind === 'schedule' && ms(n.at) >= ms(m.at)).length : 0;
+        out.push({
+          id: m.id, kind, tool: m.tool, name, status,
+          started: ms(m.at), ended: end ? ms(end.at) : (!bg && m.result ? ms(m.result.at) || null : null),
+          outputFile: end?.outputFile || null, summary: end ? unent(end.text) : null, fires,
+        });
+      }
+      return out;
+    },
+    /** Bring a call's row into view and open it. */
+    reveal(id) {
+      const m = items.find((x) => x.role === 'tool' && x.id === id);
+      if (!m) return false;
+      const idx = items.indexOf(m);
+      while (idx < first) earlier();
+      const n = node(m);
+      if (!n.isConnected) return false;
+      if (n.tagName === 'DETAILS' && !n.open) n.open = true;
+      n.scrollIntoView({ block: 'center' });
+      n.classList.add('is-flash');
+      setTimeout(() => n.classList.remove('is-flash'), 1600);
+      return true;
     },
     /** Whether this conversation launched any subagents. */
     hasAgents: () => items.some((m) => m.role === 'tool' && (m.tool === 'Agent' || m.tool === 'Task')),
