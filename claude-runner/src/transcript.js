@@ -94,7 +94,7 @@ function toolInput(name, input) {
     case 'Write': return { file_path: i.file_path, content: c(i.content) };
     case 'Read': return { file_path: i.file_path, offset: i.offset, limit: i.limit };
     case 'TodoWrite': return { todos: (i.todos || []).slice(0, 60).map((t) => ({ content: clip(t.content || t.activeForm || '', 300), status: t.status })) };
-    case 'Task': case 'Agent': return { description: c(i.description, 300), subagent_type: i.subagent_type, prompt: c(i.prompt, 6000) };
+    case 'Task': case 'Agent': return { description: c(i.description, 300), subagent_type: i.subagent_type, prompt: c(i.prompt, 6000), background: !!i.run_in_background };
     default: {
       let j;
       try { j = JSON.stringify(i, null, 2); } catch { j = ''; }
@@ -178,7 +178,8 @@ function toMessages(entries, { detail = false, sidechain = false } = {}) {
       if (/^<local-command-caveat>/.test(text)) continue;
       if (detail && /^\s*<task-notification>/.test(text)) {
         const summary = tag(text, 'summary') || tag(text, 'status') || 'A background task finished';
-        out.push({ role: 'note', kind: 'task', text: clip(summary, 600), status: tag(text, 'status'), at, uuid: e.uuid });
+        // The ids tie it to the call that started it, for the console's background panel.
+        out.push({ role: 'note', kind: 'task', text: clip(summary, 600), status: tag(text, 'status'), toolUseId: tag(text, 'tool-use-id') || null, taskId: tag(text, 'task-id') || null, outputFile: tag(text, 'output-file') || null, at, uuid: e.uuid });
         continue;
       }
       const m = { role: 'user', text, at, uuid: e.uuid };
@@ -202,6 +203,10 @@ function toMessages(entries, { detail = false, sidechain = false } = {}) {
         const m = { role: 'user', text, at: when, uuid: e.uuid, midTurn: true };
         if (detail && Array.isArray(p)) { const n = p.filter((b) => b && b.type === 'image').length; if (n) m.images = n; }
         out.push(m);
+      } else if (kind === 'task-notification' && detail && /<task-notification>/.test(text)) {
+        // A background task that finished mid-turn arrives queued, not as a turn.
+        const summary = tag(text, 'summary') || tag(text, 'status') || 'A background task finished';
+        out.push({ role: 'note', kind: 'task', text: clip(summary, 600), status: tag(text, 'status'), toolUseId: tag(text, 'tool-use-id') || null, taskId: tag(text, 'task-id') || null, outputFile: tag(text, 'output-file') || null, at: when, uuid: e.uuid });
       } else if (kind === 'peer' && detail && text.trim()) {
         const from = /from-name="([^"]+)"/.exec(text)?.[1] || 'another session';
         const body = text.replace(/<\/?cross-session-message[^>]*>/g, '').trim();
