@@ -1429,27 +1429,41 @@ const QUEUE_KEY = 'ag-cl-queued:';
 function queued(id) { try { return JSON.parse(sessionStorage.getItem(QUEUE_KEY + id) || '[]'); } catch { return []; } }
 function setQueued(id, list) { try { if (list.length) sessionStorage.setItem(QUEUE_KEY + id, JSON.stringify(list)); else sessionStorage.removeItem(QUEUE_KEY + id); } catch { /* private window */ } }
 /** Drop the queued messages that have arrived (or are two hours old), then draw the rest. */
+/** The runner keeps the queue (11 Nov runner and later): its session view always carries `outbox`. */
+const runnerQueues = (s) => Array.isArray(s?.outbox);
+// Ids taken back in this tab: hidden at once, even if an older event still lists them.
+const takenIds = new Map();
+const outboxOf = (s) => {
+  const now = Date.now();
+  for (const [k, t] of takenIds) if (now - t > 30000) takenIds.delete(k);
+  return (s.outbox || []).filter((m) => !takenIds.has(m.id));
+};
+
 function paintQueued(s) {
   const view = S.transcript.id === s.id && !S.agents.viewing ? S.transcript.view : null;
-  // Two kinds: messages the runner holds until the turn ends (s.outbox:
-  // they can be sent now, taken back to edit, or removed), and ones that
-  // were typed into the terminal but whose Enter never landed.
+  // Local entries: messages typed into the terminal whose Enter did not land,
+  // and, on an older runner only, messages Claude Code itself queued.
   let local = queued(s.id).filter((q) => Date.now() - q.at < 7200000);
   if (view) local = local.filter((q) => !view.hasUserText(q.text, q.at));
+  if (runnerQueues(s)) local = local.filter((q) => q.failed);
+  else if (!['running', 'starting'].includes(s.state) && view) local = local.filter((q) => q.failed || Date.now() - q.at < 15000);
   setQueued(s.id, local);
   const draft = S.prompt.id === s.id ? S.prompt.data?.draft || '' : '';
   const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
-  const out = (s.outbox || []).map((m) => ({
+  // The runner's queue is the one source: in its order, with its ids, gone
+  // from here the moment it is sent (pushed over the live connection).
+  const out = outboxOf(s).map((m) => ({
     text: m.text, at: m.at, label: 'Queued: goes in when Claude finishes this turn',
     actions: [
-      { label: 'Send now', title: 'Type it in now: Claude reads it at its next step', run: () => outboxAct(s, 'send', m.at) },
-      { label: 'Edit', title: 'Back to the message box (it is not sent)', run: () => editQueued(s, m.at) },
-      { label: 'Remove', title: 'Do not send it', run: () => outboxAct(s, 'take', m.at) },
+      { label: 'Send now', title: 'Type it in now: Claude reads it at its next step', run: () => outboxAct(s, 'send', m.id) },
+      { label: 'Edit', title: 'Back to the message box (it is not sent)', run: () => editQueued(s, m.id) },
+      { label: 'Remove', title: 'Do not send it', run: () => outboxAct(s, 'take', m.id) },
     ],
   }));
-  const stuck = local.map((q) => {
-    const inBox = !!draft && norm(q.text).startsWith(norm(draft).slice(0, 40));
+  const rest = local.map((q) => {
     const drop = () => { setQueued(s.id, queued(s.id).filter((x) => x.at !== q.at)); paintQueued(s); };
+    if (!q.failed) return { text: q.text, at: q.at, label: 'Queued in Claude Code: it goes in after this step', actions: [{ label: 'Hide', title: 'Stop showing it here (it still sends)', run: drop }] };
+    const inBox = !!draft && norm(q.text).startsWith(norm(draft).slice(0, 40));
     return {
       text: q.text, at: q.at, warn: true,
       label: inBox ? 'Not sent: it is in the terminal\'s input box' : 'Not sent',
@@ -1460,26 +1474,40 @@ function paintQueued(s) {
       ],
     };
   });
-  view?.setPending([...out, ...stuck]);
+  view?.setPending([...out, ...rest]);
 }
 
-async function outboxAct(s, what, at) {
+async function outboxAct(s, what, id) {
+  if (what === 'take') takenIds.set(id, Date.now());
   try {
-    const r = await post(s.device, `/sessions/${s.id}/outbox/${what}`, { at });
+    const r = await post(s.device, `/sessions/${s.id}/outbox/${what}`, { id });
     upsert(s.device, r.session || r);
     paint('session');
     if (what === 'send') kick();
   } catch (e) {
+    takenIds.delete(id);
     if (missingRoute(e)) oldRunner(s); else ctx.toast?.('err', 'That did not work', e.message);
+    paint('session');
   }
 }
 
-/** Up in the box (or Edit): the newest queued message comes back to edit. It is never sent by this. */
-async function editQueued(s, at = null) {
+/**
+ * Up in the box (or Edit): the message leaves the runner's queue FIRST, and
+ * only when the runner confirms it was still there does its text come into
+ * the box. If it was already sent (or another tab took it), nothing loads,
+ * so an edit can never go out beside the original.
+ */
+let taking = false;
+async function editQueued(s, id = null) {
   const input = root?.querySelector('.ag-cl-input');
-  if (!input) return false;
+  if (!input || taking) return false;
+  const list = outboxOf(s);
+  const target = id ?? list[list.length - 1]?.id;
+  if (!target) return false;
+  taking = true;
   try {
-    const r = await post(s.device, `/sessions/${s.id}/outbox/take`, { at });
+    const r = await post(s.device, `/sessions/${s.id}/outbox/take`, { id: target });
+    takenIds.set(target, Date.now());
     upsert(s.device, r.session);
     const t = r.message?.text || '';
     input.value = input.value ? `${t}\n${input.value}` : t;
@@ -1488,8 +1516,11 @@ async function editQueued(s, at = null) {
     paint('session');
     return true;
   } catch (e) {
-    if (!/nothing waiting/i.test(e.message)) ctx.toast?.('err', 'Could not take it back', e.message);
+    ctx.toast?.('err', 'Not loaded for editing', /nothing waiting/i.test(e.message) ? 'It was already sent (or taken in another tab).' : e.message);
+    paint('session');
     return false;
+  } finally {
+    taking = false;
   }
 }
 
@@ -2201,9 +2232,16 @@ function composer(s) {
     // Up in an empty box with a message queued: that message comes back here
     // to edit and leaves the queue, as in Claude Code. It never sends.
     const cur0 = session(s.id) || s;
-    if (e.key === 'ArrowUp' && !text.value && !e.shiftKey && (cur0.outbox || []).length) {
+    if (e.key === 'ArrowUp' && !text.value && !e.shiftKey && runnerQueues(cur0) && outboxOf(cur0).length) {
       e.preventDefault();
       editQueued(cur0);
+      return;
+    }
+    // An older runner typed it into Claude Code's own queue, which cannot be
+    // taken back from here: never offer it for editing (it would go twice).
+    if (e.key === 'ArrowUp' && !text.value && !e.shiftKey && !runnerQueues(cur0) && queued(s.id).some((q) => !q.failed)) {
+      e.preventDefault();
+      ctx.toast?.('err', 'Already queued in Claude Code', 'It cannot be edited from here on this runner. Restart ojee-claude to edit queued messages.');
       return;
     }
     // Up and Down in an empty (or recalled) box walk back through what was sent.
@@ -2329,6 +2367,7 @@ async function send(id, override = null) {
   // model switch, into a session that is running. Everything else goes as a
   // message, which also resumes a stopped session and answers a question.
   const raw = text && /^[/!#]/.test(text) && s.alive && cap(dev).keys !== false;
+  const wasBusy = s.alive && ['running', 'starting'].includes(s.state);
   S.busy.add(key);
   updateComposer(s);
   let r = null;
@@ -2355,6 +2394,10 @@ async function send(id, override = null) {
   if (!r) return;
   if (override == null && input) { input.value = ''; input.style.height = ''; }
   if (files) { clearAttachments(id); paintTray(s); }
+  // An older runner types a mid-turn message straight into Claude Code's own
+  // queue: show it here until it turns up. The current runner returns its
+  // queue in the reply instead, so nothing is added locally.
+  if (!runnerQueues(r) && wasBusy && !raw && text) { setQueued(id, [...queued(id).filter((q) => q.text !== text), { text, at: Date.now() }]); }
   if (S.transcript.id === id) S.transcript.view?.follow();
   upsert(dev, r);
   paint('session');

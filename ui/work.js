@@ -250,10 +250,10 @@ function askBtn(label, text) {
 
 function viewPanel(m) {
   if (!panel) return null;
-  const groups = panel.groups.filter((g) => (g.items || g.nodes || []).length);
+  const groups = (panel.build ? panel.build(m) : panel.groups).filter((g) => (g.items || g.nodes || []).length || g.always);
   const single = groups.length === 1 && (groups[0].items || []).length === 1;
   const body = groups.map((g) => el('section', { class: 'wk-group' },
-    el('h4', { class: 'wk-group-h' }, g.label, el('span', { class: 'wk-count' }, String((g.items || g.nodes).length))),
+    g.label ? el('h4', { class: 'wk-group-h' }, g.label, el('span', { class: 'wk-count' }, String((g.items || g.nodes).length))) : null,
     g.hint ? el('p', { class: 'meta wk-hint' }, g.hint) : null,
     g.items ? g.items.map((i) => taskLine(i, m.now, single)) : g.nodes));
   return el('div', { class: 'wk-panel-wrap' },
@@ -275,19 +275,10 @@ function tile({ label, value, sub, tone, onclick }) {
 }
 
 function tiles(m) {
-  const owner = m.notes.owner || [];
   const pr = m.problems;
   const nProblems = pr.failing.length + pr.fixing.length + pr.stale.length + pr.late.length + pr.orphaned.length;
   const onDev = m.open.filter((i) => stageOf(i) === 'dev');
   return el('div', { class: 'wk-tiles' },
-    tile({
-      label: 'Needs you', value: owner.length, tone: owner.length ? 'warn' : 'ok',
-      sub: owner.length ? owner[0].what : 'Nothing waiting',
-      onclick: () => openPanel({
-        title: 'Needs you', sub: 'Things only you can do or decide.',
-        groups: [{ label: 'Waiting on you', nodes: owner.map((x) => el('div', { class: 'wk-note' }, el('strong', {}, x.what), el('p', { class: 'meta' }, x.why))) }],
-      }),
-    }),
     tile({
       label: 'In progress', value: m.active.length, tone: 'plain',
       sub: `Plus ${onDev.length} on dev, waiting for release`,
@@ -560,7 +551,7 @@ async function doSweep(api) {
   rerenderRef();
 }
 
-function topBar(api) {
+function topBar(api, m) {
   const s = session && !session.error ? session : null;
   const age = data.fileAgeMs || 0;
   const stale = age > 30 * 60000;
@@ -568,6 +559,7 @@ function topBar(api) {
     el('span', { class: `wk-top-age${stale ? ' is-stale' : ''}`, title: 'When the host last rebuilt this from ClickUp and GitHub' },
       el('span', { class: `dot dot--${stale ? 'warn' : 'ok'}` }), refreshing ? 'Rebuilding…' : `Updated ${agoMs(age)}`),
     el('span', { class: 'wk-top-acts' },
+      needsButton(m),
       el('button', { class: 'btn btn--ghost btn--sm', type: 'button', disabled: !!refreshing, title: 'Read ClickUp and GitHub again now (the host does this every 10 minutes)', onclick: () => doRefresh(api) }, refreshing ? 'Refreshing…' : 'Refresh'),
       el('button', {
         class: 'btn btn--sm', type: 'button', disabled: sweepMsg === '…' || !!s?.question,
@@ -618,15 +610,11 @@ const ACT_WORD = { approve: 'Approved', decline: 'Declined', done: 'Done', reply
  */
 function needsCard(api, item) {
   const r = replyFor(item.id);
-  const head = el('div', { class: 'wk-need-head' },
-    el('span', { class: `wk-need-mark${r ? ' is-answered' : ''}`, 'aria-hidden': 'true' }),
-    el('span', { class: 'wk-need-title' }, item.title),
-    item.at ? el('span', { class: 'wk-need-age' }, agoMs(Date.now() - item.at)) : null);
   const meta = el('div', { class: 'wk-need-meta' },
     el('span', {}, item.source === 'plan' ? 'From the plan' : 'From Claude'),
     item.link ? el('a', { href: item.link, target: '_blank', rel: 'noopener' }, 'Open the source') : null);
   if (r) {
-    return el('div', { class: 'wk-need is-answered' }, head,
+    return el('div', { class: 'wk-need is-answered' },
       item.body ? el('p', { class: 'wk-need-why' }, item.body) : null,
       el('div', { class: 'wk-need-ans' },
         el('span', { class: 'wk-need-word' }, ACT_WORD[r.action] || 'Answered'),
@@ -659,25 +647,53 @@ function needsCard(api, item) {
           if (!field.value.trim()) { field.focus(); return; }
           answer(api, item, 'reply', field.value.trim());
         } }, 'Send reply'))));
-  return el('div', { class: 'wk-need' }, head, item.body ? el('p', { class: 'wk-need-why' }, item.body) : null, meta, form);
+  return el('div', { class: 'wk-need' }, item.body ? el('p', { class: 'wk-need-why' }, item.body) : null, meta, form);
 }
 
-function needsYou(api, m) {
+/**
+ * Needs you lives in a drawer (a full-height sheet on a phone), opened from
+ * the top bar's "Needs you (N)": one line per item, title and age; one item
+ * open at a time shows why, the source, the quick answers and the reply.
+ */
+let needsOpenId = null;
+function openNeeds(id = null) {
+  needsOpenId = id;
+  openPanel({ title: 'Needs you', sub: 'Things only you can decide. Claude acts on your answer in the next sweep.', drawer: 'needs', build: (m) => needsGroups(apiRef, m) });
+}
+
+function needsRow(api, item) {
+  const r = replyFor(item.id);
+  const open = needsOpenId === item.id;
+  const line = el('button', {
+    class: 'wk-nrow-line', type: 'button', 'aria-expanded': String(open),
+    onclick: () => { needsOpenId = open ? null : item.id; rerenderRef(); },
+  },
+  el('span', { class: `wk-need-mark${r ? ' is-answered' : ''}`, 'aria-hidden': 'true' }),
+  el('span', { class: 'wk-nrow-title' }, item.title),
+  r ? el('span', { class: 'wk-need-word' }, ACT_WORD[r.action] || 'Answered') : null,
+  el('span', { class: 'wk-need-age' }, item.at ? agoMs(Date.now() - item.at) : 'plan'));
+  return el('div', { class: `wk-nrow${open ? ' is-open' : ''}${r ? ' is-answered' : ''}` }, line, open ? needsCard(api, item) : null);
+}
+
+function needsGroups(api, m) {
+  const items = needsItems(m);
+  const done = replies.filter((r) => r.handled).slice(0, 5);
+  return [
+    { label: null, always: true, nodes: items.length ? [el('div', { class: 'wk-nlist' }, items.map((i) => needsRow(api, i)))]
+      : [el('div', { class: 'wk-empty' }, el('strong', {}, 'Nothing waits on you.'), el('span', {}, 'When Claude needs a decision it shows here, with quick answers and a reply box.'))] },
+    { label: 'Handled recently', nodes: done.map((r) => el('div', { class: 'wk-handled-row' },
+      el('span', { class: 'wk-need-word' }, ACT_WORD[r.action] || 'Answered'),
+      el('span', { class: 'wk-handled-title' }, r.title || r.id),
+      r.note ? el('span', { class: 'wk-handled-note' }, r.note) : null)) },
+  ];
+}
+
+/** The top bar's button: a small amber count while anything waits. */
+function needsButton(m) {
   const items = needsItems(m);
   const open = items.filter((i) => !replyFor(i.id)).length;
-  const done = replies.filter((r) => r.handled).slice(0, 5);
-  return el('section', { class: 'wk-section wk-needs' },
-    el('div', { class: 'wk-needs-head' },
-      el('h3', { class: 'wk-h' }, 'Needs you'),
-      el('span', { class: `wk-needs-count${open ? ' is-open' : ''}` }, open ? `${open} waiting` : items.length ? 'All answered' : 'Clear')),
-    items.length ? el('div', { class: 'wk-need-list' }, items.map((i) => needsCard(api, i)))
-      : el('div', { class: 'wk-empty' }, el('strong', {}, 'Nothing waits on you.'), el('span', {}, 'When Claude needs a decision it shows here, with quick answers and a reply box.')),
-    done.length ? el('details', { class: 'wk-handled' },
-      el('summary', {}, `Handled recently (${done.length})`),
-      done.map((r) => el('div', { class: 'wk-handled-row' },
-        el('span', { class: 'wk-need-word' }, ACT_WORD[r.action] || 'Answered'),
-        el('span', { class: 'wk-handled-title' }, r.title || r.id),
-        r.note ? el('span', { class: 'wk-handled-note' }, r.note) : null))) : null);
+  return el('button', { class: 'btn btn--ghost btn--sm wk-needs-btn', type: 'button', title: open ? `${open} waiting on you` : 'Nothing waits on you', onclick: () => openNeeds() },
+    'Needs you', el('span', { class: `wk-needs-n${open ? ' is-open' : ''}` }, String(open)));
 }
 
 /* ── Activity: what was sent for you, to whom, and the replies ──────── */
@@ -775,5 +791,5 @@ export function viewWork(api, rerender, toast) {
   }
   const m = model(data);
   return el('div', { class: 'wk' },
-    topBar(api), headline(m), needsYou(api, m), ciLine(), tiles(m), people(m), activityPanel(), fromClaude(), upcoming(m), lists(m), footer(api), viewPanel(m));
+    topBar(api, m), headline(m), ciLine(), tiles(m), people(m), activityPanel(), fromClaude(), upcoming(m), lists(m), footer(api), viewPanel(m));
 }
