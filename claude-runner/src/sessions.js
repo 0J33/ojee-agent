@@ -195,7 +195,8 @@ class Sessions extends EventEmitter {
       queuedAt: s.state === 'queued' ? s.queuedAt : null,
       tmux: s.tmux,
       background: bgSummary(s),
-      outbox: (s.outbox || []).map((m) => ({ text: m.text, at: m.at })),
+      // Always an array on this runner: the console reads its presence as "the runner keeps the queue".
+      outbox: (s.outbox || []).map((m) => ({ id: m.id, text: m.text, at: m.at })),
     };
   }
 
@@ -593,7 +594,7 @@ class Sessions extends EventEmitter {
     // now, and it goes in as one message when the turn ends (owner, 11 Nov).
     // A session busy only with background work takes it straight away.
     if (!now && s.state === 'running' && !s.bgOnly && (await this.isAlive(s))) {
-      s.outbox = [...(s.outbox || []), { text: msg, at: Date.now() }];
+      s.outbox = [...(s.outbox || []), { id: randomUUID().slice(0, 12), text: msg, at: Date.now() }];
       this.store.save();
       this.emit('change', s);
       return;
@@ -622,27 +623,42 @@ class Sessions extends EventEmitter {
     await this.type(s, msg);
   }
 
-  /** Send what waited for the turn to end, as one message. */
+  /**
+   * Send what waited for the turn to end, as one message. The queue is
+   * emptied in the same tick it is read (no await between), so a message
+   * taken back for editing is either still here and not sent, or already
+   * gone and the take answers 404: never both sent and edited.
+   */
   async deliverOutbox(s) {
-    if (!s.outbox?.length || this.busyOps?.has?.(s.id)) return;
+    if (!s.outbox?.length || s.delivering || this.busyOps?.has?.(s.id)) return;
     if (!['idle', 'done', 'blocked', 'error'].includes(s.state) || !(await this.isAlive(s))) return;
+    if (!s.outbox?.length || s.delivering) return; // taken back while we checked
     const items = s.outbox;
     s.outbox = [];
+    s.delivering = true;
     this.store.save();
+    this.emit('change', s);
     try {
       await this.send(s, items.map((m) => m.text).join('\n\n'), { now: true });
     } catch (e) {
       s.outbox = [...items, ...(s.outbox || [])];
       s.lastError = { text: `A queued message did not go: ${e.message}`, at: Date.now() };
       this.store.save();
+    } finally {
+      s.delivering = false;
     }
     this.emit('change', s);
   }
 
-  /** Take a waiting message back (to edit it), or drop it. Returns it. */
-  takeOutbox(s, at) {
+  /**
+   * Take a waiting message out of the queue, by id (the newest without one):
+   * to edit it, to drop it, or to send it now. Synchronous, so it cannot
+   * interleave with a delivery. Returns it, or null when it is not there
+   * (already sent, or taken by another tab).
+   */
+  takeOutbox(s, id = null) {
     const list = s.outbox || [];
-    const i = at == null ? list.length - 1 : list.findIndex((m) => m.at === Number(at));
+    const i = id == null ? list.length - 1 : list.findIndex((m) => m.id === String(id));
     if (i < 0) return null;
     const [m] = list.splice(i, 1);
     s.outbox = list;

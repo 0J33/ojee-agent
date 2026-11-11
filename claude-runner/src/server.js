@@ -408,15 +408,15 @@ function createRunner(overrides = {}) {
    */
   app.post('/api/sessions/:id/outbox/take', auth, wrap(async (req, res) => {
     const s = need(req);
-    const m = sessions.takeOutbox(s, req.body?.at ?? null);
-    if (!m) return res.status(404).json({ error: 'Nothing waiting' });
+    const m = sessions.takeOutbox(s, req.body?.id ?? null);
+    if (!m) return res.status(404).json({ error: 'Nothing waiting: it was already sent or taken' });
     res.json({ message: m, session: sessions.view(s) });
   }));
   app.post('/api/sessions/:id/outbox/send', auth, wrap(async (req, res) => {
     const s = need(req);
-    const m = sessions.takeOutbox(s, req.body?.at ?? null);
-    if (!m) return res.status(404).json({ error: 'Nothing waiting' });
-    try { await sessions.send(s, m.text, { now: true }); } catch (e) { s.outbox = [m, ...(s.outbox || [])]; throw e; }
+    const m = sessions.takeOutbox(s, req.body?.id ?? null);
+    if (!m) return res.status(404).json({ error: 'Nothing waiting: it was already sent or taken' });
+    try { await sessions.send(s, m.text, { now: true }); } catch (e) { s.outbox = [m, ...(s.outbox || [])]; sessions.emit('change', s); throw e; }
     res.json(sessions.view(s));
   }));
 
