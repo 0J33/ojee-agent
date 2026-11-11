@@ -40,6 +40,10 @@ const TITLES = {
   done: 'is done',
 };
 
+/** Kinds where a changing text is the same alert (a login, every account out, a quiet session). */
+const SAME_ALERT = new Set(['needsLogin', 'allLimited', 'stalled', 'modelFallback', 'accountSwitch']);
+const LATCH_MS = 24 * 3600_000;
+
 class Notifier {
   /**
    * @param {Function} o.emit          (event) => void — the `notify` event on /api/events,
@@ -62,6 +66,15 @@ class Notifier {
   }
 
   get enabled() { return !!this.webhook; }
+
+  /** The condition behind a key went away: the next alert with it is news again. */
+  clear(key) { return this.last.delete(key); }
+
+  /** Everything raised for a session (it moved on: answered, working, ended). */
+  clearSession(id) {
+    if (!id) return;
+    for (const k of [...this.last.keys()]) if (k.endsWith(`:${id}`)) this.last.delete(k);
+  }
 
   link(session) {
     if (!this.consoleUrl) return null;
@@ -90,9 +103,16 @@ class Notifier {
       if (Number.isFinite(t.cooldownMin)) cooldown = t.cooldownMin * 60_000;
     } else if (!force && s.notify && s.notify[kind] === false) return false;
     const key = tag || `${kind}:${session?.id || '-'}`;
-    const last = this.last.get(key) || 0;
-    if (!force && this.now() - last < cooldown) return false;
-    this.last.set(key, this.now());
+    // Once per distinct alert until it clears (owner, 11 Nov): the same key
+    // with the same words is not sent again until clear()/clearSession()
+    // says the condition went away. A day later it may remind once more.
+    // Words that change mean a new alert (another question, another error),
+    // except for the kinds whose text is only detail.
+    const fp = SAME_ALERT.has(kind) ? kind : `${kind}:${String(text || '').slice(0, 300)}`;
+    const prev = this.last.get(key);
+    if (!force && prev && prev.fp === fp && this.now() - prev.at < Math.max(cooldown, LATCH_MS)) return false;
+    if (!force && prev && prev.fp !== fp && this.now() - prev.at < Math.min(cooldown, 60_000)) return false;
+    this.last.set(key, { at: this.now(), fp });
     const severity = SEVERITY[kind] || 'info';
     const quiet = !force && cp && inQuiet(cp.quiet, this.now(), cp.tz) && !(severity === 'critical' && cp.quiet.critical);
 

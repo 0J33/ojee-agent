@@ -31,6 +31,7 @@ const { Sessions } = require('./sessions');
 const { Tail, toMessages, readRange, listSessions, findTranscript, listSubagents, subagentFile, finishedAgents } = require('./transcript');
 const { parseScreen } = require('./screen');
 const { enterWhenTyped } = require('./submit');
+const { catalogue } = require('./commands');
 
 /** A browser file name made safe for a path: no folders, no shell-hostile characters. */
 function safeName(raw, type) {
@@ -276,15 +277,23 @@ function createRunner(overrides = {}) {
       return res.status(403).json({ error: `Cannot read ${abs}: ${e.code || e.message}`, path: abs, parent: path.dirname(abs) });
     }
     const entries = [];
+    // ?files=1: files too (the console's file explorer), with size and time.
+    const withFiles = req.query.files === '1';
     for (const e of list) {
       if (!hidden && e.name.startsWith('.')) continue;
       const p = path.join(abs, e.name);
       let dir = e.isDirectory();
       if (e.isSymbolicLink()) { try { dir = fs.statSync(p).isDirectory(); } catch { dir = false; } }
-      if (!dir) continue;
+      if (!dir) {
+        if (!withFiles) continue;
+        let st2 = null;
+        try { st2 = fs.statSync(p); } catch { /* a dangling link */ }
+        entries.push({ name: e.name, path: p, file: true, size: st2 ? st2.size : null, mtime: st2 ? st2.mtimeMs : null, hidden: e.name.startsWith('.') });
+        continue;
+      }
       entries.push({ name: e.name, path: p, git: fs.existsSync(path.join(p, '.git')), hidden: e.name.startsWith('.') });
     }
-    entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    entries.sort((a, b) => (!!a.file - !!b.file) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
     const recent = [...new Set(sessions.all().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).map((s) => s.cwd))].slice(0, 8);
     res.json({
       path: abs,
@@ -294,6 +303,43 @@ function createRunner(overrides = {}) {
       entries: entries.slice(0, 1000),
       truncated: entries.length > 1000,
       recent,
+    });
+  }));
+
+  /**
+   * One file, for the console's explorer: text up to 512 KB (more is cut),
+   * or what it is when it is not text. ?raw=1 sends the bytes (images, PDFs)
+   * with their type, up to 25 MB. Read only; the same reach a session has.
+   */
+  const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', pdf: 'application/pdf', mp4: 'video/mp4', webm: 'video/webm', mp3: 'audio/mpeg', txt: 'text/plain; charset=utf-8' };
+  app.get('/api/fs/file', auth, wrap(async (req, res) => {
+    if (!req.query.path) return res.status(400).json({ error: 'path required' });
+    const abs = path.resolve(String(req.query.path));
+    let st;
+    try { st = fs.statSync(abs); } catch { return res.status(404).json({ error: `${abs} does not exist`, path: abs }); }
+    if (st.isDirectory()) return res.json({ path: abs, dir: true });
+    const ext = path.extname(abs).slice(1).toLowerCase();
+    if (req.query.raw === '1') {
+      if (st.size > 25 * 1024 * 1024) return res.status(413).json({ error: 'Over 25 MB' });
+      res.setHeader('content-type', MIME[ext] || 'application/octet-stream');
+      res.setHeader('content-security-policy', "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox");
+      res.setHeader('x-content-type-options', 'nosniff');
+      return fs.createReadStream(abs).on('error', () => res.end()).pipe(res);
+    }
+    const max = 512 * 1024;
+    let buf = Buffer.alloc(0);
+    try {
+      const fd = fs.openSync(abs, 'r');
+      buf = Buffer.alloc(Math.min(st.size, max));
+      fs.readSync(fd, buf, 0, buf.length, 0);
+      fs.closeSync(fd);
+    } catch (e) { return res.status(403).json({ error: `Cannot read ${abs}: ${e.code || e.message}`, path: abs }); }
+    const binary = buf.subarray(0, 8000).includes(0);
+    res.json({
+      path: abs, size: st.size, mtime: st.mtimeMs, ext,
+      kind: MIME[ext]?.startsWith('image/') ? 'image' : ext === 'pdf' ? 'pdf' : binary ? 'binary' : 'text',
+      text: binary ? null : buf.toString('utf8'),
+      truncated: st.size > max,
     });
   }));
 
@@ -352,7 +398,25 @@ function createRunner(overrides = {}) {
 
   app.post('/api/sessions/:id/message', auth, wrap(async (req, res) => {
     const s = need(req);
-    await sessions.send(s, req.body?.text);
+    await sessions.send(s, req.body?.text, { now: req.body?.now === true });
+    res.json(sessions.view(s));
+  }));
+
+  /**
+   * Messages waiting for the turn to end. take: back to the console's box to
+   * edit (removed here; never sent). send: type it in now, mid-turn.
+   */
+  app.post('/api/sessions/:id/outbox/take', auth, wrap(async (req, res) => {
+    const s = need(req);
+    const m = sessions.takeOutbox(s, req.body?.at ?? null);
+    if (!m) return res.status(404).json({ error: 'Nothing waiting' });
+    res.json({ message: m, session: sessions.view(s) });
+  }));
+  app.post('/api/sessions/:id/outbox/send', auth, wrap(async (req, res) => {
+    const s = need(req);
+    const m = sessions.takeOutbox(s, req.body?.at ?? null);
+    if (!m) return res.status(404).json({ error: 'Nothing waiting' });
+    try { await sessions.send(s, m.text, { now: true }); } catch (e) { s.outbox = [m, ...(s.outbox || [])]; throw e; }
     res.json(sessions.view(s));
   }));
 
@@ -519,8 +583,9 @@ function createRunner(overrides = {}) {
       await tmux.keys(s.tmux, 'Enter');
     } else {
       if (keys.length) await tmux.keys(s.tmux, ...keys);
+      const before = text && b.enter ? parseScreen(await tmux.capture(s.tmux, { ansi: true })) : null;
       if (text) await tmux.type(s.tmux, text);
-      if (text && b.enter) { if (!(await enterWhenTyped(tmux, s.tmux))) return res.status(409).json({ error: 'Typed but not sent: the input box still showed Claude Code\'s suggestion. Check the terminal.' }); }
+      if (text && b.enter) { if (!(await enterWhenTyped(tmux, s.tmux, { before }))) return res.status(409).json({ error: 'Typed but not sent: the input box still showed Claude Code\'s suggestion. Check the terminal.' }); }
       else if (!text && b.enter) await tmux.keys(s.tmux, 'Enter');
     }
     sessions.touch(s);
@@ -566,6 +631,30 @@ function createRunner(overrides = {}) {
     // wrapped them (for copying out of it). Without it: the screen, as ever.
     const history = Math.min(5000, Math.max(0, Number(req.query.history) || 0));
     res.json({ alive: await sessions.isAlive(s), screen: await tmux.capture(s.tmux, history ? { history, join: true } : {}) });
+  }));
+
+  /** Every slash command and skill the session can take (the console's "/" list). */
+  app.get('/api/sessions/:id/commands', auth, wrap(async (req, res) => {
+    const s = need(req);
+    const acct = accounts.get(s.account);
+    res.json({ commands: catalogue({ configDir: acct ? accounts.dir(acct) : config.DEFAULT_CLAUDE_DIR, cwd: s.cwd, home: config.HOME }) });
+  }));
+
+  /**
+   * The Forsa work loop on this machine (forsa-work.service, a user unit):
+   * the console's Work tab "Refresh" starts a tick now. Only where the unit
+   * exists; the unit's own flock keeps two ticks from overlapping.
+   */
+  const systemctl = (args) => new Promise((resolve) => execFile('systemctl', ['--user', ...args], { timeout: 10_000 }, (err, stdout, stderr) => resolve({ code: err ? (err.code ?? 1) : 0, out: String(stdout || '').trim(), err: String(stderr || '').trim() })));
+  app.get('/api/work/tick', auth, wrap(async (_req, res) => {
+    const r = await systemctl(['show', 'forsa-work.service', '-p', 'ActiveState,ExecMainExitTimestamp,LoadState']);
+    const kv = Object.fromEntries(r.out.split('\n').map((l) => l.split('=')));
+    res.json({ exists: kv.LoadState === 'loaded', active: kv.ActiveState === 'activating' || kv.ActiveState === 'active', lastEnded: kv.ExecMainExitTimestamp || null });
+  }));
+  app.post('/api/work/tick', auth, wrap(async (_req, res) => {
+    const r = await systemctl(['start', '--no-block', 'forsa-work.service']);
+    if (r.code) return res.status(409).json({ error: r.err || 'forsa-work.service could not be started on this machine' });
+    res.json({ ok: true, started: Date.now() });
   }));
 
   /* ── history: every conversation on the machine ──────────────────── */
@@ -703,7 +792,7 @@ function createRunner(overrides = {}) {
     if (loginSeen.has(a.id)) return;
     loginSeen.add(a.id);
     const auth = await accounts.status(a);
-    if (auth.loggedIn) sessions.accountRestored();
+    if (auth.loggedIn) { notifier.clear(`needsLogin:${a.id}`); sessions.accountRestored(); }
     sessions.emit('accounts');
   }
 

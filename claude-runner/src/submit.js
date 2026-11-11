@@ -17,12 +17,26 @@ const delay = (ms) => new Promise((r) => setTimeout(r, ms));
  * With no input box on screen (another view is open) it falls back to
  * pressing Enter at the deadline, as before.
  */
-async function enterWhenTyped(tmux, name, { timeout = 4000, step = 120, first = 150 } = {}) {
+/**
+ * Typed text that landed but is drawn faint all the same: a long message
+ * Claude Code folds into "[Pasted text #1 +12 lines]", or an image path it
+ * turned into "[Image #1]". Read as a suggestion, it once left a message in
+ * the box forever, unsent (owner, 11 Nov).
+ */
+const FOLDED = /\[(?:Pasted text|Image|File) #\d+/;
+
+/**
+ * @param {object} [o.before]  parseScreen() of the screen before typing: a
+ *   faint box whose text changed since then holds what was typed.
+ */
+async function enterWhenTyped(tmux, name, { timeout = 4000, step = 120, first = 150, before = null } = {}) {
   const until = Date.now() + timeout;
   await delay(first);
   for (;;) {
     const scr = parseScreen(await tmux.capture(name, { ansi: true }));
     if (scr.draft && !scr.suggestion) break;
+    if (FOLDED.test(scr.draft || scr.suggestion || '')) break;
+    if (scr.suggestion && before && before.suggestion !== scr.suggestion && (before.draft || '') !== scr.suggestion) break;
     if (Date.now() >= until) {
       if (scr.suggestion) return false;
       break;

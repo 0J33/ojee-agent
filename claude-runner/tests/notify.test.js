@@ -93,3 +93,37 @@ test('the test ping is not relayed to the app', async () => {
   assert.equal(await n.send('done', { title: 'Test', force: true, test: true }), true);
   assert.equal(events.length, 0);
 });
+
+test('one alert is sent once until it clears, then again', async () => {
+  let t = 0;
+  const sent = [];
+  const n = new Notifier({
+    webhook: 'https://discord.invalid/hook', settings: () => ({ notify: { needsLogin: true } }),
+    fetchImpl: async (url, opts) => { sent.push(JSON.parse(opts.body)); return { ok: true }; }, now: () => t,
+  });
+  await n.send('needsLogin', { text: 'Please run /login', tag: 'needsLogin:a' });
+  t += 30 * 60_000;
+  await n.send('needsLogin', { text: 'Please run /login · API Error 401', tag: 'needsLogin:a' });
+  t += 3 * 3600_000;
+  await n.send('needsLogin', { text: 'Please run /login', tag: 'needsLogin:a' });
+  assert.equal(sent.length, 1, 'no reminder every few minutes while it is still the same alert');
+  n.clear('needsLogin:a');
+  await n.send('needsLogin', { text: 'Please run /login', tag: 'needsLogin:a' });
+  assert.equal(sent.length, 2);
+});
+
+test('a session that moved on clears its alerts', async () => {
+  let t = 0;
+  const sent = [];
+  const n = new Notifier({
+    webhook: 'https://discord.invalid/hook', settings: () => ({ notify: { needsInput: true } }),
+    fetchImpl: async (url, opts) => { sent.push(JSON.parse(opts.body)); return { ok: true }; }, now: () => t,
+  });
+  await n.send('needsInput', { session, text: 'Which?' });
+  t += 20 * 60_000;
+  await n.send('needsInput', { session, text: 'Which?' });
+  assert.equal(sent.length, 1);
+  n.clearSession(session.id);
+  await n.send('needsInput', { session, text: 'Which?' });
+  assert.equal(sent.length, 2);
+});

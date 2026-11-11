@@ -28,3 +28,20 @@ test('no input box on screen falls back to Enter at the deadline', async () => {
   assert.equal(await enterWhenTyped(t, 'x', { first: 0, step: 5, timeout: 20 }), true);
   assert.deepEqual(sent, ['Enter']);
 });
+
+test('a long message folded into "[Pasted text #1]" is sent even though it is drawn faint', async () => {
+  const sent = [];
+  const PASTED = frame(`${G}❯ ${R}${G}[Pasted text #1 +12 lines]${R}`);
+  const t = { capture: async () => PASTED, keys: async (_n, ...k) => { sent.push(...k); } };
+  assert.equal(await enterWhenTyped(t, 'x', { first: 0, step: 5, timeout: 40 }), true);
+  assert.deepEqual(sent, ['Enter']);
+});
+
+test('a faint box whose text changed since before typing holds the message', async () => {
+  const sent = [];
+  const before = require('../src/screen').parseScreen(SUG);
+  const CHANGED = frame(`${G}❯ ${R}${G}something else entirely${R}`);
+  const t = { capture: async () => CHANGED, keys: async (_n, ...k) => { sent.push(...k); } };
+  assert.equal(await enterWhenTyped(t, 'x', { first: 0, step: 5, timeout: 40, before }), true);
+  assert.deepEqual(sent, ['Enter']);
+});

@@ -29,6 +29,7 @@ const { randomUUID } = require('crypto');
 const { classify, retryAt, family } = require('./limits');
 const { findTranscript, Tail } = require('./transcript');
 const { enterWhenTyped } = require('./submit');
+const { parseScreen } = require('./screen');
 
 /** States in which a claude process is expected to exist. */
 const LIVE = new Set(['starting', 'running', 'idle', 'waiting', 'blocked', 'done', 'paused']);
@@ -194,6 +195,7 @@ class Sessions extends EventEmitter {
       queuedAt: s.state === 'queued' ? s.queuedAt : null,
       tmux: s.tmux,
       background: bgSummary(s),
+      outbox: (s.outbox || []).map((m) => ({ text: m.text, at: m.at })),
     };
   }
 
@@ -203,6 +205,11 @@ class Sessions extends EventEmitter {
     s.detail = detail;
     s.updatedAt = Date.now();
     if (state !== 'paused') s.pausedUntil = null;
+    // Working again, or ended: whatever was raised about it has cleared, so a
+    // later question or error is news again.
+    if (changed && ['running', 'idle', 'stopped', 'starting'].includes(state)) this.notifier?.clearSession?.(s.id);
+    // The turn ended: what waited for it goes in now.
+    if (changed && s.outbox?.length && ['idle', 'done', 'blocked'].includes(state)) setTimeout(() => this.deliverOutbox(s).catch((e) => this.log('outbox', e.message)), 400);
     if (changed) {
       this.store.save();
       this.emit('change', s);
@@ -211,7 +218,7 @@ class Sessions extends EventEmitter {
 
   touch(s) {
     s.lastActivityAt = Date.now();
-    if (s.stallNotified) s.stallNotified = false;
+    if (s.stallNotified) { s.stallNotified = false; this.notifier?.clear?.(`stalled:${s.id}`); }
   }
 
   busyCount() { return this.all().filter((s) => BUSY.has(s.state)).length; }
@@ -574,9 +581,23 @@ class Sessions extends EventEmitter {
    * If the session could return to its preferred model, the message rides
    * that restart instead of an extra one later.
    */
-  async send(s, text) {
+  /**
+   * @param {boolean} [o.now]  type it into a working session at once (Claude
+   *   Code reads it at its next step) instead of holding it until the turn ends
+   */
+  async send(s, text, { now = false } = {}) {
     const msg = String(text || '').trim();
     if (!msg) throw Object.assign(new Error('Empty message'), { status: 400 });
+    // Mid-turn, a message waits here, not in Claude Code's own queue: from
+    // here it can be shown, taken back to edit (Up in the console), or sent
+    // now, and it goes in as one message when the turn ends (owner, 11 Nov).
+    // A session busy only with background work takes it straight away.
+    if (!now && s.state === 'running' && !s.bgOnly && (await this.isAlive(s))) {
+      s.outbox = [...(s.outbox || []), { text: msg, at: Date.now() }];
+      this.store.save();
+      this.emit('change', s);
+      return;
+    }
     if (s.state === 'queued') { s.pendingPrompt = [s.pendingPrompt, msg].filter(Boolean).join('\n\n'); this.store.save(); return; }
     if (s.state === 'starting') throw Object.assign(new Error('Still starting — try again in a moment'), { status: 409 });
 
@@ -601,9 +622,39 @@ class Sessions extends EventEmitter {
     await this.type(s, msg);
   }
 
+  /** Send what waited for the turn to end, as one message. */
+  async deliverOutbox(s) {
+    if (!s.outbox?.length || this.busyOps?.has?.(s.id)) return;
+    if (!['idle', 'done', 'blocked', 'error'].includes(s.state) || !(await this.isAlive(s))) return;
+    const items = s.outbox;
+    s.outbox = [];
+    this.store.save();
+    try {
+      await this.send(s, items.map((m) => m.text).join('\n\n'), { now: true });
+    } catch (e) {
+      s.outbox = [...items, ...(s.outbox || [])];
+      s.lastError = { text: `A queued message did not go: ${e.message}`, at: Date.now() };
+      this.store.save();
+    }
+    this.emit('change', s);
+  }
+
+  /** Take a waiting message back (to edit it), or drop it. Returns it. */
+  takeOutbox(s, at) {
+    const list = s.outbox || [];
+    const i = at == null ? list.length - 1 : list.findIndex((m) => m.at === Number(at));
+    if (i < 0) return null;
+    const [m] = list.splice(i, 1);
+    s.outbox = list;
+    this.store.save();
+    this.emit('change', s);
+    return m;
+  }
+
   async type(s, text) {
+    const before = parseScreen(await this.tmux.capture(s.tmux, { ansi: true }));
     await this.tmux.type(s.tmux, text);
-    if (!(await enterWhenTyped(this.tmux, s.tmux))) {
+    if (!(await enterWhenTyped(this.tmux, s.tmux, { before }))) {
       throw Object.assign(new Error('Typed into the terminal but not sent: its input box still showed Claude Code\'s suggestion. Check the terminal before sending again.'), { status: 409 });
     }
     s.lastPromptAt = Date.now();
@@ -861,6 +912,8 @@ class Sessions extends EventEmitter {
           const acct = this.accounts.get(s.account);
           const at = Date.parse(e.timestamp) || Date.now();
           if (acct && this.accounts.noteWorking(acct, family(model), at)) freed = true;
+          // A real answer on this account: its login works, so a later "log in again" is news.
+          if (acct) this.notifier?.clear?.(`needsLogin:${acct.id}`);
         }
         const text = (e.message?.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
         if (text) s.lastAssistant = clip(text, 4000);
