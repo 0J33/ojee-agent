@@ -1445,7 +1445,7 @@ function paintQueued(s) {
   // and, on an older runner only, messages Claude Code itself queued.
   let local = queued(s.id).filter((q) => Date.now() - q.at < 7200000);
   if (view) local = local.filter((q) => !view.hasUserText(q.text, q.at));
-  if (runnerQueues(s)) local = local.filter((q) => q.failed);
+  if (runnerQueues(s)) local = local.filter((q) => q.failed || q.cc);
   else if (!['running', 'starting'].includes(s.state) && view) local = local.filter((q) => q.failed || Date.now() - q.at < 15000);
   setQueued(s.id, local);
   const draft = S.prompt.id === s.id ? S.prompt.data?.draft || '' : '';
@@ -1462,7 +1462,7 @@ function paintQueued(s) {
   }));
   const rest = local.map((q) => {
     const drop = () => { setQueued(s.id, queued(s.id).filter((x) => x.at !== q.at)); paintQueued(s); };
-    if (!q.failed) return { text: q.text, at: q.at, label: 'Queued in Claude Code: it goes in after this step', actions: [{ label: 'Hide', title: 'Stop showing it here (it still sends)', run: drop }] };
+    if (!q.failed) return { text: q.text, at: q.at, label: 'Queued in Claude Code: it goes in after this step (cannot be edited from here)', actions: [{ label: 'Hide', title: 'Stop showing it here (it still sends)', run: drop }] };
     const inBox = !!draft && norm(q.text).startsWith(norm(draft).slice(0, 40));
     return {
       text: q.text, at: q.at, warn: true,
@@ -2239,7 +2239,7 @@ function composer(s) {
     }
     // An older runner typed it into Claude Code's own queue, which cannot be
     // taken back from here: never offer it for editing (it would go twice).
-    if (e.key === 'ArrowUp' && !text.value && !e.shiftKey && !runnerQueues(cur0) && queued(s.id).some((q) => !q.failed)) {
+    if (e.key === 'ArrowUp' && !text.value && !e.shiftKey && queued(s.id).some((q) => q.cc)) {
       e.preventDefault();
       ctx.toast?.('err', 'Already queued in Claude Code', 'It cannot be edited from here on this runner. Restart ojee-claude to edit queued messages.');
       return;
@@ -2397,7 +2397,11 @@ async function send(id, override = null) {
   // An older runner types a mid-turn message straight into Claude Code's own
   // queue: show it here until it turns up. The current runner returns its
   // queue in the reply instead, so nothing is added locally.
-  if (!runnerQueues(r) && wasBusy && !raw && text) { setQueued(id, [...queued(id).filter((q) => q.text !== text), { text, at: Date.now() }]); }
+  // A mid-turn message the runner did not keep in its own queue went straight
+  // into Claude Code's (an older runner, or a session busy only with
+  // background work): show it, and keep Up from loading it again.
+  const inRunnerQueue = runnerQueues(r) && r.outbox.some((m) => m.text === text);
+  if (wasBusy && !raw && text && !inRunnerQueue) { setQueued(id, [...queued(id).filter((q) => q.text !== text), { text, at: Date.now(), cc: true }]); }
   if (S.transcript.id === id) S.transcript.view?.follow();
   upsert(dev, r);
   paint('session');

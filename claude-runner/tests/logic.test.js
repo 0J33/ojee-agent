@@ -79,3 +79,16 @@ test('toMessages shows messages sent mid-turn (queued_command attachments), once
   const peer = msgs.find((m) => m.kind === 'peer');
   assert.ok(peer && /From Team: hi/.test(peer.text), 'a peer message is a labelled note');
 });
+
+test('a message sent twice shows twice; one recorded queued and then delivered shows once', () => {
+  const at = '2026-11-11T18:00:00.000Z';
+  const later = '2026-11-11T18:00:20.000Z';
+  const user = (text, ts) => ({ type: 'user', message: { content: text }, timestamp: ts });
+  const queuedAtt = (text, ts) => ({ type: 'attachment', attachment: { type: 'queued_command', prompt: text, origin: { kind: 'human' }, timestamp: ts }, timestamp: ts });
+  const twice = toMessages([user('deploy to dev', at), user('deploy to dev', later)]);
+  assert.equal(twice.filter((m) => m.role === 'user').length, 2, 'two sends are two messages');
+  const once = toMessages([queuedAtt('deploy to dev', at), user('deploy to dev', later)]);
+  assert.equal(once.filter((m) => m.role === 'user').length, 1, 'queued then delivered is one message');
+  const bothQueued = toMessages([queuedAtt('deploy to dev', at), queuedAtt('deploy to dev', later)]);
+  assert.equal(bothQueued.filter((m) => m.role === 'user').length, 2, 'queued twice is sent twice');
+});

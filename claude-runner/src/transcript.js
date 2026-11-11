@@ -223,14 +223,16 @@ function toMessages(entries, { detail = false, sidechain = false } = {}) {
       else if (e.subtype === 'scheduled_task_fire' && e.content) out.push({ role: 'note', kind: 'schedule', text: clip(e.content, 300), at, uuid: e.uuid });
     }
   }
-  // The same words twice in a row within a minute are one message recorded
-  // two ways (queued, then delivered as a turn): show it once.
+  // One message recorded two ways (queued mid-turn as an attachment, then
+  // delivered as a turn) shows once. Only that pair is folded: two sends of
+  // the same words are two messages and both show (owner, 11 Nov: a message
+  // sent twice showed once, which hid the double send).
   return out.filter((m, i) => {
     if (m.role !== 'user') return true;
     for (let j = i - 1; j >= 0 && j >= i - 6; j--) {
       const o = out[j];
       if (o.role !== 'user') continue;
-      if (o.text.trim() === m.text.trim() && Math.abs(Date.parse(m.at) - Date.parse(o.at)) < 60000) return false;
+      if (!!o.midTurn !== !!m.midTurn && o.text.trim() === m.text.trim() && Math.abs(Date.parse(m.at) - Date.parse(o.at)) < 60000) return false;
       break;
     }
     return true;
