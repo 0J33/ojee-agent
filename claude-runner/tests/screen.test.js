@@ -141,3 +141,34 @@ test('parseScreen: faint text in the input box is a suggestion, typed text is a 
   const plain = parseScreen(frame('❯ fix the login page'));
   assert.equal(plain.draft, 'fix the login page', 'without colour codes the old reading stands');
 });
+
+test('lists you wrote and lists in replies are never an options prompt; a real AskUserQuestion is', () => {
+  const box = [`${RULE} Conductor ─`, '❯ ', RULE, '  ⏵⏵ bypass permissions on'];
+  // Your own message, echoed by Claude Code with "> ", numbered.
+  const mineNumbered = ['> 1. a', '  2. b', '', '● On it.', '', ...box].join('\n');
+  assert.equal(parseScreen(mineNumbered).menu, null, '"1. a 2. b" in your message');
+  // The same in the newer echo style, with the prompt mark in front.
+  const mineArrow = ['❯ 1. a', '  2. b', '', '● On it.', '', ...box].join('\n');
+  assert.equal(parseScreen(mineArrow).menu, null, 'your numbered message with ❯');
+  // Bullets you wrote.
+  const mineBullets = ['> - a', '  - b', '', ...box].join('\n');
+  assert.equal(parseScreen(mineBullets).menu, null, '"- a - b" in your message');
+  // A reply with a numbered list.
+  const reply = ['● Two ways:', '  1. Rebase', '  2. Merge', '  Which one?', '', ...box].join('\n');
+  assert.equal(parseScreen(reply).menu, null, 'a list in a reply');
+  // A real AskUserQuestion (it replaces the input box and has a footer).
+  const ask = [
+    '● Asking a question',
+    RULE,
+    ' ☐ Branch',
+    'How should I bring in main?',
+    '❯ 1. Rebase',
+    '  2. Merge',
+    '  3. Type something.',
+    RULE,
+    'Enter to select · ↑/↓ to navigate · Esc to cancel',
+  ].join('\n');
+  const m = parseScreen(ask).menu;
+  assert.ok(m, 'the real prompt is read');
+  assert.deepEqual(m.options.map((o) => o.label), ['Rebase', 'Merge', 'Type something.']);
+});

@@ -13,8 +13,13 @@
 const BORDER = /^[\s│┃|╭╮╰╯─━┌┐└┘]+|[\s│┃|╭╮╰╯─━┌┐└┘]+$/g;
 const bare = (l) => l.replace(BORDER, '');
 
-/** "❯ 1. Yes" / "  2. No, and tell Claude what to do differently (esc)" */
-const OPTION = /^(❯|›|>)?\s*(\d{1,2})[.)]\s+(.+)$/;
+/**
+ * "❯ 1. Yes" / "  2. No, and tell Claude what to do differently (esc)".
+ * The selection cursor is ❯ or ›, never ">": Claude Code echoes your own
+ * messages with "> " in front, so "> 1. a" is a numbered list you wrote,
+ * not a menu (owner, 12 Nov).
+ */
+const OPTION = /^(❯|›)?\s*(\d{1,2})[.)]\s+(.+)$/;
 const FOOTER = /(Enter to (?:select|confirm|submit|continue)|Esc to (?:cancel|exit|go back)|↑\/↓ to (?:navigate|select)|Tab to)/i;
 const SPINNER = /^[✻✶✳✢✽·*⏺∗✦]\s+(\S.*)$/;
 const AGENT = /^[◯●○◉◎]\s+(\S+)\s{2,}(.+?)(?:\s{2,}(\S.*))?$/;
@@ -171,7 +176,12 @@ function parseScreen(text) {
   const lines = raw.map((l) => l.replace(SGR, ''));
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
   const box = inputBox(lines);
-  const menu = parseMenu(box > 0 ? lines.slice(0, box - 1).concat(lines.slice(box + 2)) : lines);
+  let menu = parseMenu(box > 0 ? lines.slice(0, box - 1).concat(lines.slice(box + 2)) : lines);
+  // A real selection UI (AskUserQuestion, a permission prompt, /model, a
+  // notice) says how to drive it ("Enter to select", "Esc to cancel"), and
+  // it replaces the input box. Numbered lines above a live input box with no
+  // such footer are text on the screen (your message, a reply), not a prompt.
+  if (menu && !menu.footer && box > 0) menu = null;
 
   let activity = null;
   const above = box > 0 ? box - 1 : lines.length;
