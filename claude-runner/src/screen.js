@@ -123,7 +123,9 @@ function inputBox(lines) {
 
 /**
  * @param {string} text  a captured screen
- * @returns {{ menu, activity, agents, mode, draft, suggestion }}
+ * @returns {{ menu, activity, agents, mode, draft, suggestion, queue, input }}
+ *   queue: Claude Code's queued messages, oldest first; input: the whole box
+ *   when something is typed in it (draft is only its first line)
  */
 const SGR = /\x1b\[([0-9;]*)m/g;
 
@@ -171,6 +173,60 @@ function faintInput(rawLine) {
   return seen && faint;
 }
 
+/**
+ * Claude Code's own queue: the messages typed while it works, drawn just
+ * above the input box as `❯ text` lines (a long one wraps onto indented
+ * lines) over the hint "ctrl+x ctrl+s to send now" (2.1.325). The hint is
+ * the anchor: without it, `❯` lines above the box are sent messages.
+ */
+const QUEUE_HINT = /^\s*ctrl\+x ctrl\+s to send now\s*$/i;
+function queueAbove(lines, box, raw = lines) {
+  if (box < 2) return [];
+  // With colour codes, a queued line is drawn grey (246) and a sent one white
+  // (231): the only safe edge between the queue and the conversation above it.
+  const hasAnsi = raw.some((r, k) => r !== lines[k]);
+  const faint = (k) => !hasAnsi || faintInput(raw[k].includes('❯') ? raw[k] : `❯${raw[k]}`);
+  // Between the hint and the box Claude Code may draw the spinner line
+  // ("· Harmonizing… (4s · thinking)") and a right-aligned status line
+  // ("◐ medium · /effort", "ctrl+g to edit in Vim"): skip those.
+  let hint = -1;
+  for (let i = box - 2; i >= 0 && i >= box - 6; i--) {
+    if (QUEUE_HINT.test(lines[i])) { hint = i; break; }
+    const t = lines[i].trim();
+    if (t && !/^\s{20,}\S/.test(lines[i]) && !SPINNER.test(t)) break;
+  }
+  if (hint < 0) return [];
+  const items = [];
+  let cont = [];
+  // Items may stand one under the other or with a blank line between them
+  // (2.1.325 does both); a long one wraps onto indented lines.
+  for (let i = hint - 1; i >= 0; i--) {
+    const l = lines[i];
+    const m = /^\s*❯\s?(.*)$/.exec(l);
+    if (m) {
+      if (!faint(i)) break;
+      items.unshift([m[1], ...cont].map((x) => x.trimEnd()).join('\n').trim());
+      cont = [];
+      continue;
+    }
+    if (!l.trim()) { if (cont.length) break; continue; }
+    if (/^ {2}\S/.test(l) && faint(i)) { cont.unshift(l.slice(2)); continue; }
+    break;
+  }
+  return items.filter(Boolean);
+}
+
+/** Everything in the input box, every line of it (the first line is `draft`'s source). */
+function boxText(lines, box) {
+  if (box < 0) return '';
+  const out = [lines[box].replace(/^\s*❯\s?/, '')];
+  for (let i = box + 1; i < lines.length && !/^[\s─━]*─{8,}/.test(lines[i]); i++) out.push(lines[i].replace(/^ {2}/, ''));
+  return out.map((x) => x.trimEnd()).join('\n').trim();
+}
+
+/** Placeholders Claude Code draws in an empty box. */
+const PLACEHOLDER = /^(Try "|Press up to edit queued messages)/;
+
 function parseScreen(text) {
   const raw = String(text || '').replace(/\r/g, '').split('\n');
   const lines = raw.map((l) => l.replace(SGR, ''));
@@ -201,8 +257,8 @@ function parseScreen(text) {
     // With colour codes, faint text is Claude Code's suggestion (Tab takes
     // it), never something typed. Without them, the old guess stands.
     const hasAnsi = raw[box] !== lines[box];
-    if (d.trim() && hasAnsi && faintInput(raw[box])) { if (!/^Try "/.test(d.trim())) suggestion = d.trim(); }
-    else if (d.trim() && !/^Try "/.test(d.trim())) draft = d.trim();
+    if (d.trim() && hasAnsi && faintInput(raw[box])) { if (!PLACEHOLDER.test(d.trim())) suggestion = d.trim(); }
+    else if (d.trim() && !PLACEHOLDER.test(d.trim())) draft = d.trim();
     for (let i = box + 1; i < lines.length; i++) {
       const t = lines[i].trim();
       const mm = MODE.exec(t);
@@ -211,7 +267,29 @@ function parseScreen(text) {
       if (a && a[1] !== 'main') agents.push({ name: a[1], doing: a[2].trim(), meta: a[3] ? a[3].trim() : null });
     }
   }
-  return { menu, activity, agents, mode, draft, suggestion };
+  const queue = queueAbove(lines, box, raw);
+  const input = draft ? boxText(lines, box) : '';
+  return { menu, activity, agents, mode, draft, suggestion, queue, input };
 }
 
-module.exports = { parseScreen, parseMenu };
+/**
+ * How many `❯` lines above the input box start with one of `firsts`: queued
+ * ones and sent ones alike. Up that takes the queue removes its lines; a
+ * queue that went in first leaves them there as sent messages. That is the
+ * only thing on screen that tells the two apart, since Up after a send
+ * recalls the same text.
+ */
+function promptLinesAbove(text, firsts) {
+  const lines = String(text || '').replace(/\r/g, '').split('\n').map((l) => l.replace(SGR, ''));
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  const box = inputBox(lines);
+  const want = new Set(firsts.map((f) => String(f).trim()));
+  let n = 0;
+  for (let i = 0; i < (box > 0 ? box - 1 : lines.length); i++) {
+    const m = /^\s*❯\s?(.*)$/.exec(lines[i]);
+    if (m && want.has(m[1].trim())) n++;
+  }
+  return n;
+}
+
+module.exports = { parseScreen, parseMenu, promptLinesAbove };

@@ -406,17 +406,26 @@ function createRunner(overrides = {}) {
    * Messages waiting for the turn to end. take: back to the console's box to
    * edit (removed here; never sent). send: type it in now, mid-turn.
    */
+  // A message an older runner held for the end of the turn has its id in
+  // `s.outbox`; anything else is in Claude Code's own queue (15 Nov).
+  const inRunner = (s, id) => id != null && (s.outbox || []).some((m) => m.id === String(id));
   app.post('/api/sessions/:id/outbox/take', auth, wrap(async (req, res) => {
     const s = need(req);
-    const m = sessions.takeOutbox(s, req.body?.id ?? null);
+    const id = req.body?.id ?? null;
+    const m = inRunner(s, id) ? sessions.takeOutbox(s, id) : await sessions.takeQueued(s, id);
     if (!m) return res.status(404).json({ error: 'Nothing waiting: it was already sent or taken' });
     res.json({ message: m, session: sessions.view(s) });
   }));
   app.post('/api/sessions/:id/outbox/send', auth, wrap(async (req, res) => {
     const s = need(req);
-    const m = sessions.takeOutbox(s, req.body?.id ?? null);
-    if (!m) return res.status(404).json({ error: 'Nothing waiting: it was already sent or taken' });
-    try { await sessions.send(s, m.text, { now: true }); } catch (e) { s.outbox = [m, ...(s.outbox || [])]; sessions.emit('change', s); throw e; }
+    const id = req.body?.id ?? null;
+    if (inRunner(s, id)) {
+      const m = sessions.takeOutbox(s, id);
+      if (!m) return res.status(404).json({ error: 'Nothing waiting: it was already sent or taken' });
+      try { await sessions.send(s, m.text, { now: true }); } catch (e) { s.outbox = [m, ...(s.outbox || [])]; sessions.emit('change', s); throw e; }
+      return res.json(sessions.view(s));
+    }
+    if (!(await sessions.sendQueueNow(s))) return res.status(404).json({ error: 'Nothing waiting: it was already sent or taken' });
     res.json(sessions.view(s));
   }));
 
@@ -546,8 +555,11 @@ function createRunner(overrides = {}) {
   app.get('/api/sessions/:id/prompt', auth, wrap(async (req, res) => {
     const s = need(req);
     const alive = await sessions.isAlive(s);
-    if (!alive) return res.json({ alive, menu: null, activity: null, agents: [], mode: null, draft: null });
-    res.json({ alive, ...parseScreen(await tmux.capture(s.tmux, { ansi: true })) });
+    if (!alive) return res.json({ alive, menu: null, activity: null, agents: [], mode: null, draft: null, queue: [], input: '' });
+    const scr = parseScreen(await tmux.capture(s.tmux, { ansi: true }));
+    // A message queued in the terminal tab shows in the chat too: same queue.
+    await sessions.refreshQueue(s, scr);
+    res.json({ alive, ...scr });
   }));
 
   /**

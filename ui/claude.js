@@ -1452,7 +1452,18 @@ function paintQueued(s) {
   const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
   // The runner's queue is the one source: in its order, with its ids, gone
   // from here the moment it is sent (pushed over the live connection).
-  const out = outboxOf(s).map((m) => ({
+  const box = outboxOf(s);
+  const ccCount = box.filter((m) => m.in === 'claude').length;
+  // Claude Code's own queue (the one the terminal shows) and, from an older
+  // runner, messages it held for the end of the turn.
+  const out = box.map((m) => (m.in === 'claude' ? {
+    text: m.text, at: m.at, label: 'Queued in Claude Code: goes in at its next step (the terminal shows it too)',
+    actions: [
+      { label: ccCount > 1 ? 'Send all now' : 'Send now', title: 'Stop this step and send the queue now, as ctrl+x ctrl+s in the terminal', run: () => outboxAct(s, 'send', m.id) },
+      { label: 'Edit', title: 'Back to the message box (taken out of the queue, not sent)', run: () => editQueued(s, m.id) },
+      { label: 'Remove', title: 'Take it out of the queue (not sent)', run: () => outboxAct(s, 'take', m.id) },
+    ],
+  } : {
     text: m.text, at: m.at, label: 'Queued: goes in when Claude finishes this turn',
     actions: [
       { label: 'Send now', title: 'Type it in now: Claude reads it at its next step', run: () => outboxAct(s, 'send', m.id) },
@@ -1460,6 +1471,7 @@ function paintQueued(s) {
       { label: 'Remove', title: 'Do not send it', run: () => outboxAct(s, 'take', m.id) },
     ],
   }));
+  if (box.length) local = local.filter((q) => q.failed || !box.some((m) => norm(m.text) === norm(q.text)));
   const rest = local.map((q) => {
     const drop = () => { setQueued(s.id, queued(s.id).filter((x) => x.at !== q.at)); paintQueued(s); };
     if (!q.failed) return { text: q.text, at: q.at, label: 'Queued in Claude Code: it goes in after this step (cannot be edited from here)', actions: [{ label: 'Hide', title: 'Stop showing it here (it still sends)', run: drop }] };
@@ -1486,7 +1498,9 @@ async function outboxAct(s, what, id) {
     if (what === 'send') kick();
   } catch (e) {
     takenIds.delete(id);
-    if (missingRoute(e)) oldRunner(s); else ctx.toast?.('err', 'That did not work', e.message);
+    if (missingRoute(e)) oldRunner(s);
+    else if (/nothing waiting/i.test(e.message)) ctx.toast?.('err', what === 'take' ? 'Already sent' : 'Nothing to send', what === 'take' ? 'It went in before it could be taken out of the queue.' : 'The queue had already gone in.');
+    else ctx.toast?.('err', 'That did not work', e.message);
     paint('session');
   }
 }

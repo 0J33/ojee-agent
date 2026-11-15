@@ -25,11 +25,11 @@
 const EventEmitter = require('events');
 const fs = require('fs');
 const path = require('path');
-const { randomUUID } = require('crypto');
+const { randomUUID, createHash } = require('crypto');
 const { classify, retryAt, family } = require('./limits');
 const { findTranscript, Tail } = require('./transcript');
 const { enterWhenTyped } = require('./submit');
-const { parseScreen } = require('./screen');
+const { parseScreen, promptLinesAbove } = require('./screen');
 
 /** States in which a claude process is expected to exist. */
 const LIVE = new Set(['starting', 'running', 'idle', 'waiting', 'blocked', 'done', 'paused']);
@@ -196,7 +196,12 @@ class Sessions extends EventEmitter {
       tmux: s.tmux,
       background: bgSummary(s),
       // Always an array on this runner: the console reads its presence as "the runner keeps the queue".
-      outbox: (s.outbox || []).map((m) => ({ id: m.id, text: m.text, at: m.at })),
+      // Claude Code's own queue (read off the screen) first, then anything an
+      // older runner still holds for the end of the turn.
+      outbox: [
+        ...(s.ccQueue || []).map((m) => ({ id: m.id, text: m.text, at: m.at, in: 'claude' })),
+        ...(s.outbox || []).map((m) => ({ id: m.id, text: m.text, at: m.at, in: 'runner' })),
+      ],
     };
   }
 
@@ -589,16 +594,12 @@ class Sessions extends EventEmitter {
   async send(s, text, { now = false } = {}) {
     const msg = String(text || '').trim();
     if (!msg) throw Object.assign(new Error('Empty message'), { status: 400 });
-    // Mid-turn, a message waits here, not in Claude Code's own queue: from
-    // here it can be shown, taken back to edit (Up in the console), or sent
-    // now, and it goes in as one message when the turn ends (owner, 11 Nov).
-    // A session busy only with background work takes it straight away.
-    if (!now && s.state === 'running' && !s.bgOnly && (await this.isAlive(s))) {
-      s.outbox = [...(s.outbox || []), { id: randomUUID().slice(0, 12), text: msg, at: Date.now() }];
-      this.store.save();
-      this.emit('change', s);
-      return;
-    }
+    // Mid-turn, a message goes into Claude Code's own queue (owner, 15 Nov):
+    // the one queue, so the terminal and the console show the same thing.
+    // The console reads it off the screen (`queue` in the view) and edits,
+    // removes or sends it now through Claude Code's own keys (takeQueued,
+    // sendQueueNow). `now` is kept for callers; both type it in.
+    const midTurn = s.state === 'running' && !s.bgOnly;
     if (s.state === 'queued') { s.pendingPrompt = [s.pendingPrompt, msg].filter(Boolean).join('\n\n'); this.store.save(); return; }
     if (s.state === 'starting') throw Object.assign(new Error('Still starting — try again in a moment'), { status: 409 });
 
@@ -620,7 +621,165 @@ class Sessions extends EventEmitter {
     // A pending question dialog would swallow the text; dismiss it first,
     // so the message becomes the answer.
     if (s.question) { await this.tmux.keys(s.tmux, 'Escape'); await delay(400); }
-    await this.type(s, msg);
+    await this.withScreenLock(s, async () => {
+      await this.type(s, msg);
+      if (midTurn) {
+        // What was typed, word for word: the screen folds a long message
+        // ("[Pasted text #1 +12 lines]") and wraps lines, so Edit gives back this.
+        s.typedQueue = [...(s.typedQueue || []).filter((t) => Date.now() - t.at < 6 * 3600_000).slice(-20), { text: msg, at: Date.now() }];
+        // Claude Code takes a moment to draw it in the queue: wait for it (2 s at most),
+        // so the console's reply already lists it.
+        for (let k = 0; k < 10; k++) {
+          await delay(200);
+          const q = await this.refreshQueue(s);
+          if (q.some((m) => m.text === msg)) break;
+        }
+      }
+    });
+  }
+
+  /**
+   * One keyboard at a time per session: taking a message back is several
+   * keystrokes (clear, Up, read, clear, retype), and a send typed into the
+   * middle of that would land in the wrong box.
+   */
+  async withScreenLock(s, fn) {
+    this.screenLocks = this.screenLocks || new Map();
+    const prev = this.screenLocks.get(s.id) || Promise.resolve();
+    let release;
+    const mine = new Promise((r) => { release = r; });
+    this.screenLocks.set(s.id, prev.then(() => mine));
+    await prev;
+    try { return await fn(); } finally { release(); if (this.screenLocks.get(s.id) === mine) this.screenLocks.delete(s.id); }
+  }
+
+  /** The exact text typed for a message the screen shows as `shown` (folded or wrapped there). */
+  typedTextOf(s, shown) {
+    const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
+    const want = norm(shown);
+    const list = s.typedQueue || [];
+    for (let i = list.length - 1; i >= 0; i--) if (norm(list[i].text) === want) return list[i].text;
+    if (/\[Pasted text #\d+/.test(shown)) {
+      // Claude Code shows a long paste by its label: the newest long message typed is the best match.
+      for (let i = list.length - 1; i >= 0; i--) if (list[i].text.includes('\n') || list[i].text.length > 800) return list[i].text;
+    }
+    return shown;
+  }
+
+  /**
+   * Claude Code's queue as the screen shows it now, with ids the console can
+   * act on: the same message keeps its id while it waits (its text and how
+   * many identical ones come before it). Emits a change when it moved.
+   */
+  async refreshQueue(s, screen = null) {
+    if (!(await this.isAlive(s))) { if (s.ccQueue?.length) { s.ccQueue = []; this.emit('change', s); } return []; }
+    const scr = screen || parseScreen(await this.tmux.capture(s.tmux, { ansi: true }));
+    const seen = new Map();
+    const next = (scr.queue || []).map((shown) => {
+      const n = (seen.get(shown) || 0) + 1;
+      seen.set(shown, n);
+      const id = createHash('sha1').update(`${shown}\u0000${n}`).digest('hex').slice(0, 12);
+      const old = (s.ccQueue || []).find((m) => m.id === id);
+      return { id, text: this.typedTextOf(s, shown), shown, at: old?.at || Date.now() };
+    });
+    const before = JSON.stringify((s.ccQueue || []).map((m) => m.id));
+    s.ccQueue = next;
+    if (JSON.stringify(next.map((m) => m.id)) !== before) this.emit('change', s);
+    this.watchQueue(s);
+    return next;
+  }
+
+  /** While Claude Code holds a queue, read it every 1.5 s, so it clears here the moment it goes in. */
+  watchQueue(s) {
+    this.queueWatch = this.queueWatch || new Map();
+    if (!s.ccQueue?.length) { clearTimeout(this.queueWatch.get(s.id)); this.queueWatch.delete(s.id); return; }
+    if (this.queueWatch.has(s.id)) return;
+    this.queueWatch.set(s.id, setTimeout(async () => {
+      this.queueWatch.delete(s.id);
+      try { await this.withScreenLock(s, () => this.refreshQueue(s)); } catch (e) { this.log('queue', e.message); }
+    }, 1500));
+  }
+
+  /** Clear Claude Code's input box, every line of it: Ctrl+U per line, Backspace to join the line above. */
+  async clearBox(s, text) {
+    const lines = Math.max(1, String(text || '').split('\n').length);
+    const keys = [];
+    for (let i = 0; i < lines; i++) { keys.push('C-u'); if (i < lines - 1) keys.push('BSpace'); }
+    for (const k of keys) await this.tmux.keys(s.tmux, k);
+    await delay(200);
+  }
+
+  /**
+   * Take one message back out of Claude Code's queue: to edit it or to drop
+   * it. Claude Code's Up moves the WHOLE queue into the box, so the others
+   * are typed back in after, in order, and anything that was in the box is
+   * put back. Returns the message, or null when it was already sent.
+   *
+   * The race the terminal has (Up just as the turn ends: the queue has gone
+   * in, and Up recalls the last message sent instead) is caught here: the
+   * box must read as the queue did, or nothing is taken and the box is put
+   * back as it was.
+   */
+  async takeQueued(s, id = null) {
+    return this.withScreenLock(s, async () => {
+      if (!(await this.isAlive(s))) return null;
+      const scr = parseScreen(await this.tmux.capture(s.tmux, { ansi: true }));
+      const list = await this.refreshQueue(s, scr);
+      const i = id == null ? list.length - 1 : list.findIndex((m) => m.id === String(id));
+      if (i < 0) return null;
+      const draft = scr.input || '';
+      if (draft) await this.clearBox(s, draft);
+      const firsts = list.map((m) => m.shown.split('\n')[0]);
+      const linesBefore = promptLinesAbove(await this.tmux.capture(s.tmux), firsts);
+      await this.tmux.keys(s.tmux, 'Up');
+      let box = '';
+      let after = '';
+      for (let k = 0; k < 10; k++) {
+        await delay(150);
+        after = await this.tmux.capture(s.tmux, { ansi: true });
+        box = parseScreen(after).input || '';
+        if (box) break;
+      }
+      const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
+      const want = norm(list.map((m) => m.shown).join('\n'));
+      const sameText = box && (norm(box) === want || (/\[Pasted text #\d+/.test(box) && list.every((m) => box.includes(m.shown.split('\n')[0].slice(0, 30)))));
+      // The queue's lines left the screen with it. Still there: it went in
+      // just before Up, and the box holds a recall of it (history), not it.
+      const queueLeft = promptLinesAbove(after, firsts) <= linesBefore - list.length;
+      const matches = sameText && queueLeft && !parseScreen(after).queue.length;
+      if (box) await this.clearBox(s, box);
+      if (!matches) {
+        // Already gone in: what came up was history, not the queue.
+        if (draft) await this.tmux.type(s.tmux, draft);
+        await this.refreshQueue(s);
+        return null;
+      }
+      // The others go back into the queue, in order, then the box as it was.
+      for (const m of list.filter((_, k) => k !== i)) {
+        await this.tmux.type(s.tmux, m.text);
+        await enterWhenTyped(this.tmux, s.tmux, {});
+        await delay(250);
+      }
+      if (draft) await this.tmux.type(s.tmux, draft);
+      await delay(250);
+      await this.refreshQueue(s);
+      const taken = list[i];
+      s.typedQueue = (s.typedQueue || []).filter((t) => t.text !== taken.text);
+      return { id: taken.id, text: taken.text, at: taken.at };
+    });
+  }
+
+  /** Claude Code's own "send now" (ctrl+x ctrl+s): it stops this step and sends the whole queue. */
+  async sendQueueNow(s) {
+    return this.withScreenLock(s, async () => {
+      const list = await this.refreshQueue(s);
+      if (!list.length) return false;
+      await this.tmux.keys(s.tmux, 'C-x');
+      await this.tmux.keys(s.tmux, 'C-s');
+      await delay(600);
+      await this.refreshQueue(s);
+      return true;
+    });
   }
 
   /**
@@ -1206,6 +1365,11 @@ class Sessions extends EventEmitter {
       if (s.state === 'paused' && s.pausedUntil && now >= s.pausedUntil && !this.busyOps.has(s.id)) {
         await this.resumePaused(s).catch((e) => this.log('resume', e.message));
         continue;
+      }
+
+      // Claude Code's queue, typed in the terminal or the console: kept in step either way.
+      if (alive && (s.state === 'running' || s.ccQueue?.length) && !this.busyOps.has(s.id) && !this.screenLocks?.has(s.id)) {
+        await this.refreshQueue(s).catch((e) => this.log('queue', e.message));
       }
 
       // Between turns, a notice menu may be sitting on the screen.

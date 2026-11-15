@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { parseScreen } = require('../src/screen');
+const { parseScreen, promptLinesAbove } = require('../src/screen');
 const { toMessages, readRange } = require('../src/transcript');
 
 const RULE = '─'.repeat(60);
@@ -171,4 +171,46 @@ test('lists you wrote and lists in replies are never an options prompt; a real A
   const m = parseScreen(ask).menu;
   assert.ok(m, 'the real prompt is read');
   assert.deepEqual(m.options.map((o) => o.label), ['Rebase', 'Merge', 'Type something.']);
+});
+
+// Claude Code 2.1.325's own queue, as captured on 15 Nov.
+const QRULE = '─'.repeat(60);
+const QUEUED_SCREEN = [
+  '  formed by faulting, when blocks of crust are lifted or tilted along fractures. The Sierra Nevada in',
+  '  California is a large fault-block range, its eastern face a steep escarpment.',
+  '❯ two line first',
+  '  two line second',
+  '❯ single after',
+  '  ctrl+x ctrl+s to send now',
+  QRULE,
+  '❯ Press up to edit queued messages',
+  QRULE,
+  '  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt',
+].join('\n');
+
+test('Claude Code\'s queue is read off the screen, oldest first, a long one whole', () => {
+  const s = parseScreen(QUEUED_SCREEN);
+  assert.deepEqual(s.queue, ['two line first\ntwo line second', 'single after']);
+  assert.equal(s.draft, null, 'the "Press up" placeholder is not typed text');
+  assert.equal(s.input, '');
+});
+
+test('sent messages above the box are not a queue (no "send now" hint)', () => {
+  const s = parseScreen(['❯ two line first', '  two line second', '* Coalescing… (2s · thinking)', QRULE, '❯ ', QRULE].join('\n'));
+  assert.deepEqual(s.queue, []);
+});
+
+test('the whole input box is read, every line', () => {
+  const s = parseScreen([QRULE, '❯ queued gamma', '  line two', QRULE, '  ⏵⏵ auto mode on'].join('\n'));
+  assert.equal(s.draft, 'queued gamma');
+  assert.equal(s.input, 'queued gamma\nline two');
+});
+
+test('queued lines leave the screen when Up takes them, and stay when they were sent', () => {
+  const firsts = ['two line first', 'single after'];
+  assert.equal(promptLinesAbove(QUEUED_SCREEN, firsts), 2);
+  const sent = ['❯ two line first', '  two line second', '❯ single after', '* Coalescing…', QRULE, '❯ ', QRULE].join('\n');
+  assert.equal(promptLinesAbove(sent, firsts), 2, 'went in: still on screen');
+  const taken = ['  California is a large fault-block range.', QRULE, '❯ two line first', '  two line second', '  single after', QRULE].join('\n');
+  assert.equal(promptLinesAbove(taken, firsts), 0, 'taken: gone from above the box');
 });
