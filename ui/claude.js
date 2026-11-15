@@ -1108,6 +1108,14 @@ function onViewport() {
   const keyboard = !!vv && vv.scale < 1.05
     && document.documentElement.clientHeight - vv.height > 120
     && view.contains(document.activeElement);
+  // Typing, the view is fixed to what the keyboard leaves, so the page under it never needs to
+  // scroll. The first time the box takes focus iOS scrolls the page anyway, while the keyboard is
+  // still coming up: measured then, the view sat too high and the caret was left below the box
+  // (it came right only on a second try). What it scrolled is put back, and measured again.
+  if (keyboard && (window.scrollY || document.documentElement.scrollTop)) {
+    window.scrollTo(0, 0);
+    requestAnimationFrame(onViewport);
+  }
   const was = view.classList.contains('is-kb');
   view.classList.toggle('is-kb', keyboard);
   // The keyboard opening moves the message box (the typing layout lifts it
@@ -1139,17 +1147,22 @@ function watchViewport() {
   const vv = window.visualViewport;
   let raf = 0;
   const run = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(onViewport); };
-  vv?.addEventListener('resize', run);
+  // The keyboard's height arrives in steps on iOS (it animates, then the bar above it settles):
+  // measured again over the next moments, not only on the first event.
+  let timers = [];
+  const settle = () => { timers.forEach(clearTimeout); run(); timers = [80, 200, 380, 650, 1000].map((ms) => setTimeout(run, ms)); };
+  vv?.addEventListener('resize', settle);
   vv?.addEventListener('scroll', run);
   window.addEventListener('resize', run);
-  document.addEventListener('focusin', run);
-  document.addEventListener('focusout', run);
+  document.addEventListener('focusin', settle);
+  document.addEventListener('focusout', settle);
   viewportWatch = () => {
-    vv?.removeEventListener('resize', run);
+    timers.forEach(clearTimeout);
+    vv?.removeEventListener('resize', settle);
     vv?.removeEventListener('scroll', run);
     window.removeEventListener('resize', run);
-    document.removeEventListener('focusin', run);
-    document.removeEventListener('focusout', run);
+    document.removeEventListener('focusin', settle);
+    document.removeEventListener('focusout', settle);
   };
 }
 
