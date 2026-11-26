@@ -217,11 +217,18 @@ test('runner end to end', { skip: !haveTmux && 'no tmux' }, async (t) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/api/sessions/${id}/terminal?cols=120&rows=30`, { headers: { authorization: 'Bearer test-token' } });
     let text = '';
     let ready = false;
+    let pong = null;
     ws.on('message', (d, bin) => {
-      if (bin) text += d.toString('utf8');
-      else if (JSON.parse(String(d)).state === 'ready') ready = true;
+      if (bin) { text += d.toString('utf8'); return; }
+      const msg = JSON.parse(String(d));
+      if (msg.state === 'ready') ready = true;
+      if (msg.t === 'pong') pong = msg;
     });
     await waitFor(() => ready && /fake claude/.test(text), 'terminal output');
+    // The browser's heartbeat: a ping is answered, with its number.
+    ws.send(JSON.stringify({ t: 'ping', n: 7 }));
+    await waitFor(() => pong, 'pong');
+    assert.equal(pong.n, 7);
     ws.close();
     const bad = new WebSocket(`ws://127.0.0.1:${port}/api/sessions/${id}/terminal`);
     await new Promise((r) => bad.on('error', r));

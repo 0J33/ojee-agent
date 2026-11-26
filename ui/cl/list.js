@@ -38,6 +38,46 @@ export function sessionRow(s, current) {
   h('span', { class: 'ds' }, clip(line(s), 140)));
 }
 
+/**
+ * Delete ended sessions: one (the row's ×) or all of them (Clear ended).
+ * The runner cannot bring a deleted session back, so it is a confirm, not
+ * an Undo; the conversation itself stays (in Other conversations) unless
+ * "also delete" is ticked. Only sessions that are still ended when it runs,
+ * on a machine that is online, are touched.
+ */
+async function deleteEnded(list, current) {
+  const purge = h('input', { type: 'checkbox' });
+  const one = list.length === 1;
+  const ok = await ask({
+    title: one ? `Delete “${clip(list[0].title || list[0].id.slice(0, 8), 60)}”?` : `Delete ${list.length} ended sessions?`,
+    body: h('div', { class: 'stack' },
+      h('p', {}, one ? 'It is removed from the list. The conversation stays in Other conversations.' : 'They are removed from the list. Running, paused and waiting sessions are not touched. The conversations stay in Other conversations.'),
+      h('label', { class: 'cl-check' }, purge, h('span', {}, `Also delete the conversation${one ? '' : 's'} itself. This cannot be undone.`))),
+    actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: one ? 'Delete' : `Delete ${list.length}`, value: true, variant: 'danger solid' }],
+  });
+  if (!ok) return;
+  await act(one ? `del:${list[0].id}` : 'clear-ended', async () => {
+    let done = 0;
+    const failed = [];
+    for (const s0 of list) {
+      // Fresh from the store: it may have been resumed since the list was drawn.
+      const s = dataOf(s0.device)?.sessions?.find((x) => x.id === s0.id);
+      if (!s || s.state !== 'stopped' || !online(s.device)) continue;
+      try {
+        await api(s.device, `/sessions/${s.id}${purge.checked ? '?purge=1' : ''}`, { method: 'DELETE' });
+        const x = dataOf(s.device);
+        if (x) x.sessions = x.sessions.filter((y) => y.id !== s.id);
+        done++;
+        if (s.id === current) go();
+      } catch (e) { failed.push(e.message); }
+    }
+    S.paint();
+    if (failed.length) toast('err', `${failed.length} not deleted`, failed[0]);
+    else toast('ok', done === 1 ? 'Session deleted' : `${done} sessions deleted`);
+    return true;
+  });
+}
+
 export function sessionsPanel(current) {
   const all = allSessions();
   if (S.filter !== 'all' && !devOf(S.filter)) S.filter = 'all';
@@ -60,9 +100,18 @@ export function sessionsPanel(current) {
     if (!list.length) continue;
     any = true;
     if (k === 'ended') {
-      box.append(h('button', { class: 'grp fold', type: 'button', 'aria-expanded': String(endedOpen), onclick: () => { pref('cl-ended', endedOpen ? '0' : '1'); S.paint(); } },
-        icon(endedOpen ? 'chevdown' : 'chev', 's'), label, h('span', { class: 'm' }, String(list.length))));
-      if (endedOpen) box.append(...list.slice(0, 40).map((s) => sessionRow(s, current)));
+      const deletable = list.filter((s) => s.state === 'stopped' && online(s.device));
+      box.append(h('div', { class: 'grp-row' },
+        h('button', { class: 'grp fold', type: 'button', 'aria-expanded': String(endedOpen), onclick: () => { pref('cl-ended', endedOpen ? '0' : '1'); S.paint(); } },
+          icon(endedOpen ? 'chevdown' : 'chev', 's'), label, h('span', { class: 'm' }, String(list.length))),
+        deletable.length ? h('button', { class: 'cl-clear', type: 'button', title: `Delete all ${deletable.length} ended sessions`, disabled: S.busy.has('clear-ended') || null, onclick: () => deleteEnded(deletable, current) }, 'Clear ended') : null));
+      if (endedOpen) {
+        box.append(...list.slice(0, 40).map((s) => {
+          const can = s.state === 'stopped' && online(s.device);
+          return h('div', { class: 'sess-x' }, sessionRow(s, current),
+            h('button', { class: 'ib cl-rowdel', type: 'button', disabled: !can || S.busy.has(`del:${s.id}`) || null, title: can ? 'Delete this session' : offWhy(devOf(s.device)) || 'Not ended', 'aria-label': `Delete ${s.title || 'session'}`, onclick: () => deleteEnded([s], current) }, icon('trash', 's')));
+        }));
+      }
       continue;
     }
     box.append(h('div', { class: `grp${k === 'needs' ? ' needs' : ''}` }, label, h('span', { class: 'm' }, String(list.length))), ...list.map((s) => sessionRow(s, current)));

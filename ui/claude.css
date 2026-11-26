@@ -71,6 +71,19 @@
 .sess.cur::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:1px;background:var(--acc)}
 .sess.off .nm{color:var(--fg-2)}
 .sess:active{background:var(--hover)}
+/* Ended: a delete on each row, always visible, and Clear ended in the header */
+.cl-list .grp-row{display:flex;align-items:center;border-top:1px solid var(--line)}
+.cl-list .grp-row .grp{border-top:0;flex:1;min-width:0}
+.cl-list .grp-row:first-child,.cl-filter+.grp-row{border-top:0}
+.cl-clear{flex:none;margin-right:8px;height:28px;padding:0 10px;border-radius:var(--r-2,6px);font-size:12px;color:var(--fg-3);transition:color 120ms ease,background-color 120ms ease}
+.cl-clear:disabled{opacity:.5}
+.sess-x{position:relative}
+.sess-x .sess{padding-right:48px}
+.sess-x .cl-rowdel{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:36px;height:36px;color:var(--fg-3)}
+.sess-x .cl-rowdel:disabled{opacity:.4}
+@media (pointer:coarse){.sess-x .cl-rowdel{width:44px;height:44px;right:2px}.sess-x .sess{padding-right:52px}.cl-clear{height:44px;padding:0 12px}}
+@container app (max-width:699px){.sess-x .cl-rowdel{width:44px;height:44px;right:2px}.sess-x .sess{padding-right:52px}.cl-clear{height:44px;padding:0 12px}}
+@media (hover:hover) and (pointer:fine){.cl-clear:hover{color:var(--err);background:var(--hover)}.sess-x .cl-rowdel:hover:not(:disabled){color:var(--err)}}
 .cl-offline{display:grid;gap:4px;padding:10px 14px;border-top:1px solid var(--line);font-size:12px;color:var(--fg-3)}
 .cl-offline span{display:flex;align-items:center;gap:8px}
 .cl-history{color:var(--fg-3)}
@@ -134,10 +147,25 @@
 
 /* terminal */
 .cl-termhost{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--term)}
-.cl-xterm{flex:1;min-height:0;position:relative;padding:var(--term-pad) 0 4px var(--term-pad);background:var(--term);overflow:hidden}
+.cl-xterm{flex:1;min-height:0;position:relative;display:flex;flex-direction:column;padding:var(--term-pad) 0 4px var(--term-pad);background:var(--term);overflow:hidden}
+/* xterm's box: no padding, so the fit counts only real room; whole rows, the remainder left empty below */
+.cl-xterm-box{flex:1;min-height:0;min-width:0;position:relative;overflow:hidden}
 .cl-xterm .xterm{height:100%}
 .cl-xterm .xterm-viewport{background:var(--term) !important;scrollbar-width:thin;scrollbar-color:#2f2f32 transparent}
-.cl-sv[data-term="connecting"] .cl-xterm{opacity:.6;transition:opacity 200ms ease}
+.cl-sv[data-term="connecting"] .cl-xterm,.cl-sv[data-term="reconnecting"] .cl-xterm,.cl-sv[data-term="disconnected"] .cl-xterm,.cl-sv[data-term="offline"] .cl-xterm{opacity:.6;transition:opacity 200ms ease}
+/* not attached: "Reconnecting… / Disconnected [Reconnect]", in the head or over the terminal */
+.cl-tstat{display:inline-flex;align-items:center;gap:6px;min-width:0;font-size:12px;color:var(--fg-2)}
+.cl-tstat[hidden]{display:none}
+.cl-tstat .dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--warn,#e5a50a)}
+.cl-tstat[data-state="reconnecting"] .dot{animation:cl-tstat-pulse 1s ease-in-out infinite alternate}
+.cl-tstat[data-state="disconnected"] .dot,.cl-tstat[data-state="error"] .dot{background:var(--err,#e5484d)}
+.cl-tstat[data-state="ended"] .dot{background:var(--fg-3)}
+.cl-tstat .tx{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:22ch}
+.cl-tstat.over{position:absolute;top:8px;right:12px;z-index:3;padding:4px 4px 4px 10px;border-radius:999px;background:#1a1a1c;border:1px solid #2f2f32;color:#d8d8dc;box-shadow:var(--sh-2)}
+.cl-tstat.over .btn{background:#151517;color:#d8d8dc;border-color:#2a2a2d}
+@keyframes cl-tstat-pulse{from{opacity:1}to{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.cl-tstat[data-state="reconnecting"] .dot{animation:none}}
+@container app (max-width:520px){.cl-svh .cl-tstat .tx{display:none}}
 .cl-copychip{position:absolute;right:12px;bottom:12px;z-index:3;height:30px;padding:0 12px;border-radius:15px;background:#1a1a1c;border:1px solid #2f2f32;color:#d8d8dc;font-size:12.5px;font-weight:500;box-shadow:var(--sh-2)}
 .cl-copychip.is-offer{background:#ededef;color:#0a0a0a;border-color:transparent}
 .cl-keys{flex:none}

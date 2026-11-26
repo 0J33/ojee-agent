@@ -26,6 +26,7 @@ export function createSessionView(s0, { onBack }) {
   let keysOn = keysFor(pane);
   let term = null;
   let termState = null;
+  let termGen = 0;   // a new terminal: the head picks up its status line
   let chat = null;
 
   const head = h('header', { class: 'cl-svh' });
@@ -66,7 +67,7 @@ export function createSessionView(s0, { onBack }) {
   function paintHead() {
     const st = stateOf(s);
     const fell = s.model?.current && s.model.preferred && s.model.current !== s.model.preferred;
-    const sig = JSON.stringify([s.title, s.state, s.alive, online(dev), s.model, s.account, s.cwd, pane, S.busy.has(`resume:${id}`), multi()]);
+    const sig = JSON.stringify([s.title, s.state, s.alive, online(dev), s.model, s.account, s.cwd, pane, S.busy.has(`resume:${id}`), multi(), termGen]);
     swap(head, sig, () => [
       h('button', { class: 'ib back', type: 'button', 'aria-label': 'All sessions', onclick: onBack }, icon('back', 'l')),
       h('div', { class: 'id' },
@@ -78,6 +79,9 @@ export function createSessionView(s0, { onBack }) {
           h('a', { class: 'path', href: '#', title: `${s.cwd}\nOpen the folder`, onclick: (e) => { e.preventDefault(); explore(dev, s.cwd, s.cwd); } }, tailPath(shortPath(s.cwd, dev), 34)))),
       h('div', { class: 'r' },
         h('span', { class: `tag c st-word`, style: `--c:${st.tone ? `var(--${st.tone})` : 'var(--fg-3)'}` }, st.label),
+        // The terminal not attached: Reconnecting… / Disconnected, with its
+        // Reconnect button (term.js keeps it up to date; hidden when attached).
+        pane === 'terminal' ? term?.statusEl : null,
         primary(),
         h('div', { class: 'seg', role: 'group', 'aria-label': 'View' },
           h('button', { type: 'button', 'aria-pressed': String(pane === 'terminal'), title: 'Terminal', onclick: () => setPane('terminal') }, icon('term', 's'), h('span', { class: 'lbl' }, 'Terminal')),
@@ -144,8 +148,11 @@ export function createSessionView(s0, { onBack }) {
       keys: keysOn,
       onImage: (file) => sendFiles([file]),
       onPick: () => pickText(),
+      statusInHead: true,
       onState: (st) => { termState = st; el.dataset.term = st; if (st === 'connected' && fine()) term?.focus(); },
     });
+    termGen++;
+    paintHead();
   }
   function setPane(p) {
     if (p === pane) return;
