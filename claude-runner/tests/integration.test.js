@@ -100,8 +100,10 @@ test('runner end to end', { skip: !haveTmux && 'no tmux' }, async (t) => {
     id = r.body.id;
     await waitFor(() => stateOf(id) === 'idle', 'idle after first turn');
     const s = sessions.get(id);
-    assert.equal(s.model.current, 'claude-fable-5-1');
-    assert.equal(s.model.actual, 'claude-fable-5-1');
+    // The default model (Opus 5.5) is also the default fallback, so there is none to fall to.
+    assert.equal(s.model.current, 'claude-opus-5-5');
+    assert.equal(s.model.actual, 'claude-opus-5-5');
+    assert.equal(s.model.fallback, null);
     assert.match(s.lastAssistant, /Working on: hello there/);
     // The folder was pre-trusted in the main account's .claude.json.
     const j = JSON.parse(fs.readFileSync(path.join(HOME, '.claude.json'), 'utf8'));
@@ -158,6 +160,13 @@ test('runner end to end', { skip: !haveTmux && 'no tmux' }, async (t) => {
     await api('POST', `/api/sessions/${id}/message`, { text: 'block now' });
     await waitFor(() => stateOf(id) === 'blocked', 'blocked');
     assert.match(sessions.get(id).detail, /production password/);
+  });
+
+  await t.test('a session put on Fable with an Opus fallback goes back to Fable on its next message', async () => {
+    await api('PATCH', `/api/sessions/${id}`, { model: { preferred: 'claude-fable-5-1', fallback: 'claude-opus-5' } });
+    await api('POST', `/api/sessions/${id}/message`, { text: 'switch over' });
+    await waitFor(() => sessions.get(id).model.current === 'claude-fable-5-1' && stateOf(id) === 'idle', 'on fable and idle');
+    assert.equal(sessions.get(id).model.actual, 'claude-fable-5-1');
   });
 
   await t.test('running out of Fable continues the same conversation on Opus', async () => {
@@ -262,7 +271,7 @@ test('runner end to end', { skip: !haveTmux && 'no tmux' }, async (t) => {
     for (const a of accounts.list()) a.limits = {};
     store.updateSettings({ activeAccount: 'main' });
     fs.writeFileSync(path.join(HOME, '.claude', 'FAKE_FABLE_WEEKLY'), '');
-    const s = (await api('POST', '/api/sessions', { cwd: work, prompt: 'start on fable' })).body;
+    const s = (await api('POST', '/api/sessions', { cwd: work, prompt: 'start on fable', model: 'claude-fable-5-1', fallback: 'claude-opus-5' })).body;
     await waitFor(() => sessions.get(s.id).model.current === 'claude-opus-5' && stateOf(s.id) === 'idle', 'same account, on opus');
     const live = sessions.get(s.id);
     assert.equal(live.account, 'main', 'the account was not blamed for its model running out');

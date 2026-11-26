@@ -179,7 +179,17 @@
 /* ---------- phone: the session is a full-screen layer ---------- */
 @container app (max-width:699px){
   .cl-grid[data-view="session"] .cl-main{height:auto}
-  .cl-grid[data-view="session"] .cl-sv{position:fixed;left:0;right:0;top:var(--vv-top,0px);height:var(--vv-h,100dvh);z-index:30;border-radius:0;border:0;box-shadow:none;padding-left:var(--safe-l);padding-right:var(--safe-r);background:var(--panel)}
+  /* Keyboard down: the frame's own height (--app-h, from the shell: in an
+     iPhone home-screen app the page is drawn under the status bar but
+     innerHeight and the visual viewport leave those 47px out, so sizing
+     from them ended the layer short, the key row sat high and the console's
+     tab bar peeked out clipped below it). Keyboard up: the part of the
+     screen above the keyboard, from the visual viewport. */
+  .cl-grid[data-view="session"] .cl-sv{position:fixed;left:0;right:0;top:0;height:var(--app-h,var(--vv-h,100dvh));z-index:30;border-radius:0;border:0;box-shadow:none;padding-left:var(--safe-l);padding-right:var(--safe-r);background:var(--panel)}
+  .cl.kb .cl-grid[data-view="session"] .cl-sv{top:var(--vv-top,0px);height:var(--vv-h,100dvh)}
+  /* The layer is the whole screen: the console's bars stay out of sight
+     under it (its own head has Back to the list). */
+  body:has(.cl-grid[data-view="session"]) .tabbar,body:has(.cl-grid[data-view="session"]) .topbar{visibility:hidden}
   .cl-grid[data-view="session"] .cl-svh{padding-top:calc(9px + var(--safe-t))}
   .cl.kb .cl-grid[data-view="session"] .cl-svh{padding-top:9px}
   .cl-grid[data-view="session"] .cl-body{padding-bottom:var(--safe-b)}
