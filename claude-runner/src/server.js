@@ -781,6 +781,7 @@ function createRunner(overrides = {}) {
   app.post('/api/accounts/:id/refresh', auth, wrap(async (req, res) => {
     const a = needAcct(req);
     await accounts.status(a);
+    loginNotices();
     sessions.emit('accounts');
     res.json(accounts.describe(a));
   }));
@@ -995,6 +996,7 @@ function createRunner(overrides = {}) {
           title: `${a.label} needs to log in`,
           text: `${d.limitText || 'Its login has expired or was never made'} on ${config.DEVICE_LABEL}.\n\nLog it in from Claude → Accounts.`,
           tag: `needsLogin:${a.id}`,
+          route: `#/agent/claude/accounts/-/${a.id}`, // the module fills in its own device id
         });
       } else if (d.loggedIn) {
         notifier.clear(`needsLogin:${a.id}`);

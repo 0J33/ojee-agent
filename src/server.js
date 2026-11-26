@@ -866,7 +866,8 @@ function relayRunner(runner) {
             // The runner's tag is `<kind>:<subject>`; the console's key is
             // `<alert kind>:<device>:<subject>`, the same one /api/summary uses.
             const subject = String(n.tag || '').split(':').slice(1).join(':') || '-';
-            notifyStream.emit({ ...n, key: `${n.id}:${runner.id}:${subject}`, device: runner.id, blocking: n.id === 'agent.claude-needs-input' });
+            const route = typeof n.route === 'string' ? n.route.replace('/accounts/-/', `/accounts/${runner.id}/`) : n.route;
+            notifyStream.emit({ ...n, route, key: `${n.id}:${runner.id}:${subject}`, device: runner.id, blocking: n.id === 'agent.claude-needs-input' });
           } catch { /* not ours */ }
         }
       });

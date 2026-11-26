@@ -89,7 +89,7 @@ class Notifier {
    * @param {string} [o.title]  overrides the generated title
    * @param {string} [o.tag]    dedupe key; defaults to kind + session
    */
-  async send(kind, { session = null, text = '', title = null, tag = null, force = false, test = false } = {}) {
+  async send(kind, { session = null, text = '', title = null, tag = null, force = false, test = false, route = null } = {}) {
     const s = this.settings();
     // The console's choices win once it has sent any; until then, the old
     // per-kind switches in the runner's own settings.
@@ -139,7 +139,7 @@ class Notifier {
           body: detail.slice(0, 600),
           tag: key,
           severity,
-          route: session ? `#/agent/claude/${session.id}` : '#/agent/claude',
+          route: route || (session ? `#/agent/claude/${session.id}` : '#/agent/claude'),
           at: this.now(),
         });
       } catch { /* a stream that broke must not stop the ping */ }
