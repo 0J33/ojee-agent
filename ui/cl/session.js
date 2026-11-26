@@ -59,7 +59,7 @@ export function createSessionView(s0, { onBack }) {
       fine() ? { label: S.root.classList.contains('max') ? 'Restore the layout' : 'Fill the window', icon: S.root.classList.contains('max') ? 'unfull' : 'full', run: () => setMax(!S.root.classList.contains('max')) } : null,
       { label: 'Open its folder', icon: 'folder', disabled: off, run: () => explore(dev, s.cwd, s.cwd) },
       { sep: true },
-      alive() ? { label: 'End the session', icon: 'power', meta: 'kept, resumable', run: () => end() } : null,
+      alive() ? { label: 'End the session', icon: 'power', run: () => end() } : null,
       { label: 'Delete', icon: 'trash', danger: true, disabled: off, run: () => del() },
     ], { label: 'Session actions' });
   }

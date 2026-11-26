@@ -1,66 +1,52 @@
-# ojee-agent
+# ojee-agent — Claude
 
-The **AI and automation** module: unattended Claude Code sessions on the host, n8n's workflows,
-the Odysseus stack, and the services those run on.
+The console's **Claude** module: unattended Claude Code sessions on every machine that runs them
+(HP, and LOQ when it is awake), each through that machine's runner (`claude-runner/`).
 
-Runs standalone or as an [ojee-console](https://github.com/0J33/ojee-console) module.
-
----
-
-## What changed, and why
-
-This used to be a host dashboard — CPU graphs, memory bars, every container on the box, and a
-whitelist of restart commands for things it had nothing to do with. All of that is gone.
-
-Monitoring lives in [ojee-fleet](https://github.com/0J33/ojee-fleet), which reads the machine
-directly rather than asking a service *on* that machine, over HTTP, for numbers already sitting in
-`/proc`. A module that both watched the host **and** ran the automations was two modules wearing
-one name, and neither half could be understood without ignoring the other.
-
-What is left is one thing: the AI and automation stack — and since 2.1, the Claude Code sessions
-that run on the same box.
+Runs standalone or as an [ojee-console](https://github.com/0J33/ojee-console) module (id `agent`,
+shown as Claude; deep links stay `#/agent/claude/<session>`).
 
 ---
 
 ## What it shows
 
-**Overview** — whether the stack is up, how many workflows are active, what ran recently and what
-failed.
+One page, terminal-first:
 
-**Claude** — Claude Code sessions running unattended on the host, in any folder. Each opens to its
-real terminal (tmux, attached in the browser), a readable transcript, and a message box. See
-[Claude sessions](#claude-sessions) below.
+- **Sessions** grouped by what they need — needs you, working, idle, ended — with what each is
+  doing right now (the tool running, the question asked), on every device.
+- **A session**: its real terminal (tmux, attached over a WebSocket) with a key bar for phones, or
+  the same conversation as a **chat**, pushed live. Either is one tap away.
+- **Accounts** and their standing (ok, limited until, needs login), switching, logging in.
+- **Settings** per device: models and fallback, sessions at once, stall time, unattended, guard,
+  resume after reboot, CPU governor and heat, pings.
 
-**Workflows** — every n8n workflow, whether it is active, when it last ran and how that went, with
-activate/deactivate. Recent executions underneath.
-
-**Odysseus** — its health, its version, and the four containers it runs on.
-
-**Services** — the containers *this module is responsible for*: n8n, Odysseus, ChromaDB, SearXNG,
-ntfy, CouchDB. Deliberately a list rather than "every container on the host" — fleet shows all of
-them, and a second slightly-different answer to the same question is the kind of overlap where the
-two eventually disagree and you have to work out which one is lying.
-
----
-
-## Failure modes, as states
-
-The failure that actually happens here is an n8n API key that n8n no longer accepts. It answers
-401 to everything, and **"no workflows" and "you are not allowed to ask" must not look the same on
-screen**. So the module distinguishes:
+Off or out of sight since the 26 Nov redesign:
 
 | | |
 |---|---|
-| `no-key` | No API key is configured — set `N8N_API_KEY` |
-| `bad-key` | n8n rejected it — issue a new one under Settings → API |
-| `unreachable` | n8n is not answering at all |
+| Assistant, Workflows, Odysseus | off behind `AGENT_DISABLE` (src/features.js), code kept |
+| the stack's containers (n8n, CouchDB…) | a health check that says nothing until one is down: then one line in the Claude page with Restart, and an `agent.service-down` alert |
+| Work (Forsa) | moved to forsa-aios; the UI is gone (git history: `ui/work.js` before `redesign`); only the endpoints HP's loop still calls stay, server-side (`src/work-legacy.js`) |
 
-Each comes back as a sentence that says what to do, not "failed to load".
+### How the chat gets its data
 
-Similarly, a container that is **absent** and one that is **stopped** are different states: one is
-a deployment that never included that piece, the other is a piece that died.
+| what | where it comes from |
+|---|---|
+| the conversation | the runner's **live channel**, `GET /sessions/:id/live` (SSE): the last 2 MB of the transcript on connect, then each new line as Claude Code writes it (fs.watch + a 1 s poll) |
+| state, the tool running now, the queue | the session's hooks and transcript, pushed as `session` events on the same channel |
+| questions, plans, permissions | the hooks themselves — `PreToolUse` (AskUserQuestion with its options, ExitPlanMode with the plan) and `PermissionRequest` (the tool and what it would do) — drawn as cards; answering is `POST /sessions/:id/answer`, keys worked out from the hook's data |
+| your message | drawn the moment it is sent, then replaced by the real one when it reaches the transcript (or Claude Code's queue, which the transcript also records: `queue-operation` entries) |
+| images, diffs, exit codes, hook output | the transcript: images by reference (`/sessions/:id/media/:id`), Edit/Write hunks from `structuredPatch`, `Exit code N`, `hook_*` attachments; outputs over 20 KB load whole on demand (`/sessions/:id/full/:toolUseId`) |
 
-And a redirect from Odysseus is a service that is up and guarding itself, not one that is down.
+**What is still read off the screen** (and why there is no structured source): the permission
+mode (⏵⏵ bypass…), Claude Code's suggested next message, words typed in the terminal box but not
+sent, and the *options* of a dialog no hook spells out (a plan or permission dialog's choices,
+`/model`, a notice menu). Read every 1.5 s only while someone watches a session, sent only on a
+change. The runner also still reads the screen at boot (folder-trust and bypass prompts), to
+decline notice menus between turns, and to keep your draft when a queued message is taken back.
+
+stream-json / the Agent SDK were not used for interactive sessions: a session is the real
+`claude` TUI in tmux, which the terminal tab attaches to, and stream-json mode has no TUI.
 
 ---
 
@@ -89,16 +75,40 @@ which of this module's own services to act on. Do not expose it beyond a tailnet
 
 | | |
 |---|---|
-| `GET /module.json` | the console's manifest |
-| `GET /api/health` | is this service alive, and is its stack running |
-| `GET /api/summary` | status, headline, facts, alerts — the console's front page |
-| `GET /api/services` | this module's containers, with present/running distinguished |
-| `POST /api/services/:id/restart` | restart one of them |
-| `GET /api/n8n/workflows` | workflows, or a sentence explaining the refusal |
-| `GET /api/n8n/executions` | the last 25 runs |
-| `POST /api/n8n/workflows/:id/(activate\|deactivate)` | toggle one |
-| `GET /api/odysseus` | health and version |
-| `/api/claude/*` | proxied to the Claude runner, token added here (HTTP, SSE and the terminal WebSocket) |
+| `GET /module.json` | the manifest: one view (Claude), every alert kind (`alerts`/`notifications`) |
+| `GET /api/health` | alive, and whether the stack's containers run |
+| `GET /api/summary` | status, headline, four metrics, a 2 h spark of sessions working, alerts with stable keys |
+| `GET /api/stack` | the stack's containers, down ones only matter; `POST /api/services/:id/restart` |
+| `GET /api/events` | `notify` events for the console (src/notify-stream.js) |
+| `/api/claude/*` | proxied to the runners, token added here (HTTP, SSE, the live channel, the terminal WebSocket) |
+| `/api/work/{sweep,messages,replies,replies/handled}` | legacy, server-side only (below) |
+
+### Alerts
+
+Every kind is declared in the manifest (`blocking`, `channel`, `params`), so it appears in the
+console's Settings → Notifications. A summary alert's `key` is its subject
+(`<device>:<session or account>`) with `notify: <kind>`; runner pings arrive as `event: notify`
+with the same key and `state: raise | resolve | update`, so an event and an alert are one item.
+
+| kind | |
+|---|---|
+| `agent.claude-needs-input` | blocking (toast + push): a question, a plan, a permission |
+| `agent.claude-blocked`, `-error` | inbox |
+| `agent.claude-stalled` | quiet for `stallMinutes` (default 30) with no tool call open and nothing in the background |
+| `agent.claude-needs-login` | an account logged out, found by a session **or by the 15-minute check** (once a day per account) |
+| `agent.claude-account-limited`, `-all-limited` | limited until a reset; every account out |
+| `agent.claude-model-fallback`, `-account-switch`, `-done` | digest / off by default |
+| `agent.claude-runner-down`, `agent.service-down` | a runner or a container down |
+
+### Kept for the Forsa loop until forsa-aios replaces it
+
+| endpoint | caller on HP |
+|---|---|
+| `POST /api/work/sweep?ifDue=55` | n8n "Forsa work loop", every ten minutes (types the sweep prompt into the Conductor session) |
+| `GET /api/work/sweep` | when the last sweep went out |
+| `POST /api/work/messages` | `~/.local/share/forsa-work/notify.py` (Claude's messages to the owner → notifications) |
+| `GET /api/work/replies`, `POST /api/work/replies/handled` | `owner_replies.py` |
+| runner `GET/POST /api/work/tick` | the old Refresh; kept in the runner |
 
 ---
 
