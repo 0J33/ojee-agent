@@ -162,6 +162,9 @@ function claudeParts() {
   };
 }
 
+/* A view switched off by the server's AGENT_DISABLE (src/features.js). */
+const viewOff = (v) => (state.config?.off || []).includes(v);
+
 function ovVerdict() {
   const p = claudeParts();
   const deployed = state.services.filter((s) => s.present);
@@ -185,7 +188,8 @@ function ovVerdict() {
       p?.needs.length && p.working.length ? `${p.working.length} working` : null,
       p?.needs.length && stopped.length ? `${stopped.length} stopped` : null,
       deployed.length ? `stack ${deployed.length - stopped.length}/${deployed.length} up` : null,
-      state.workflows?.error ? 'n8n not answering' : `${wf.filter((w) => w.active).length}/${wf.length} workflows active`,
+      viewOff('workflows') ? null
+        : state.workflows?.error ? 'n8n not answering' : `${wf.filter((w) => w.active).length}/${wf.length} workflows active`,
       failed.length ? plural(failed.length, 'failed run') : null,
     ].filter(Boolean).join(' · ')));
 }
@@ -393,7 +397,8 @@ function ovWorkflows() {
 const slot = (name, content) => el('div', { class: 'ag-ov-slot', 'data-slot': name }, content);
 
 function viewOverview() {
-  const side = el('div', { class: 'stack-lg ag-ov-side' }, slot('assistant', ovAssistant()), ovStack(), ovWorkflows());
+  const side = el('div', { class: 'stack-lg ag-ov-side' }, slot('assistant', ovAssistant()), ovStack(),
+    viewOff('workflows') ? null : ovWorkflows());
   return el('section', { class: 'stack-lg' },
     slot('verdict', ovVerdict()),
     slot('tiles', ovTiles()),
@@ -620,8 +625,8 @@ function render() {
       el('span', { class: 'skeleton', style: 'height:180px;display:block' })));
     return;
   }
-  const body = state.view === 'workflows' ? viewWorkflows()
-    : state.view === 'odysseus' ? viewOdysseus()
+  const body = state.view === 'workflows' && !viewOff('workflows') ? viewWorkflows()
+    : state.view === 'odysseus' && !viewOff('odysseus') ? viewOdysseus()
       : state.view === 'services' ? viewServices()
         : viewOverview();
   root.append(body);
@@ -634,6 +639,9 @@ export default {
     root = mountEl;
     ctx = context;
     state.view = context.view || 'overview';
+    // An old link into a switched-off view opens the overview instead.
+    if (!state.config) { const c = await tryApi('/api/config'); state.config = c?.error ? null : c; }
+    if (viewOff(state.view)) state.view = 'overview';
 
     // claude.css too: the overview draws sessions the way the Claude view does.
     for (const [id, file] of [['ag-css', 'agent.css'], ['ag-cl-css', 'claude.css'], ['ag-as-css', 'assistant.css']]) {
@@ -678,7 +686,7 @@ export default {
   },
 
   async setView(view) {
-    state.view = view || 'overview';
+    state.view = view && !viewOff(view) ? view : 'overview';
     if (state.view === 'claude') {
       // Both full-page views take the whole root, so leaving one before
       // entering the other is what keeps their listeners off each other.

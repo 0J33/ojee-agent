@@ -68,7 +68,9 @@ const DEFAULT_ORDER = [
   'ling-3.1-flash-free', 'longcat-2.5-preview-free', 'nemotron-3-ultra-free', 'fledge-alpha-free',
 ].map((id) => ({ provider: 'opencode', id, name: id }));
 
-const configured = () => !!OPENCODE_URL;
+// Off by AGENT_DISABLE too (src/features.js): unconfigured is how every
+// caller already knows to leave the Assistant out.
+const configured = () => !!OPENCODE_URL && !require('./features').off('assistant');
 
 /* ── talking to opencode ──────────────────────────────────────────────── */
 

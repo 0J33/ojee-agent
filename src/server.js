@@ -26,6 +26,7 @@ const { exec } = require('child_process');
    `opencode serve` and reached through OPENCODE_URL. */
 const assistantModule = require('./assistant');
 const mountWork = require('./work');
+const features = require('./features');
 
 const PORT = process.env.PORT || 8080;
 const TIMEZONE = process.env.TIMEZONE || 'UTC';
@@ -131,6 +132,7 @@ const EXEC_WINDOW_DAYS = Number(process.env.N8N_EXEC_DAYS || 30);
  * different answer to the same question — the kind of overlap where the two
  * eventually disagree and you have to work out which one is lying.
  */
+const ODYSSEUS_PARTS = new Set(['odysseus', 'chromadb', 'searxng', 'ntfy']);
 const STACK = [
   { match: /^n8n$/, id: 'n8n', label: 'n8n', role: 'workflow engine' },
   { match: /^odysseus[-_]?odysseus/, id: 'odysseus', label: 'Odysseus', role: 'agent' },
@@ -138,7 +140,9 @@ const STACK = [
   { match: /searxng/, id: 'searxng', label: 'SearXNG', role: 'search' },
   { match: /ntfy/, id: 'ntfy', label: 'ntfy', role: 'notifications' },
   { match: /^couchdb$/, id: 'couchdb', label: 'CouchDB', role: 'sync' },
-];
+// Odysseus switched off (src/features.js) takes its containers with it: they
+// are stopped on purpose, and a stopped one would otherwise be an alert.
+].filter((s) => !(features.off('odysseus') && ODYSSEUS_PARTS.has(s.id)));
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -168,7 +172,7 @@ const VIEWS = [
   // returns.
   { id: 'odysseus', label: 'Odysseus', icon: 'i-shield' },
   { id: 'services', label: 'Services', icon: 'i-gauge' },
-];
+].filter((v) => !features.off(v.id));
 
 app.get('/module.json', (_req, res) => res.json({
   id: process.env.MODULE_ID || 'agent',
@@ -180,13 +184,13 @@ app.get('/module.json', (_req, res) => res.json({
   // The console opens this without mounting the module first — the
   // Assistant button on the overview and the idle display both import it
   // straight into a dialog — so it is advertised on its own.
-  assistant: '/ui/assistant.js',
+  assistant: features.off('assistant') ? undefined : '/ui/assistant.js',
   health: '/api/health',
   capabilities: ['summary', 'sse', 'notify'],
   // For the console's Settings → Notifications. The Claude runners send
   // their own Discord pings (so a laptop session still reaches you when HP is
   // down) using the choices made there; everything else is routed by the console.
-  notifications: NOTIFY_TYPES,
+  notifications: NOTIFY_TYPES.filter((t) => !(features.off('assistant') && t.id.startsWith('agent.assistant-'))),
   notifyTest: CLAUDE_CONFIGURED ? ['discord'] : [],
 }));
 
@@ -194,15 +198,17 @@ app.get('/api/config', (_req, res) => res.json({
   timezone: TIMEZONE,
   links: [
     N8N_DOMAIN ? { label: 'n8n', href: `https://${N8N_DOMAIN}` } : null,
-    ODYSSEUS_DOMAIN ? { label: 'Odysseus', href: `https://${ODYSSEUS_DOMAIN}` } : null,
+    ODYSSEUS_DOMAIN && !features.off('odysseus') ? { label: 'Odysseus', href: `https://${ODYSSEUS_DOMAIN}` } : null,
     COUCHDB_DOMAIN ? { label: 'CouchDB', href: `https://${COUCHDB_DOMAIN}` } : null,
   ].filter(Boolean),
   has: {
     n8n: !!N8N_API_KEY,
-    odysseus: !!ODYSSEUS_URL,
+    odysseus: !!ODYSSEUS_URL && !features.off('odysseus'),
     claude: CLAUDE_CONFIGURED,
     assistant: assistantModule.configured(),
+    workflows: !features.off('workflows'),
   },
+  off: features.list(),
   devices: RUNNERS.map((r) => ({ id: r.id, label: r.label, sleeps: r.sleeps })),
 }));
 
@@ -336,7 +342,7 @@ app.post('/api/n8n/workflows/:id/:action', auth, async (req, res) => {
 /* ── odysseus ─────────────────────────────────────────────────────────── */
 
 async function odysseus() {
-  if (!ODYSSEUS_URL) return { configured: false };
+  if (!ODYSSEUS_URL || features.off('odysseus')) return { configured: false };
   const probe = async (p) => {
     try {
       const r = await fetch(`${ODYSSEUS_URL}${p}`, { timeout: 6000, redirect: 'manual' });
@@ -630,10 +636,12 @@ app.get('/api/health', async (_req, res) => {
 });
 
 app.get('/api/summary', auth, async (_req, res) => {
+  const noWf = features.off('workflows');
+  const skipped = { ok: false, reason: 'off' };
   const [services, wf, ex, ody, cc, as] = await Promise.all([
     stackServices(),
-    n8n('/workflows?limit=100'),
-    n8n('/executions?limit=25&includeData=false'),
+    noWf ? skipped : n8n('/workflows?limit=100'),
+    noWf ? skipped : n8n('/executions?limit=25&includeData=false'),
     odysseus(),
     claudeSummary(),
     assistantModule.summary().catch(() => ({ configured: false })),
@@ -668,7 +676,7 @@ app.get('/api/summary', auth, async (_req, res) => {
             !as.working && !as.waiting.length ? `idle · ${as.sessions} chats` : null].filter(Boolean).join(' · '),
       }
       : null,
-    wf.ok
+    noWf ? null : wf.ok
       ? { k: 'Workflows', v: `${active} active of ${workflows.length}` }
       : { k: 'n8n', v: wf.reason === 'bad-key' ? 'key rejected' : wf.reason === 'no-key' ? 'no API key' : 'not answering' },
     ex.ok && execs.length
@@ -695,7 +703,7 @@ app.get('/api/summary', auth, async (_req, res) => {
     ...(as.configured && as.up ? as.waiting.map((x) => ({ text: `The Assistant is asking to use a tool in “${x.title}”`, severity: 'warn', view: 'assistant' })) : []),
     ...(cc.configured ? (cc.down || []).map((d) => ({ text: RUNNERS.length > 1 ? `The Claude runner on ${d.label} is not answering` : 'The Claude runner is not answering', severity: 'warn', view: 'claude' })) : []),
     ...stopped.map((s) => ({ text: `${s.name} is not running`, severity: 'err', view: 'services' })),
-    ...(wf.ok ? [] : [{ text: n8nWhy(wf.reason, wf.detail), severity: 'warn', view: 'workflows' }]),
+    ...(wf.ok || noWf ? [] : [{ text: n8nWhy(wf.reason, wf.detail), severity: 'warn', view: 'workflows' }]),
     ...(ody.configured && !ody.up ? [{ text: `Odysseus is not answering`, severity: 'warn', view: 'odysseus' }] : []),
     ...(failed.length ? [{ text: `${failed.length} workflow run${failed.length === 1 ? '' : 's'} failed`, severity: 'warn', view: 'workflows' }] : []),
   ];
@@ -704,6 +712,8 @@ app.get('/api/summary', auth, async (_req, res) => {
     status: stopped.length ? 'err' : alerts.length ? 'warn' : 'ok',
     headline: stopped.length
       ? `${stopped.length} of ${deployed.length} services stopped`
+      : noWf
+        ? `all ${deployed.length} services up`
       : wf.ok
         ? `${active} workflow${active === 1 ? '' : 's'} active${failed.length ? ` · ${failed.length} failed run${failed.length === 1 ? '' : 's'}` : ''}`
         : 'automation stack up · n8n unreachable',
