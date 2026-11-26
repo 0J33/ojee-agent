@@ -54,6 +54,41 @@ class Accounts {
   list() { return this.store.accounts; }
   get(id) { return this.store.accounts.find((a) => a.id === id) || null; }
 
+  /**
+   * An account can be turned off. It stays listed, but nothing uses it: no
+   * session starts or moves onto it, it is never switched to, no login check
+   * runs against it and it raises no alerts. Stored as `enabled: false`;
+   * an account without the field (every account before 26 Nov) is on.
+   */
+  enabled(acct) { return !!acct && acct.enabled !== false; }
+  enabledList() { return this.list().filter((a) => this.enabled(a)); }
+
+  /** The first account that is on, preferring the ids given, in order. */
+  firstEnabled(...prefer) {
+    for (const id of prefer) { const a = id && this.get(id); if (this.enabled(a)) return a; }
+    return this.enabledList()[0] || null;
+  }
+
+  /**
+   * Turn an account on or off. Turning the last one off is refused: a runner
+   * with no account can do nothing. Turning one on re-reads its login (the
+   * check skipped it while it was off). Returns the account.
+   */
+  async setEnabled(acct, on) {
+    if (on) {
+      delete acct.enabled;
+      this.store.save();
+      await this.status(acct);
+      return acct;
+    }
+    if (!this.enabled(acct)) return acct;
+    if (this.enabledList().length <= 1) throw Object.assign(new Error('At least one account has to stay on.'), { status: 409 });
+    acct.enabled = false;
+    this.runtime.delete(acct.id);
+    this.store.save();
+    return acct;
+  }
+
   /** Config dir for an account; the main one is whatever `claude` uses by default. */
   dir(acct) { return acct.dir || this.config.DEFAULT_CLAUDE_DIR; }
 
@@ -131,8 +166,9 @@ class Accounts {
     const acct = this.get(id);
     if (!acct) return false;
     if (!acct.dir) throw new Error('The main account is this machine\'s own ~/.claude and cannot be removed.');
+    if (this.enabled(acct) && this.enabledList().length <= 1) throw Object.assign(new Error('It is the only account that is on. Turn another on first.'), { status: 409 });
     this.store.data.accounts = this.store.accounts.filter((a) => a.id !== id);
-    if (this.store.settings.activeAccount === id) this.store.settings.activeAccount = this.store.accounts[0]?.id || 'main';
+    if (this.store.settings.activeAccount === id) this.store.settings.activeAccount = this.firstEnabled()?.id || this.store.accounts[0]?.id || 'main';
     this.store.save();
     // The login dir is left on disk: deleting a credential by accident is
     // worse than a stray folder. Say where it is.
@@ -159,8 +195,9 @@ class Accounts {
     });
   }
 
+  /** Every account that is on. One that is off is not checked at all. */
   async refreshAll() {
-    await Promise.all(this.list().map((a) => this.status(a)));
+    await Promise.all(this.enabledList().map((a) => this.status(a)));
   }
 
   auth(acct) { return this.runtime.get(acct.id)?.auth || null; }
@@ -227,6 +264,7 @@ class Accounts {
   }
 
   needsLogin(acct) {
+    if (!this.enabled(acct)) return false;
     return !!this.limits(acct).auth || this.auth(acct)?.loggedIn === false;
   }
 
@@ -242,7 +280,7 @@ class Accounts {
 
   /** Can this account take a request for this model family right now? */
   usable(acct, familyName = null, now = Date.now()) {
-    if (!acct || this.needsLogin(acct)) return false;
+    if (!acct || !this.enabled(acct) || this.needsLogin(acct)) return false;
     if (this.accountLimitedUntil(acct, now)) return false;
     if (familyName && this.modelLimitedUntil(acct, familyName, now)) return false;
     return true;
@@ -255,7 +293,7 @@ class Accounts {
 
   /** When the soonest spent account comes back, for pausing honestly. */
   earliestReturn(now = Date.now()) {
-    const times = this.list()
+    const times = this.enabledList()
       .filter((a) => !this.needsLogin(a))
       .map((a) => this.accountLimitedUntil(a, now))
       .filter(Boolean);
@@ -266,8 +304,10 @@ class Accounts {
     const now = Date.now();
     const l = this.limits(acct);
     const auth = this.auth(acct);
+    const on = this.enabled(acct);
     let status = 'ok';
-    if (this.needsLogin(acct)) status = 'needs-login';
+    if (!on) status = 'off';
+    else if (this.needsLogin(acct)) status = 'needs-login';
     else if (this.accountLimitedUntil(acct, now)) status = 'limited';
     else if (!auth) status = 'unknown';
     return {
@@ -275,6 +315,7 @@ class Accounts {
       label: acct.label,
       dir: this.dir(acct),
       main: !acct.dir,
+      enabled: on,
       active: this.store.settings.activeAccount === acct.id,
       status,
       email: auth?.email || null,

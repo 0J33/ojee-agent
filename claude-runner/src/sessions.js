@@ -362,7 +362,9 @@ class Sessions extends EventEmitter {
    */
   pickAccountModel(s) {
     const acc = this.accounts;
-    const own = acc.get(s.account) || acc.get(this.settings.activeAccount) || acc.list()[0];
+    // An account that is turned off is never used: a session left on one
+    // goes to the active account (or the first that is on) instead.
+    const own = acc.firstEnabled(s.account, this.settings.activeAccount);
     const pref = s.model.preferred;
     const fb = s.model.fallback;
     if (own && acc.usable(own, family(pref))) return { account: own.id, model: pref };
@@ -389,7 +391,9 @@ class Sessions extends EventEmitter {
    */
   forcedPick(s) {
     const acc = this.accounts;
-    const own = acc.get(s.account) || acc.get(this.settings.activeAccount) || acc.list()[0];
+    // An account that is turned off is never used: a session left on one
+    // goes to the active account (or the first that is on) instead.
+    const own = acc.firstEnabled(s.account, this.settings.activeAccount);
     if (!own) return null;
     const pref = s.model.preferred;
     const fb = s.model.fallback;
@@ -1165,6 +1169,8 @@ class Sessions extends EventEmitter {
     if (s.moveTo && s.moveTo !== s.account) {
       const to = s.moveTo;
       s.moveTo = null;
+      // Turned off since the move was asked for: stay put.
+      if (!this.accounts.enabled(this.accounts.get(to))) return;
       this.relaunch(s, { account: to, why: `Moved to ${this.accountLabel(to)}` }).catch((e) => this.log('move', e.message));
     }
   }

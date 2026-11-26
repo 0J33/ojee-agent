@@ -120,3 +120,37 @@ test('cleanEnv strips anything that would bill per token or change the account',
   });
   assert.deepEqual(env, { PATH: '/bin' });
 });
+
+test('an account that is off is skipped everywhere and the last one stays on', async () => {
+  const { accounts, store } = setup();
+  const b = accounts.add('B');
+  // Accounts stored before the switch existed have no field: they are on.
+  assert.equal(accounts.enabled(accounts.get('main')), true);
+  assert.equal(accounts.enabled(b), true);
+
+  await accounts.setEnabled(b, false);
+  assert.equal(b.enabled, false);
+  assert.equal(accounts.describe(b).status, 'off');
+  assert.equal(accounts.usable(b), false);
+  assert.equal(accounts.alternative('main'), null);
+  assert.equal(accounts.firstEnabled('b', 'main').id, 'main');
+  accounts.markNeedsLogin(b, 'expired');
+  assert.equal(accounts.needsLogin(b), false, 'an account that is off never needs a login');
+  accounts.markAccountLimited(b, { until: Date.now() + 3600_000 });
+  assert.equal(accounts.earliestReturn(), null, 'nor counts toward when usage comes back');
+
+  // No login checks for it.
+  const checked = [];
+  accounts.status = async (a) => { checked.push(a.id); return { loggedIn: true }; };
+  await accounts.refreshAll();
+  assert.deepEqual(checked, ['main']);
+
+  await assert.rejects(accounts.setEnabled(accounts.get('main'), false), /has to stay on/);
+  assert.equal(accounts.enabled(accounts.get('main')), true);
+
+  // Back on: checked again at once; the field goes, as if never turned off.
+  await accounts.setEnabled(b, true);
+  assert.equal(b.enabled, undefined);
+  assert.deepEqual(checked, ['main', 'b']);
+  store.flush();
+});

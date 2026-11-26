@@ -238,7 +238,7 @@ function createRunner(overrides = {}) {
       account: active ? { id: active.id, label: active.label, status: accounts.describe(active).status } : null,
       // Every account's standing, for the console's alerts (needs login,
       // limited): each a stable thing that is true until it is not.
-      accounts: accountsView().map((a) => ({ id: a.id, label: a.label, status: a.status, active: a.active, limitedUntil: a.limitedUntil, limitWindow: a.limitWindow, text: a.limitText, authError: a.authError })),
+      accounts: accountsView().map((a) => ({ id: a.id, label: a.label, status: a.status, enabled: a.enabled, active: a.active, limitedUntil: a.limitedUntil, limitWindow: a.limitWindow, text: a.limitText, authError: a.authError })),
       idle: count('idle') + count('done'),
       stalled: all.filter((s) => s.stallNotified && s.state === 'running').map((s) => ({ id: s.id, title: s.title, since: s.lastActivityAt })),
       attention: all.filter((s) => ['waiting', 'blocked', 'error'].includes(s.state))
@@ -364,6 +364,7 @@ function createRunner(overrides = {}) {
 
   app.post('/api/sessions', auth, wrap(async (req, res) => {
     const b = req.body || {};
+    if (b.account && accounts.get(b.account) && !accounts.enabled(accounts.get(b.account))) return res.status(400).json({ error: `${accounts.get(b.account).label} is turned off` });
     const s = await sessions.create({
       cwd: b.cwd,
       prompt: b.prompt,
@@ -395,6 +396,7 @@ function createRunner(overrides = {}) {
     if (b.unattended !== undefined) s.unattended = !!b.unattended;
     if (b.account !== undefined) {
       if (!accounts.get(b.account)) return res.status(400).json({ error: 'No such account' });
+      if (!accounts.enabled(accounts.get(b.account))) return res.status(400).json({ error: `${accounts.get(b.account).label} is turned off` });
       s.account = b.account;
     }
     if (b.model?.preferred) s.model.preferred = b.model.preferred;
@@ -465,6 +467,7 @@ function createRunner(overrides = {}) {
     const s = need(req);
     const b = req.body || {};
     if (b.account && !accounts.get(b.account)) return res.status(400).json({ error: 'No such account' });
+    if (b.account && !accounts.enabled(accounts.get(b.account))) return res.status(400).json({ error: `${accounts.get(b.account).label} is turned off` });
     if (b.model && !config.MODELS.some((m) => m.id === b.model)) return res.status(400).json({ error: 'Unknown model' });
     if (b.model) s.model.preferred = b.model;
     await sessions.relaunch(s, { model: b.model, account: b.account, prompt: String(b.prompt || ''), why: 'Restarted from the console' });
@@ -801,31 +804,77 @@ function createRunner(overrides = {}) {
    * `move: true`, sessions on other accounts move too — now if they are
    * between turns, at the end of the turn if they are working.
    */
+  /**
+   * Move sessions to account `a`: now if they are between turns, at the end
+   * of the turn if they are working, at once if paused. `which` picks the
+   * sessions. Returns how many are moving.
+   */
+  async function moveSessions(a, which) {
+    let moved = 0;
+    for (const s of sessions.all()) {
+      if (s.account === a.id || !which(s)) continue;
+      if (['idle', 'done', 'blocked', 'waiting', 'error'].includes(s.state) && await sessions.isAlive(s)) {
+        await sessions.relaunch(s, { account: a.id, why: `Moved to ${a.label}` });
+        moved += 1;
+      } else if (s.state === 'paused') {
+        s.account = a.id;
+        s.pausedUntil = Date.now();
+        moved += 1;
+      } else if (s.state === 'running' || s.state === 'starting') {
+        s.moveTo = a.id;
+        moved += 1;
+      } else {
+        s.account = a.id;
+      }
+    }
+    store.save();
+    return moved;
+  }
+
   app.post('/api/accounts/:id/activate', auth, wrap(async (req, res) => {
     const a = needAcct(req);
+    if (!accounts.enabled(a)) return res.status(409).json({ error: `${a.label} is turned off. Turn it on first.` });
     store.updateSettings({ activeAccount: a.id });
-    let moved = 0;
-    if (req.body?.move) {
-      for (const s of sessions.all()) {
-        if (s.account === a.id) continue;
-        if (['idle', 'done', 'blocked', 'waiting', 'error'].includes(s.state) && await sessions.isAlive(s)) {
-          await sessions.relaunch(s, { account: a.id, why: `Moved to ${a.label}` });
-          moved += 1;
-        } else if (s.state === 'paused') {
-          s.account = a.id;
-          s.pausedUntil = Date.now();
-          moved += 1;
-        } else if (s.state === 'running' || s.state === 'starting') {
-          s.moveTo = a.id;
-          moved += 1;
-        } else {
-          s.account = a.id;
-        }
-      }
-      store.save();
-    }
+    const moved = req.body?.move ? await moveSessions(a, () => true) : 0;
     sessions.emit('accounts');
     res.json({ ok: true, active: a.id, moved });
+  }));
+
+  /**
+   * Turn an account on or off: { enabled: bool, switchTo?: id }.
+   * Off: it stays listed and nothing uses it. Sessions on it move to the
+   * active account (or to `switchTo`); turning off the active account needs
+   * `switchTo`, an account that is on, which becomes active — the 409 that
+   * comes back without it lists the choices. Its alerts clear.
+   * On: its login is checked again straight away.
+   */
+  app.post('/api/accounts/:id/enabled', auth, wrap(async (req, res) => {
+    const a = needAcct(req);
+    const on = req.body?.enabled !== false;
+    if (on) {
+      await accounts.setEnabled(a, true);
+      loginNotices();
+      sessions.accountRestored();
+      sessions.emit('accounts');
+      return res.json({ ok: true, account: accounts.describe(a), moved: 0 });
+    }
+    if (!accounts.enabled(a)) return res.json({ ok: true, account: accounts.describe(a), moved: 0 });
+    const others = accounts.enabledList().filter((x) => x.id !== a.id);
+    if (!others.length) return res.status(409).json({ error: 'At least one account has to stay on.' });
+    const isActive = store.settings.activeAccount === a.id;
+    let to = accounts.get(req.body?.switchTo);
+    if (to && (to.id === a.id || !accounts.enabled(to))) return res.status(400).json({ error: 'Switch to an account that is on.' });
+    if (isActive && !to) {
+      return res.status(409).json({ error: `${a.label} is the active account. Pick the one new sessions should start on.`, needSwitch: true, choices: others.map((x) => ({ id: x.id, label: x.label })) });
+    }
+    if (!to) to = accounts.get(store.settings.activeAccount);
+    await accounts.setEnabled(a, false);
+    if (isActive || req.body?.switchTo) store.updateSettings({ activeAccount: to.id });
+    const moved = await moveSessions(to, (s) => s.account === a.id || s.moveTo === a.id);
+    notifier.clear(`needsLogin:${a.id}`);
+    if (store.data.loginNoticed?.[a.id]) { delete store.data.loginNoticed[a.id]; store.save(); }
+    sessions.emit('accounts');
+    res.json({ ok: true, account: accounts.describe(a), active: store.settings.activeAccount, moved });
   }));
 
   app.post('/api/accounts/:id/login', auth, wrap(async (req, res) => {
@@ -987,6 +1036,8 @@ function createRunner(overrides = {}) {
     for (const a of accounts.list()) {
       const d = accounts.describe(a);
       const seen = (store.data.loginNoticed ||= {});
+      // Turned off: never checked, never news.
+      if (!d.enabled) { notifier.clear(`needsLogin:${a.id}`); continue; }
       if (d.status === 'needs-login') {
         // Once a day at most per account, across runner restarts too.
         if (Date.now() - (seen[a.id] || 0) < 24 * 3600_000) continue;

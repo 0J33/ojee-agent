@@ -289,6 +289,57 @@ test('runner end to end', { skip: !haveTmux && 'no tmux' }, async (t) => {
     await api('DELETE', `/api/sessions/${s.id}?purge=1`);
   });
 
+  await t.test('an account turned off is never used, and the active one asks where to go', async () => {
+    for (const a of accounts.list()) a.limits = {};
+    store.updateSettings({ activeAccount: 'main' });
+    const s = (await api('POST', '/api/sessions', { cwd: work, prompt: 'hello' })).body;
+    await waitFor(() => stateOf(s.id) === 'idle', 'idle on main');
+    assert.equal(sessions.get(s.id).account, 'main');
+
+    // The active account: refused until a replacement is named.
+    let r = await api('POST', '/api/accounts/main/enabled', { enabled: false });
+    assert.equal(r.status, 409);
+    assert.equal(r.body.needSwitch, true);
+    assert.deepEqual(r.body.choices.map((c) => c.id), [b.id]);
+    assert.equal(accounts.enabled(accounts.get('main')), true);
+
+    r = await api('POST', '/api/accounts/main/enabled', { enabled: false, switchTo: b.id });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.account.status, 'off');
+    assert.equal(r.body.account.enabled, false);
+    assert.equal(store.settings.activeAccount, b.id);
+    assert.ok(r.body.moved >= 1, 'its sessions move');
+    await waitFor(() => sessions.get(s.id).account === b.id && stateOf(s.id) === 'idle', 'its session moved to the second account');
+
+    // Persisted, listed, and off in the summary (no needs-login, no limited).
+    assert.equal(store.accounts.find((a) => a.id === 'main').enabled, false);
+    const sum = (await api('GET', '/api/summary')).body;
+    assert.deepEqual(sum.accounts.map((a) => [a.id, a.status, a.enabled]), [['main', 'off', false], [b.id, 'ok', true]]);
+
+    // Nothing picks it: not new sessions, not make-active, not a fallback.
+    assert.equal((await api('POST', '/api/sessions', { cwd: work, prompt: 'x', account: 'main' })).status, 400);
+    assert.equal((await api('POST', '/api/accounts/main/activate', {})).status, 409);
+    assert.equal(accounts.usable(accounts.get('main')), false);
+    assert.equal(accounts.alternative(b.id), null);
+    accounts.markNeedsLogin(accounts.get('main'), 'expired');
+    assert.equal(accounts.describe(accounts.get('main')).status, 'off', 'off wins over needs-login');
+    accounts.get('main').limits = {};
+
+    // The last one on cannot go off.
+    r = await api('POST', `/api/accounts/${b.id}/enabled`, { enabled: false });
+    assert.equal(r.status, 409);
+    assert.equal(accounts.enabled(b), true);
+
+    // Back on: checked again straight away, usable, and can be made active.
+    r = await api('POST', '/api/accounts/main/enabled', { enabled: true });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.account.status, 'ok');
+    assert.equal(r.body.account.loggedIn, true);
+    assert.equal(accounts.get('main').enabled, undefined);
+    assert.equal((await api('POST', '/api/accounts/main/activate', {})).status, 200);
+    await api('DELETE', `/api/sessions/${s.id}?purge=1`);
+  });
+
   await t.test('history lists conversations and one can be adopted', async () => {
     const r = await api('GET', '/api/history');
     assert.ok(r.body.sessions.length >= 1);
