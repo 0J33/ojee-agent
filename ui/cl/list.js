@@ -20,7 +20,7 @@ function line(s) {
   else if (s.state === 'paused') what = s.detail || 'Paused';
   else if (['blocked', 'error', 'done', 'starting', 'queued'].includes(s.state)) what = s.detail || st.label;
   else if (s.state === 'stopped') what = s.detail || 'Ended';
-  else what = s.lastAssistant ? clip(s.lastAssistant.split('\n').filter(Boolean).pop(), 120) : 'Idle';
+  else what = s.lastAssistant ? clip(s.lastAssistant.split('\n').filter(Boolean).pop().replace(/\*\*|`+|^#+\s*/g, ''), 120) : 'Idle';
   return `${where}${what ? ` · ${what}` : ''}`;
 }
 

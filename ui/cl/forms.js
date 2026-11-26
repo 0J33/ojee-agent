@@ -42,7 +42,7 @@ export function createNewSession({ onBack }) {
   let fs = null;
   let hidden = false;
   let busy = false;
-  const el = h('section', { class: 'panel cl-form-page cl-new' });
+  const el = h('section', { class: 'cl-form-page cl-new' });
 
   const resetDev = () => {
     const x = dataOf(dev) || {};
@@ -78,7 +78,7 @@ export function createNewSession({ onBack }) {
     const crumbs = [h('button', { class: 'crumb', type: 'button', onclick: () => browse('/') }, '/')];
     let acc = '';
     parts.forEach((p, i) => { acc += `/${p}`; const t = acc; crumbs.push(h('button', { class: 'crumb', type: 'button', 'aria-current': i === parts.length - 1 ? 'location' : null, onclick: () => browse(t) }, p)); });
-    browser.replaceChildren(
+    browser.replaceChildren(...[
       h('div', { class: 'cl-crumbs m' }, crumbs),
       h('div', { class: 'cl-bbar' },
         h('button', { class: 'btn ghost sm', type: 'button', disabled: !fs.parent || null, onclick: () => browse(fs.parent) }, icon('up', 's'), 'Up'),
@@ -89,7 +89,7 @@ export function createNewSession({ onBack }) {
       h('div', { class: 'cl-dirs' }, (fs.entries || []).length
         ? fs.entries.map((d) => h('button', { class: 'dir', type: 'button', title: d.path, onclick: () => browse(d.path) }, icon('folder', 's'), h('span', {}, d.name), d.git ? h('span', { class: 'tag' }, 'git') : null))
         : h('p', { class: 'dim' }, 'No folders here. Start the session here, or make one.')),
-      (fs.recent || []).length ? h('div', { class: 'cl-recent' }, h('span', { class: 'dim' }, 'Recent'), fs.recent.map((r) => h('button', { class: 'chip', type: 'button', title: r, onclick: () => browse(r) }, tailPath(shortPath(r, dev), 32)))) : null);
+      (fs.recent || []).length ? h('div', { class: 'cl-recent' }, h('span', { class: 'dim' }, 'Recent'), fs.recent.map((r) => h('button', { class: 'chip', type: 'button', title: r, onclick: () => browse(r) }, tailPath(shortPath(r, dev), 32)))) : null].filter(Boolean));
   }
 
   async function mkdir() {
@@ -164,7 +164,7 @@ export function createNewSession({ onBack }) {
 export function createAccounts({ dev: dev0, acct, onBack }) {
   let dev = dev0 && devOf(dev0) ? dev0 : curDev();
   let login = null; // { id, state, timer, term, showTerm, codeEl }
-  const el = h('section', { class: 'panel cl-form-page cl-accounts' });
+  const el = h('section', { class: 'cl-form-page cl-accounts' });
   const listHost = h('div', { class: 'rows' });
   const loginHost = h('div', { class: 'cl-login-host' });
 
@@ -214,8 +214,8 @@ export function createAccounts({ dev: dev0, acct, onBack }) {
         h('div', { class: 'panel clip' },
           h('div', { class: 'set' }, h('div', { class: 't' }, 'Auto-switch accounts'), h('div', { class: 'd' }, 'When one runs out, sessions move to the next available account in this order and carry on. Off, they pause until it resets.'),
             h('div', { class: 'ctrl' }, (() => { const b = sw(settings.autoSwitchAccounts, (v) => saveSettings(dev, { autoSwitchAccounts: v })); b.classList.add('cl-autosw'); return b; })())),
-          h('div', { class: 'set' }, h('div', { class: 't' }, 'Add an account'), h('div', { class: 'd' }, 'Gets its own login folder; history, settings and CLAUDE.md stay shared, so any session can continue on it.'),
-            h('div', { class: 'ctrl cl-inline' }, label, h('button', { class: 'btn sm', type: 'button', onclick: add }, 'Add and log in'))))));
+          h('div', { class: 'set stack cl-addacct' }, h('div', { class: 't' }, 'Add an account'), h('div', { class: 'd' }, 'Gets its own login folder; history, settings and CLAUDE.md stay shared, so any session can continue on it.'),
+            h('div', { class: 'cl-inline' }, label, h('button', { class: 'btn sm', type: 'button', onclick: add }, 'Add and log in'))))));
     paintLogin();
   }
   function pick(id) { dev = id; setDev(id); stopLogin(); go('accounts', id); }
@@ -326,7 +326,7 @@ async function saveSettings(dev, body, what = 'Saved') {
 
 export function createSettings({ dev: dev0, onBack }) {
   let dev = dev0 && devOf(dev0) ? dev0 : curDev();
-  const el = h('section', { class: 'panel cl-form-page cl-settings' });
+  const el = h('section', { class: 'cl-form-page cl-settings' });
   let govTimer = null;
   const govLine = (g) => (!g ? '' : !g.active ? `Off${g.reason ? `: ${g.reason}` : ''}` : [g.temp != null ? `${g.temp} °C` : null, `sessions ${g.usagePct}% of a ${g.capPct}% cap`, g.frozenPct ? `pausing ${g.frozenPct}%` : null, g.hot ? 'backing off (hot)' : null].filter(Boolean).join(' · '));
 

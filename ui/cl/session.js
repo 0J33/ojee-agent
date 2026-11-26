@@ -20,7 +20,10 @@ export function createSessionView(s0, { onBack }) {
   const dev = s.device;
   const id = s.id;
   let pane = pref('cl-pane') === 'chat' ? 'chat' : 'terminal';
-  let keysOn = pref('cl-keys') === null ? !fine() : pref('cl-keys') === '1';
+  // The key row: on a touch screen the terminal has it by default; the chat
+  // has its cards and buttons, so it only shows when asked for. Remembered per view.
+  const keysFor = (p) => { const v = pref(`cl-keys-${p}`); return v === null ? (p === 'terminal' && !fine()) : v === '1'; };
+  let keysOn = keysFor(pane);
   let term = null;
   let termState = null;
   let chat = null;
@@ -35,6 +38,8 @@ export function createSessionView(s0, { onBack }) {
   const alive = () => s.alive && online(dev);
   function primary() {
     const off = !online(dev);
+    // In the chat the line above the box has Stop, where the eyes are.
+    if (s.state === 'running' && !off && pane === 'chat') return null;
     if (s.state === 'running' && !off) return h('button', { class: 'btn sm', type: 'button', title: 'Stop this turn (Esc)', onclick: () => post(dev, `/sessions/${id}/interrupt`).catch((e) => toast('err', 'Could not stop it', e.message)) }, icon('pause', 's'), h('span', { class: 'lbl' }, 'Stop'));
     if ((!s.alive || s.state === 'paused') && s.state !== 'queued') {
       return h('button', { class: 'btn sm pri', type: 'button', disabled: off || S.busy.has(`resume:${id}`) || null, title: off ? offWhy(devOf(dev)) : 'Start Claude again in this conversation', onclick: () => resume() }, icon('play', 's'), h('span', { class: 'lbl' }, s.state === 'paused' ? 'Resume now' : 'Resume'));
@@ -146,13 +151,14 @@ export function createSessionView(s0, { onBack }) {
     if (p === pane) return;
     pane = p;
     pref('cl-pane', p);
+    keysOn = keysFor(p);
     paintHead();
     paintBanner();
     mountPane();
   }
   function setKeys(on) {
     keysOn = on;
-    pref('cl-keys', on ? '1' : '0');
+    pref(`cl-keys-${pane}`, on ? '1' : '0');
     if (term) term.toggleKeys(on);
     chat?.setKeys(on);
   }
