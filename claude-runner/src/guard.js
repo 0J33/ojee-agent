@@ -35,11 +35,16 @@ const within = (child, parent) => {
  * @param {string} o.cwd       the session's working directory
  * @param {string} o.home      $HOME
  * @param {string} o.stackDir  the docker stack's directory (~/stack)
+ * @param {string} [o.stackReal] the same directory with symlinks resolved. On HP
+ *   ~/stack is a symlink to ~/agent.ojee.net/stack and Claude Code reports a
+ *   session's cwd by its real path, so comparing against ~/stack alone meant no
+ *   session ever counted as inside the stack, and the real path was unguarded.
  * @returns {string|null}      why it is refused, or null to allow
  */
-function check({ command, cwd, home, stackDir }) {
+function check({ command, cwd, home, stackDir, stackReal }) {
   const cmd = String(command || '');
-  const inStack = stackDir && cwd && within(path.resolve(cwd), stackDir);
+  const stackDirs = [stackDir, stackReal].filter(Boolean);
+  const inStack = Boolean(cwd) && stackDirs.some((d) => within(path.resolve(cwd), d));
 
   if (/(^|[\s;&|(])sudo(\s|$)/.test(cmd)) {
     return 'sudo is not available to unattended sessions on this machine (it would wait for a password nobody will type). If the task needs root, stop and end your message with "BLOCKED: needs sudo — <what for>".';
@@ -50,7 +55,7 @@ function check({ command, cwd, home, stackDir }) {
   }
 
   if (stackDir && !inStack) {
-    const variants = [stackDir, stackDir.replace(home, '~'), stackDir.replace(home, '$HOME'), stackDir.replace(home, '${HOME}')];
+    const variants = stackDirs.flatMap((d) => [d, d.replace(home, '~'), d.replace(home, '$HOME'), d.replace(home, '${HOME}')]);
     // The path itself, not a prefix of a longer name: ~/stack-notes is fine.
     const esc = (v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     if (variants.some((v) => v && new RegExp(`${esc(v)}(?=$|[/\\s"';&|)])`).test(cmd))) {

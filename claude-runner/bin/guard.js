@@ -22,11 +22,16 @@ process.stdin.on('end', () => {
     const evt = JSON.parse(raw || '{}');
     if (evt.tool_name !== 'Bash') process.exit(0);
     const { check } = require(path.join(__dirname, '..', 'src', 'guard.js'));
+    const fs = require('fs');
+    const real = (p) => { try { return fs.realpathSync(p); } catch { return null; } };
+    const stackDir = process.env.OJEE_CLAUDE_STACK_DIR || path.join(os.homedir(), 'stack');
+    const cwd = evt.cwd || process.cwd();
     const reason = check({
       command: evt.tool_input?.command,
-      cwd: evt.cwd || process.cwd(),
+      cwd: real(cwd) || cwd,
       home: os.homedir(),
-      stackDir: process.env.OJEE_CLAUDE_STACK_DIR || path.join(os.homedir(), 'stack'),
+      stackDir,
+      stackReal: real(stackDir),
     });
     if (reason) {
       process.stderr.write(`Blocked by the ojee-claude guard: ${reason}`);
