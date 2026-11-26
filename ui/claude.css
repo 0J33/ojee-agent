@@ -499,7 +499,10 @@
 .cl-bg .sh{margin:6px 0 0}
 .cl-bg .row,.cl-hist .row{padding:10px 12px;gap:10px}
 .cl-bg .row.cur{background:var(--raised)}
-.cl-bg .row .d,.cl-hist .row .d{overflow:hidden;text-overflow:ellipsis}
+.cl-bg>*,.cl-hist>*,.cl-hist .rows,.cl-hist .row{min-width:0;max-width:100%}
+.cl-bg .row .d,.cl-hist .row .d{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cl-hist .row .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cl-hist .rows{overflow-x:hidden}
 .cl-hist .rows{max-height:56vh;overflow-y:auto}
 .cl-hist .row{transition:opacity 160ms var(--ease-out,ease-out),transform 160ms var(--ease-out,ease-out)}
 @starting-style{.cl-hist .row{opacity:0}}
