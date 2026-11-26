@@ -27,7 +27,7 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID, createHash } = require('crypto');
 const { classify, retryAt, family } = require('./limits');
-const { findTranscript, Tail } = require('./transcript');
+const { findTranscript, Tail, toolInput } = require('./transcript');
 const { enterWhenTyped } = require('./submit');
 const { parseScreen, promptLinesAbove } = require('./screen');
 
@@ -138,6 +138,23 @@ function childrenOf(pid) {
   return out;
 }
 
+/** AskUserQuestion's questions as the console needs them, clipped. */
+function cleanQuestions(qs) {
+  return (Array.isArray(qs) ? qs : []).slice(0, 6).map((q) => ({
+    question: clip(q?.question || '', 600),
+    header: clip(q?.header || '', 40) || null,
+    multiSelect: !!q?.multiSelect,
+    options: (Array.isArray(q?.options) ? q.options : []).slice(0, 8).map((o) => ({ label: clip(o?.label || '', 200), description: clip(o?.description || '', 400) || null })),
+  }));
+}
+
+/** One line for a tool call in progress: its command, file or pattern. */
+function toolLine(name, input = {}) {
+  const i = input || {};
+  const v = i.description || i.command || i.file_path || i.pattern || i.url || i.query || i.prompt || '';
+  return `${name}${v ? `: ${String(v).split('\n')[0]}` : ''}`;
+}
+
 const alivePid = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 class Sessions extends EventEmitter {
@@ -179,6 +196,11 @@ class Sessions extends EventEmitter {
       state: s.state,
       detail: s.detail || null,
       question: s.question || null,
+      // What Claude is asking, from its hooks (not the screen): a question
+      // with its options, a plan to approve, a tool waiting for permission.
+      prompt: s.prompt || null,
+      // A tool call still waiting on its result, from the transcript: what it is doing now.
+      activity: this.activityOf(s),
       model: s.model,
       account: s.account,
       createdAt: s.createdAt,
@@ -199,10 +221,48 @@ class Sessions extends EventEmitter {
       // Claude Code's own queue (read off the screen) first, then anything an
       // older runner still holds for the end of the turn.
       outbox: [
-        ...(s.ccQueue || []).map((m) => ({ id: m.id, text: m.text, at: m.at, in: 'claude' })),
+        ...(s.ccQueue || []).filter((m) => !m.sys).map((m) => ({ id: m.id, text: m.text, at: m.at, in: 'claude' })),
         ...(s.outbox || []).map((m) => ({ id: m.id, text: m.text, at: m.at, in: 'runner' })),
       ],
     };
+  }
+
+  /** The newest tool call still open, as { tool, text, at }: what the session is doing now. */
+  activityOf(s) {
+    const open = Object.values(s.openTools || {});
+    if (!open.length || !['running', 'starting'].includes(s.state)) return null;
+    const t = open.reduce((a, b) => (b.at > a.at ? b : a));
+    return { tool: t.tool, text: t.text, at: t.at, open: open.length };
+  }
+
+  /**
+   * Claude Code's own queue, from its transcript (tested on 2.1.332): every
+   * message typed mid-turn is an `enqueue` the moment it is typed; `dequeue`
+   * takes the front one into a turn, `remove` one absorbed mid-turn,
+   * `popAll` is Up taking all of them back into the box. Read here instead
+   * of off the screen, which the fullscreen renderer draws differently.
+   */
+  queueOp(s, e) {
+    const q = s.ccQueue || [];
+    const c = e.content;
+    const text = typeof c === 'string' ? c : Array.isArray(c) ? c.filter((b) => b && b.type === 'text').map((b) => b.text).join('\n') : '';
+    const at = Date.parse(e.timestamp) || Date.now();
+    const same = (m) => m.text === text || (text.length > 60 && m.text.startsWith(text.slice(0, 60)));
+    switch (e.operation) {
+      case 'enqueue':
+        q.push({ id: createHash('sha1').update(`${text}\u0000${at}`).digest('hex').slice(0, 12), text, at, sys: /^\s*<(task-notification|cross-session-message)/.test(text) });
+        break;
+      case 'dequeue': q.shift(); break;
+      case 'remove': { const i = q.findIndex(same); if (i >= 0) q.splice(i, 1); break; }
+      case 'popAll':
+        s.lastPopAll = { text, items: q.filter((m) => !m.sys), at };
+        s.queuePops = (s.queuePops || 0) + 1;
+        q.splice(0, q.length, ...q.filter((m) => m.sys));
+        break;
+      default: return false;
+    }
+    s.ccQueue = q;
+    return true;
   }
 
   setState(s, state, detail = null) {
@@ -624,15 +684,12 @@ class Sessions extends EventEmitter {
     await this.withScreenLock(s, async () => {
       await this.type(s, msg);
       if (midTurn) {
-        // What was typed, word for word: the screen folds a long message
-        // ("[Pasted text #1 +12 lines]") and wraps lines, so Edit gives back this.
-        s.typedQueue = [...(s.typedQueue || []).filter((t) => Date.now() - t.at < 6 * 3600_000).slice(-20), { text: msg, at: Date.now() }];
-        // Claude Code takes a moment to draw it in the queue: wait for it (2 s at most),
-        // so the console's reply already lists it.
-        for (let k = 0; k < 10; k++) {
-          await delay(200);
-          const q = await this.refreshQueue(s);
-          if (q.some((m) => m.text === msg)) break;
+        // Claude Code records the enqueue as it is typed: wait for it (2 s at
+        // most) so the reply already lists it in the queue.
+        for (let k = 0; k < 20; k++) {
+          await delay(100);
+          this.readTranscript(s);
+          if ((s.ccQueue || []).some((m) => m.text === msg)) break;
         }
       }
     });
@@ -653,51 +710,13 @@ class Sessions extends EventEmitter {
     try { return await fn(); } finally { release(); if (this.screenLocks.get(s.id) === mine) this.screenLocks.delete(s.id); }
   }
 
-  /** The exact text typed for a message the screen shows as `shown` (folded or wrapped there). */
-  typedTextOf(s, shown) {
-    const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
-    const want = norm(shown);
-    const list = s.typedQueue || [];
-    for (let i = list.length - 1; i >= 0; i--) if (norm(list[i].text) === want) return list[i].text;
-    if (/\[Pasted text #\d+/.test(shown)) {
-      // Claude Code shows a long paste by its label: the newest long message typed is the best match.
-      for (let i = list.length - 1; i >= 0; i--) if (list[i].text.includes('\n') || list[i].text.length > 800) return list[i].text;
-    }
-    return shown;
-  }
-
-  /**
-   * Claude Code's queue as the screen shows it now, with ids the console can
-   * act on: the same message keeps its id while it waits (its text and how
-   * many identical ones come before it). Emits a change when it moved.
-   */
-  async refreshQueue(s, screen = null) {
+  /** The queue as the transcript has it now. Kept for callers of the screen version. */
+  async refreshQueue(s) {
     if (!(await this.isAlive(s))) { if (s.ccQueue?.length) { s.ccQueue = []; this.emit('change', s); } return []; }
-    const scr = screen || parseScreen(await this.tmux.capture(s.tmux, { ansi: true }));
-    const seen = new Map();
-    const next = (scr.queue || []).map((shown) => {
-      const n = (seen.get(shown) || 0) + 1;
-      seen.set(shown, n);
-      const id = createHash('sha1').update(`${shown}\u0000${n}`).digest('hex').slice(0, 12);
-      const old = (s.ccQueue || []).find((m) => m.id === id);
-      return { id, text: this.typedTextOf(s, shown), shown, at: old?.at || Date.now() };
-    });
     const before = JSON.stringify((s.ccQueue || []).map((m) => m.id));
-    s.ccQueue = next;
-    if (JSON.stringify(next.map((m) => m.id)) !== before) this.emit('change', s);
-    this.watchQueue(s);
-    return next;
-  }
-
-  /** While Claude Code holds a queue, read it every 1.5 s, so it clears here the moment it goes in. */
-  watchQueue(s) {
-    this.queueWatch = this.queueWatch || new Map();
-    if (!s.ccQueue?.length) { clearTimeout(this.queueWatch.get(s.id)); this.queueWatch.delete(s.id); return; }
-    if (this.queueWatch.has(s.id)) return;
-    this.queueWatch.set(s.id, setTimeout(async () => {
-      this.queueWatch.delete(s.id);
-      try { await this.withScreenLock(s, () => this.refreshQueue(s)); } catch (e) { this.log('queue', e.message); }
-    }, 1500));
+    this.readTranscript(s);
+    if (JSON.stringify((s.ccQueue || []).map((m) => m.id)) !== before) this.emit('change', s);
+    return (s.ccQueue || []).filter((m) => !m.sys);
   }
 
   /** Clear Claude Code's input box, every line of it: Ctrl+U per line, Backspace to join the line above. */
@@ -723,48 +742,47 @@ class Sessions extends EventEmitter {
   async takeQueued(s, id = null) {
     return this.withScreenLock(s, async () => {
       if (!(await this.isAlive(s))) return null;
-      const scr = parseScreen(await this.tmux.capture(s.tmux, { ansi: true }));
-      const list = await this.refreshQueue(s, scr);
+      this.readTranscript(s);
+      const list = (s.ccQueue || []).filter((m) => !m.sys);
       const i = id == null ? list.length - 1 : list.findIndex((m) => m.id === String(id));
       if (i < 0) return null;
-      const draft = scr.input || '';
+      // Unsent words in the box are the one thing here the transcript cannot
+      // say: read off the screen, put back after.
+      const draft = parseScreen(await this.tmux.capture(s.tmux, { ansi: true })).input || '';
       if (draft) await this.clearBox(s, draft);
-      const firsts = list.map((m) => m.shown.split('\n')[0]);
-      const linesBefore = promptLinesAbove(await this.tmux.capture(s.tmux), firsts);
+      const pops = s.queuePops || 0;
       await this.tmux.keys(s.tmux, 'Up');
-      let box = '';
-      let after = '';
-      for (let k = 0; k < 10; k++) {
-        await delay(150);
-        after = await this.tmux.capture(s.tmux, { ansi: true });
-        box = parseScreen(after).input || '';
-        if (box) break;
-      }
-      const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
-      const want = norm(list.map((m) => m.shown).join('\n'));
-      const sameText = box && (norm(box) === want || (/\[Pasted text #\d+/.test(box) && list.every((m) => box.includes(m.shown.split('\n')[0].slice(0, 30)))));
-      // The queue's lines left the screen with it. Still there: it went in
-      // just before Up, and the box holds a recall of it (history), not it.
-      const queueLeft = promptLinesAbove(after, firsts) <= linesBefore - list.length;
-      const matches = sameText && queueLeft && !parseScreen(after).queue.length;
-      if (box) await this.clearBox(s, box);
-      if (!matches) {
-        // Already gone in: what came up was history, not the queue.
+      for (let k = 0; k < 15 && (s.queuePops || 0) === pops; k++) { await delay(100); this.readTranscript(s); }
+      if ((s.queuePops || 0) === pops) {
+        // No popAll: the queue had gone in just before Up, which recalled the
+        // last message sent (history) instead. Clear that, put the draft back.
+        const recalled = parseScreen(await this.tmux.capture(s.tmux, { ansi: true })).input || '';
+        if (recalled) await this.clearBox(s, recalled);
         if (draft) await this.tmux.type(s.tmux, draft);
-        await this.refreshQueue(s);
+        this.emit('change', s);
         return null;
       }
+      const popped = s.lastPopAll;
+      await this.clearBox(s, popped.text);
+      const taken = popped.items.find((m) => m.id === list[i].id) || list[i];
       // The others go back into the queue, in order, then the box as it was.
-      for (const m of list.filter((_, k) => k !== i)) {
+      for (const m of popped.items.filter((x) => x.id !== taken.id)) {
         await this.tmux.type(s.tmux, m.text);
         await enterWhenTyped(this.tmux, s.tmux, {});
-        await delay(250);
+        await delay(150);
       }
       if (draft) await this.tmux.type(s.tmux, draft);
-      await delay(250);
-      await this.refreshQueue(s);
-      const taken = list[i];
-      s.typedQueue = (s.typedQueue || []).filter((t) => t.text !== taken.text);
+      await delay(200);
+      this.readTranscript(s);
+      // Typed back in, they are new enqueues: they keep the ids (and times)
+      // the console already knows them by.
+      const back = popped.items.filter((x) => x.id !== taken.id);
+      for (const m of s.ccQueue || []) {
+        if (m.sys) continue;
+        const k = back.findIndex((x) => x.text === m.text);
+        if (k >= 0) { m.id = back[k].id; m.at = back[k].at; back.splice(k, 1); }
+      }
+      this.emit('change', s);
       return { id: taken.id, text: taken.text, at: taken.at };
     });
   }
@@ -778,6 +796,7 @@ class Sessions extends EventEmitter {
       await this.tmux.keys(s.tmux, 'C-s');
       await delay(600);
       await this.refreshQueue(s);
+      this.emit('change', s);
       return true;
     });
   }
@@ -834,8 +853,73 @@ class Sessions extends EventEmitter {
     }
     s.lastPromptAt = Date.now();
     s.question = null;
+    s.prompt = null;
     this.touch(s);
     this.setState(s, 'running', null);
+  }
+
+  /**
+   * Answer what Claude is asking, with the keys a person would press — but
+   * worked out from the hook's own description of the question, not from
+   * the screen. Tested on Claude Code 2.1.332: a digit picks an option of a
+   * single-choice question (and moves on), toggles one of a multi-choice
+   * question (Tab moves on), and a question set of more than one, or with a
+   * multi-choice in it, ends on "Review your answers", where 1 submits.
+   *
+   *   { kind: 'question', answers: [{ pick: [i, …] } | { other: 'words' }] }
+   *   { kind: 'menu', n }  a numbered option of the dialog on screen (a plan
+   *                        or permission dialog, or any other menu)
+   *
+   * Resolves once the hook says the question closed (PostToolUse), or
+   * throws 409 when it did not within three seconds.
+   */
+  async answer(s, body = {}) {
+    if (!(await this.isAlive(s))) throw Object.assign(new Error('The session is not running.'), { status: 409 });
+    return this.withScreenLock(s, async () => {
+      const was = s.prompt;
+      if (body.kind === 'question') {
+        const p = s.prompt;
+        if (p?.kind !== 'question') throw Object.assign(new Error('That question is no longer open.'), { status: 409 });
+        const qs = p.questions || [];
+        const answers = Array.isArray(body.answers) ? body.answers : [];
+        if (answers.length !== qs.length) throw Object.assign(new Error('Answer every question.'), { status: 400 });
+        const key = (n) => { if (n < 1 || n > 9) throw Object.assign(new Error('No such option'), { status: 400 }); return String(n); };
+        for (let i = 0; i < qs.length; i++) {
+          const q = qs[i];
+          const a = answers[i] || {};
+          if (typeof a.other === 'string' && a.other.trim()) {
+            // "Type something": the option after the last one, then the words.
+            await this.tmux.keys(s.tmux, key(q.options.length + 1));
+            await delay(250);
+            await this.tmux.type(s.tmux, a.other.trim().slice(0, 2000));
+            await delay(150);
+            await this.tmux.keys(s.tmux, q.multiSelect ? 'Tab' : 'Enter');
+          } else {
+            const pick = (Array.isArray(a.pick) ? a.pick : []).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < q.options.length);
+            if (!pick.length) throw Object.assign(new Error(`Pick an answer for “${q.question}”.`), { status: 400 });
+            if (q.multiSelect) {
+              for (const n of [...new Set(pick)]) { await this.tmux.keys(s.tmux, key(n + 1)); await delay(80); }
+              await this.tmux.keys(s.tmux, 'Tab');
+            } else {
+              await this.tmux.keys(s.tmux, key(pick[0] + 1));
+            }
+          }
+          await delay(300);
+        }
+        if (qs.length > 1 || qs.some((q) => q.multiSelect)) await this.tmux.keys(s.tmux, '1'); // Submit answers
+      } else if (body.kind === 'menu') {
+        const n = Number(body.n);
+        if (!Number.isInteger(n) || n < 1 || n > 9) throw Object.assign(new Error('No such option'), { status: 400 });
+        await this.tmux.keys(s.tmux, String(n));
+      } else {
+        throw Object.assign(new Error('Unknown answer'), { status: 400 });
+      }
+      // The hook clears the prompt when the tool goes ahead.
+      for (let k = 0; k < 30 && was && s.prompt === was; k++) await delay(100);
+      if (body.kind === 'question' && was && s.prompt === was) throw Object.assign(new Error('The terminal did not take the answer. Open the terminal to see why.'), { status: 409 });
+      this.touch(s);
+      return this.view(s);
+    });
   }
 
   async interrupt(s) {
@@ -931,11 +1015,16 @@ class Sessions extends EventEmitter {
         this.stopBootWatch(s);
         s.relaunching = false;
         s.expectExit = false;
+        // A new process: nothing of the old one's is open or queued any more.
+        s.prompt = null;
+        s.openTools = {};
+        s.ccQueue = [];
         if (s.state === 'starting') this.setState(s, s.launchHadPrompt ? 'running' : 'idle', null);
         break;
       }
       case 'UserPromptSubmit': {
         s.question = null;
+        s.prompt = null;
         s.bgOnly = false;
         s.lastPromptAt = Date.now();
         this.setState(s, 'running', null);
@@ -948,24 +1037,48 @@ class Sessions extends EventEmitter {
             ? `Wants approval for a plan:\n${clip(evt.tool_input?.plan || '', 1200)}`
             : (qs || []).map((x) => `${x.question}${x.options?.length ? `\n${x.options.map((o) => `  • ${o.label}`).join('\n')}` : ''}`).join('\n\n');
           s.question = { text: text || 'Claude is asking something — see the terminal.', at: Date.now() };
-          this.setState(s, 'waiting', 'Asked a question');
+          s.prompt = evt.tool_name === 'ExitPlanMode'
+            ? { kind: 'plan', id: evt.tool_use_id || null, plan: clip(evt.tool_input?.plan || '', 30000), at: Date.now() }
+            : { kind: 'question', id: evt.tool_use_id || null, questions: cleanQuestions(qs), at: Date.now() };
+          this.setState(s, 'waiting', evt.tool_name === 'ExitPlanMode' ? 'Wants a plan approved' : 'Asked a question');
           this.notifier.send('needsInput', { session: s, text: s.question.text });
+        } else if (s.prompt?.kind === 'permission') {
+          // A tool going ahead: whatever was waiting for permission was answered.
+          s.prompt = null;
+          s.question = null;
+          if (s.state === 'waiting') this.setState(s, 'running', null);
         }
         break;
       }
+      case 'PermissionRequest': {
+        // The tool Claude wants to use, and what it would do: a real
+        // permission card instead of a menu read off the screen. (Questions
+        // and plans also pass through here; PreToolUse has those.)
+        if (evt.tool_name === 'AskUserQuestion' || evt.tool_name === 'ExitPlanMode') break;
+        s.prompt = { kind: 'permission', tool: evt.tool_name || null, input: toolInput(evt.tool_name, evt.tool_input), suggestions: Array.isArray(evt.permission_suggestions) ? evt.permission_suggestions.slice(0, 4) : null, at: Date.now() };
+        s.question = { text: `Wants to use ${evt.tool_name || 'a tool'}`, at: Date.now() };
+        this.setState(s, 'waiting', `Wants permission: ${evt.tool_name || 'a tool'}`);
+        this.notifier.send('needsInput', { session: s, text: s.question.text });
+        break;
+      }
       case 'PostToolUse': {
+        if (s.prompt && (!s.prompt.id || !evt.tool_use_id || s.prompt.id === evt.tool_use_id)) s.prompt = null;
         if (s.question) { s.question = null; this.setState(s, 'running', null); }
         break;
       }
       case 'Notification': {
         if (evt.notification_type === 'permission_prompt' && s.state !== 'waiting') {
           s.question = { text: evt.message || 'Claude is waiting on a prompt in the terminal.', at: Date.now() };
+          // No PermissionRequest came first (an older Claude Code): the card
+          // says what it can, and the menu comes off the screen.
+          if (!s.prompt) s.prompt = { kind: 'permission', tool: null, input: null, text: evt.message || null, at: Date.now() };
           this.setState(s, 'waiting', evt.message || 'Waiting in the terminal');
           this.notifier.send('needsInput', { session: s, text: s.question.text });
         }
         break;
       }
       case 'Stop': {
+        s.prompt = null;
         setBackground(s, evt.background_tasks);
         this.readTranscript(s);
         this.onStop(s, evt.last_assistant_message);
@@ -1074,9 +1187,19 @@ class Sessions extends EventEmitter {
 
     let lastErr = null;
     let freed = false;
+    let queueMoved = false;
     for (const e of entries) {
       if (e.isSidechain) continue;
+      if (e.type === 'queue-operation') { if (this.queueOp(s, e)) queueMoved = true; continue; }
+      if (e.type === 'user' && Array.isArray(e.message?.content)) {
+        for (const b of e.message.content) if (b?.type === 'tool_result' && s.openTools) delete s.openTools[b.tool_use_id];
+      }
       if (e.type === 'assistant') {
+        for (const b of e.message?.content || []) {
+          if (b?.type !== 'tool_use' || !b.id) continue;
+          s.openTools = s.openTools || {};
+          s.openTools[b.id] = { tool: b.name, text: clip(toolLine(b.name, b.input), 160), at: Date.parse(e.timestamp) || Date.now() };
+        }
         const c = classify(e);
         if (c) { lastErr = { c, uuid: e.uuid }; continue; }
         const model = e.message?.model;
@@ -1109,6 +1232,7 @@ class Sessions extends EventEmitter {
       // Sessions parked behind that limit should not sit out the rest of it.
       if (this.accountRestored()) this.log('limits', 'paused sessions will try again');
     }
+    if (queueMoved) this.emit('change', s);
     if (lastErr && lastErr.uuid !== s.lastErrorUuid) {
       s.lastErrorUuid = lastErr.uuid;
       this.onError(s, lastErr.c, 'transcript').catch((e) => this.log('error-handler', e.message));
@@ -1367,9 +1491,12 @@ class Sessions extends EventEmitter {
         continue;
       }
 
-      // Claude Code's queue, typed in the terminal or the console: kept in step either way.
-      if (alive && (s.state === 'running' || s.ccQueue?.length) && !this.busyOps.has(s.id) && !this.screenLocks?.has(s.id)) {
-        await this.refreshQueue(s).catch((e) => this.log('queue', e.message));
+      // No process: nothing of it is queued or open any more.
+      if (!alive && (s.ccQueue?.length || Object.keys(s.openTools || {}).length || s.prompt)) {
+        s.ccQueue = [];
+        s.openTools = {};
+        s.prompt = null;
+        this.emit('change', s);
       }
 
       // Between turns, a notice menu may be sitting on the screen.
@@ -1383,17 +1510,23 @@ class Sessions extends EventEmitter {
           s.question = { text: lines.slice(Math.max(0, at - 6), at + 1).join('\n').trim(), at: Date.now(), screen: true };
           this.setState(s, 'waiting', 'A prompt is open in the terminal');
           this.notifier.send('needsInput', { session: s, text: s.question.text });
-        } else if (!menu && s.question?.screen) {
+        } else if (!menu && (s.question?.screen || (s.prompt?.kind === 'permission' && Date.now() - s.prompt.at > 5000))) {
           // Answered in the terminal.
           s.question = null;
+          s.prompt = null;
           this.setState(s, 'idle', null);
         }
       }
 
-      // Background commands (a long test run) write nothing to the transcript
-      // while they work; give them more rope before calling it quiet.
-      const stallMs = (this.settings.stallMinutes || 20) * MINUTE * (bgWork(s).length ? 3 : 1);
-      if (s.state === 'running' && alive && now - (s.lastActivityAt || now) > stallMs && !s.stallNotified) {
+      // Quiet is only a problem when nothing is known to be running: a tool
+      // call still open (a long build, a subagent at work) or background
+      // commands write nothing to the transcript while they work. Those get
+      // three hours before they count as hung.
+      const stallMs = (this.settings.stallMinutes || 30) * MINUTE;
+      const openTool = Object.values(s.openTools || {}).some((t) => now - t.at < 3 * 3600_000);
+      const longRun = openTool || bgWork(s).length > 0;
+      const quietFor = now - (s.lastActivityAt || now);
+      if (s.state === 'running' && alive && quietFor > (longRun ? Math.max(stallMs, 3 * 3600_000) : stallMs) && !s.stallNotified) {
         s.stallNotified = true;
         const screen = await this.tmux.capture(s.tmux);
         this.notifier.send('stalled', {
@@ -1489,4 +1622,4 @@ function fmt(ms) {
   return sameDay ? time : `${d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: tz })} ${time}`;
 }
 
-module.exports = { Sessions, asksSomething, marker, LIVE, BUSY, fmt };
+module.exports = { Sessions, asksSomething, marker, cleanQuestions, LIVE, BUSY, fmt };

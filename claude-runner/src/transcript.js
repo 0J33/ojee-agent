@@ -103,6 +103,126 @@ function toolInput(name, input) {
   }
 }
 
+
+/** How much of a tool's output a reader gets inline; the rest is one request away (/full). */
+const RESULT_MAX = 20_000;
+
+/**
+ * Images in a message's content blocks, as references the console fetches
+ * one at a time (/media): base64 in the event stream would make a chat with
+ * screenshots megabytes per refresh. `id` is the entry's uuid, where in the
+ * entry, and which image.
+ */
+function imagesOf(blocks, uuid, where) {
+  const out = [];
+  (blocks || []).forEach((b, i) => {
+    if (b && b.type === 'image' && b.source) {
+      out.push({ id: `${uuid}~${where}${i}`, type: b.source.media_type || 'image/png', size: b.source.data ? Math.round(b.source.data.length * 0.75) : null, url: b.source.type === 'url' ? b.source.url : null });
+    }
+  });
+  return out;
+}
+
+/**
+ * What a tool result says beyond its text: the edit as hunks with line
+ * numbers (Edit/Write record a structuredPatch), a command's exit code, an
+ * interrupt, the background task it became, and images it returned (a
+ * screenshot read back).
+ */
+function resultExtras(e, b, body, index) {
+  const x = {};
+  const r = e.toolUseResult;
+  // One entry can carry several results; toolUseResult belongs to the first.
+  const tr = index === 0 && r && typeof r === 'object' ? r : null;
+  if (tr && Array.isArray(tr.structuredPatch) && tr.structuredPatch.length) {
+    let budget = 600;
+    x.patch = tr.structuredPatch.slice(0, 40).map((h) => {
+      const lines = (h.lines || []).slice(0, Math.max(0, budget));
+      budget -= lines.length;
+      return { oldStart: h.oldStart, oldLines: h.oldLines, newStart: h.newStart, newLines: h.newLines, lines: lines.map((l) => clip(l, 400)), cut: (h.lines || []).length > lines.length };
+    }).filter((h) => h.lines.length);
+    if (tr.type) x.change = tr.type; // create | update
+  }
+  if (tr && ('stdout' in tr || 'stderr' in tr)) {
+    if (tr.interrupted) x.interrupted = true;
+    if (tr.backgroundTaskId) x.background = tr.backgroundTaskId;
+    if (tr.stderr && String(tr.stderr).trim() && !b.is_error) x.stderr = clip(stripAnsi(tr.stderr), 4000);
+  }
+  const code = /^(?:Error: )?Exit code (\d+)/m.exec(String(body || '').slice(0, 200));
+  if (code) x.exitCode = Number(code[1]);
+  else if (tr && ('stdout' in tr) && !b.is_error && !tr.interrupted && !tr.backgroundTaskId) x.exitCode = 0;
+  if (Array.isArray(b.content)) {
+    const imgs = imagesOf(b.content, e.uuid, `r${index}.`);
+    if (imgs.length) x.media = imgs;
+  }
+  return x;
+}
+
+/**
+ * One image out of a transcript, by the id imagesOf gave it. Read from the
+ * end backwards (the image asked for is nearly always recent), whole lines
+ * only, giving up after 64 MB.
+ */
+function imageAt(file, id) {
+  const m = /^([0-9a-f-]{36})~(u|r\d+\.)(\d+)$/i.exec(String(id || ''));
+  if (!m) return null;
+  const [, uuid, where, idx] = m;
+  const entry = findLine(file, `"uuid":"${uuid}"`);
+  if (!entry) return null;
+  let blocks = entry.message?.content;
+  if (where !== 'u') {
+    const ri = Number(where.slice(1, -1));
+    blocks = (Array.isArray(blocks) ? blocks : []).filter((b) => b.type === 'tool_result')[ri]?.content;
+  }
+  const b = Array.isArray(blocks) ? blocks[Number(idx)] : null;
+  if (!b || b.type !== 'image' || b.source?.type !== 'base64') return null;
+  return { type: b.source.media_type || 'image/png', data: Buffer.from(b.source.data, 'base64') };
+}
+
+/**
+ * The last whole line of a transcript containing `needle`, parsed, read from
+ * the end backwards in 8 MB steps (what is asked for is nearly always recent;
+ * an old one in a 400 MB file costs about a second).
+ */
+function findLine(file, needle, maxBytes = 1024 * 1024 * 1024) {
+  let size;
+  try { size = fs.statSync(file).size; } catch { return null; }
+  const CHUNK = 8 * 1024 * 1024;
+  const fd = fs.openSync(file, 'r');
+  try {
+    let end = size;
+    let carry = Buffer.alloc(0);
+    while (end > 0 && size - end < maxBytes) {
+      const start = Math.max(0, end - CHUNK);
+      const buf = Buffer.alloc(end - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      const all = Buffer.concat([buf, carry]);
+      const at = all.lastIndexOf(needle);
+      if (at >= 0) {
+        const ls = all.lastIndexOf(0x0a, at) + 1;
+        if (ls === 0 && start > 0) { carry = all; end = start; continue; }
+        const le = all.indexOf(0x0a, at);
+        try { return JSON.parse(all.subarray(ls, le < 0 ? all.length : le).toString('utf8')); } catch { return null; }
+      }
+      // Keep the first (partial) line: its start is in the chunk before.
+      const nl = all.indexOf(0x0a);
+      carry = nl >= 0 ? all.subarray(0, nl) : all;
+      end = start;
+    }
+  } finally { fs.closeSync(fd); }
+  return null;
+}
+
+/** A tool's whole output, by its call's id, for a result the stream clipped. */
+function fullResult(file, toolUseId) {
+  if (!/^[\w-]{6,80}$/.test(String(toolUseId || ''))) return null;
+  const e = findLine(file, `"tool_use_id":"${toolUseId}"`);
+  const b = (Array.isArray(e?.message?.content) ? e.message.content : []).find((x) => x.tool_use_id === toolUseId);
+  if (!b) return null;
+  const body = typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? b.content.filter((x) => x.type === 'text').map((x) => x.text).join('\n') : '';
+  return { text: body.slice(0, 4 * 1024 * 1024), size: body.length, error: !!b.is_error };
+}
+
 const stripAnsi = (t) => String(t || '').replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '');
 const tag = (text, name) => {
   const m = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text);
@@ -149,12 +269,18 @@ function toMessages(entries, { detail = false, sidechain = false } = {}) {
     if (e.type === 'user' && !e.isMeta) {
       const c = e.message?.content;
       if (Array.isArray(c) && c.some((b) => b.type === 'tool_result')) {
+        let ri = 0;
         for (const b of c) {
           if (b.type !== 'tool_result') continue;
           const body = typeof b.content === 'string' ? b.content
             : Array.isArray(b.content) ? b.content.filter((x) => x.type === 'text').map((x) => x.text).join('\n') : '';
-          const m = { role: 'result', text: clip(body, detail ? 6000 : 600), error: !!b.is_error, at, uuid: e.uuid };
-          if (detail) { m.toolUseId = b.tool_use_id || null; m.size = body.length; }
+          const m = { role: 'result', text: clip(body, detail ? RESULT_MAX : 600), error: !!b.is_error, at, uuid: e.uuid };
+          if (detail) {
+            m.toolUseId = b.tool_use_id || null;
+            m.size = body.length;
+            Object.assign(m, resultExtras(e, b, body, ri));
+          }
+          ri += 1;
           out.push(m);
         }
         continue;
@@ -183,8 +309,27 @@ function toMessages(entries, { detail = false, sidechain = false } = {}) {
         continue;
       }
       const m = { role: 'user', text, at, uuid: e.uuid };
-      if (detail && Array.isArray(c)) { const n = c.filter((b) => b.type === 'image').length; if (n) m.images = n; }
+      if (detail && Array.isArray(c)) { const imgs = imagesOf(c, e.uuid, 'u'); if (imgs.length) { m.images = imgs.length; m.media = imgs; } }
       out.push(m);
+      continue;
+    }
+
+    // What a hook said: a message it showed, context it added, an error it
+    // raised. Claude Code records these as attachments; a Stop hook's errors
+    // sit in its summary.
+    if (detail && e.type === 'attachment' && /^hook_/.test(e.attachment?.type || '')) {
+      const a = e.attachment;
+      const text = typeof a.content === 'string' ? a.content : Array.isArray(a.content) ? a.content.map((x) => x?.text || '').join('\n') : (a.stderr || a.stdout || '');
+      if (String(text).trim()) {
+        out.push({ role: 'hook', kind: a.type.replace(/^hook_/, ''), name: a.hookName || a.hookEvent || null, toolUseId: a.toolUseID || null, text: clip(stripAnsi(text), 4000), error: /error|blocking/.test(a.type), at, uuid: e.uuid });
+      }
+      continue;
+    }
+    if (detail && e.type === 'system' && e.subtype === 'stop_hook_summary') {
+      const errs = (e.hookErrors || []).map((x) => (typeof x === 'string' ? x : x?.error || x?.message || JSON.stringify(x))).filter(Boolean);
+      if (errs.length || e.preventedContinuation) {
+        out.push({ role: 'hook', kind: e.preventedContinuation ? 'blocked' : 'error', name: 'Stop', text: clip(stripAnsi(errs.join('\n') || e.stopReason || 'A Stop hook stopped the turn'), 4000), error: true, at, uuid: e.uuid });
+      }
       continue;
     }
 
@@ -422,4 +567,4 @@ function finishedAgents(transcript) {
   return c.done;
 }
 
-module.exports = { findTranscript, Tail, toMessages, readRange, describe, listSessions, toolSummary, toolInput, listSubagents, subagentFile, finishedAgents };
+module.exports = { imageAt, fullResult, RESULT_MAX, findTranscript, Tail, toMessages, readRange, describe, listSessions, toolSummary, toolInput, listSubagents, subagentFile, finishedAgents };

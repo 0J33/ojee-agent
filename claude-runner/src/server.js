@@ -28,7 +28,7 @@ const { Tmux } = require('./tmux');
 const { Accounts, cleanEnv } = require('./accounts');
 const { Notifier } = require('./notify');
 const { Sessions } = require('./sessions');
-const { Tail, toMessages, readRange, listSessions, findTranscript, listSubagents, subagentFile, finishedAgents } = require('./transcript');
+const { Tail, toMessages, readRange, listSessions, findTranscript, listSubagents, subagentFile, finishedAgents, imageAt, fullResult } = require('./transcript');
 const { parseScreen } = require('./screen');
 const { enterWhenTyped } = require('./submit');
 const { catalogue } = require('./commands');
@@ -47,6 +47,7 @@ function safeName(raw, type) {
 const logins = require('./logins');
 const { bridge } = require('./terminal');
 const { Governor } = require('./governor');
+const { LiveFeeds } = require('./live');
 
 const VERSION = require('../package.json').version;
 const ROOT = path.resolve(__dirname, '..');
@@ -86,6 +87,7 @@ function claudeSettings() {
       UserPromptSubmit: hook,
       Stop: hook,
       Notification: hook,
+      PermissionRequest: hook,
       SubagentStart: hook,
       SubagentStop: hook,
       PreToolUse: [
@@ -164,6 +166,7 @@ function createRunner(overrides = {}) {
     log,
   });
   const sessions = new Sessions({ config, store, tmux, accounts, notifier, files: FILES, log });
+  const live = new LiveFeeds({ sessions, tmux, log });
   // Only when the sessions live in their own unit: in dev (self mode) the
   // tmux server shares the runner's cgroup, and freezing that would freeze us.
   const governor = config.TMUX_MODE === 'systemd'
@@ -216,7 +219,7 @@ function createRunner(overrides = {}) {
   /* ── health, state, events ───────────────────────────────────────── */
 
   app.get('/health', (_req, res) => res.json({ ok: true, version: VERSION }));
-  app.get('/api/health', auth, (_req, res) => res.json({ ok: true, version: VERSION, device: device(), tmux: runtime.tmux, claude: runtime.claude }));
+  app.get('/api/health', auth, (_req, res) => res.json({ ok: true, version: VERSION, device: device(), tmux: runtime.tmux, claude: runtime.claude, live: live.stats() }));
   app.get('/api/state', auth, (_req, res) => res.json(stateView()));
 
   app.get('/api/summary', auth, (_req, res) => {
@@ -233,8 +236,13 @@ function createRunner(overrides = {}) {
       queued: count('queued'),
       total: all.length,
       account: active ? { id: active.id, label: active.label, status: accounts.describe(active).status } : null,
+      // Every account's standing, for the console's alerts (needs login,
+      // limited): each a stable thing that is true until it is not.
+      accounts: accountsView().map((a) => ({ id: a.id, label: a.label, status: a.status, active: a.active, limitedUntil: a.limitedUntil, limitWindow: a.limitWindow, text: a.limitText, authError: a.authError })),
+      idle: count('idle') + count('done'),
+      stalled: all.filter((s) => s.stallNotified && s.state === 'running').map((s) => ({ id: s.id, title: s.title, since: s.lastActivityAt })),
       attention: all.filter((s) => ['waiting', 'blocked', 'error'].includes(s.state))
-        .map((s) => ({ id: s.id, title: s.title, state: s.state, detail: s.detail })).slice(0, 5),
+        .map((s) => ({ id: s.id, title: s.title, state: s.state, detail: s.detail, prompt: s.prompt ? s.prompt.kind : null, question: s.question?.text ? String(s.question.text).slice(0, 300) : null, at: s.updatedAt || s.lastActivityAt })).slice(0, 10),
     });
   });
 
@@ -514,6 +522,41 @@ function createRunner(overrides = {}) {
     sendTranscript(s.transcript, req, res);
   }));
 
+  /** The live channel (src/live.js): ?agent=<id> for a subagent's, read only. */
+  app.get('/api/sessions/:id/live', auth, wrap(async (req, res) => {
+    const s = need(req);
+    const agent = req.query.agent ? String(req.query.agent) : null;
+    if (agent && !/^[A-Za-z0-9_-]{1,80}$/.test(agent)) return res.status(400).json({ error: 'bad agent id' });
+    live.attach(s, req, res, { agent });
+  }));
+
+  /** One image out of the conversation (a pasted screenshot, a tool's image), by the id the messages carry. */
+  app.get('/api/sessions/:id/media/:mid', auth, wrap(async (req, res) => {
+    const s = need(req);
+    const agent = req.query.agent ? String(req.query.agent) : null;
+    const file = !sessions.hasTranscript(s) ? null : agent ? subagentFile(s.transcript, agent) : s.transcript;
+    const img = file ? imageAt(file, req.params.mid) : null;
+    if (!img) return res.status(404).json({ error: 'No such image' });
+    res.setHeader('content-type', /^image\/(png|jpeg|gif|webp)$/.test(img.type) ? img.type : 'application/octet-stream');
+    res.setHeader('cache-control', 'private, max-age=86400, immutable');
+    res.end(img.data);
+  }));
+
+  /** A tool's whole output, when the messages carried it clipped. */
+  app.get('/api/sessions/:id/full/:toolUseId', auth, wrap(async (req, res) => {
+    const s = need(req);
+    const agent = req.query.agent ? String(req.query.agent) : null;
+    const file = !sessions.hasTranscript(s) ? null : agent ? subagentFile(s.transcript, agent) : s.transcript;
+    const r = file ? fullResult(file, req.params.toolUseId) : null;
+    if (!r) return res.status(404).json({ error: 'Not found in the conversation' });
+    res.json(r);
+  }));
+
+  /** Answer the open question or dialog: see Sessions.answer. */
+  app.post('/api/sessions/:id/answer', auth, wrap(async (req, res) => {
+    res.json(await sessions.answer(need(req), req.body || {}));
+  }));
+
   /**
    * The session's subagents (Task/Agent runs, background agents), newest
    * first: id, type, description, the call that launched it, and whether it
@@ -557,9 +600,8 @@ function createRunner(overrides = {}) {
     const alive = await sessions.isAlive(s);
     if (!alive) return res.json({ alive, menu: null, activity: null, agents: [], mode: null, draft: null, queue: [], input: '' });
     const scr = parseScreen(await tmux.capture(s.tmux, { ansi: true }));
-    // A message queued in the terminal tab shows in the chat too: same queue.
-    await sessions.refreshQueue(s, scr);
-    res.json({ alive, ...scr });
+    await sessions.refreshQueue(s);
+    res.json({ alive, ...scr, queue: (s.ccQueue || []).filter((m) => !m.sys).map((m) => m.text) });
   }));
 
   /**
@@ -898,6 +940,7 @@ function createRunner(overrides = {}) {
   hookApp.use(express.json({ limit: '4mb' }));
   hookApp.post('/hook', (req, res) => {
     res.json({ ok: true });
+    if (process.env.HOOK_LOG) { try { fs.appendFileSync(process.env.HOOK_LOG, `${JSON.stringify({ at: Date.now(), ...(req.body || {}) })}\n`); } catch { /* debug only */ } }
     try { sessions.onHook(req.body || {}); } catch (e) { log('hook', e.message); }
   });
 
@@ -933,6 +976,33 @@ function createRunner(overrides = {}) {
     });
   }
 
+  /**
+   * An account found logged out by a routine check is news as much as one
+   * a session ran into: say so (once, until it is logged in again). Until
+   * 26 Nov only a session failing on it raised this, so accounts nobody was
+   * using sat logged out with no alert.
+   */
+  function loginNotices() {
+    for (const a of accounts.list()) {
+      const d = accounts.describe(a);
+      const seen = (store.data.loginNoticed ||= {});
+      if (d.status === 'needs-login') {
+        // Once a day at most per account, across runner restarts too.
+        if (Date.now() - (seen[a.id] || 0) < 24 * 3600_000) continue;
+        seen[a.id] = Date.now();
+        store.save();
+        notifier.send('needsLogin', {
+          title: `${a.label} needs to log in`,
+          text: `${d.limitText || 'Its login has expired or was never made'} on ${config.DEVICE_LABEL}.\n\nLog it in from Claude → Accounts.`,
+          tag: `needsLogin:${a.id}`,
+        });
+      } else if (d.loggedIn) {
+        notifier.clear(`needsLogin:${a.id}`);
+        if (seen[a.id]) { delete seen[a.id]; store.save(); }
+      }
+    }
+  }
+
   /* ── helpers ──────────────────────────────────────────────────────── */
 
   function agentsJson() {
@@ -963,6 +1033,7 @@ function createRunner(overrides = {}) {
     if (governor) await governor.start();
     if (!up) log('tmux', config.TMUX_MODE === 'systemd' ? 'server not running — is ojee-claude-tmux.service up?' : 'could not start the tmux server');
     await accounts.refreshAll().catch(() => {});
+    loginNotices();
     await sessions.reconcile();
 
     if (listen) {
@@ -983,11 +1054,12 @@ function createRunner(overrides = {}) {
       tickTimer = setTimeout(loop, config.TICK_MS);
     };
     tickTimer = setTimeout(loop, 1000);
-    authTimer = setInterval(() => accounts.refreshAll().then(() => sessions.emit('accounts')).catch(() => {}), config.AUTH_CHECK_MS);
+    authTimer = setInterval(() => accounts.refreshAll().then(() => { loginNotices(); sessions.emit('accounts'); }).catch(() => {}), config.AUTH_CHECK_MS);
   }
 
   async function stop() {
     governor?.stop();
+    live.closeAll();
     clearTimeout(tickTimer);
     clearInterval(authTimer);
     for (const t of loginWatch.values()) clearInterval(t);
@@ -998,7 +1070,7 @@ function createRunner(overrides = {}) {
     store.flush();
   }
 
-  return { app, start, stop, store, sessions, accounts, tmux, notifier, config, onUpgrade, governor };
+  return { app, start, stop, store, sessions, accounts, tmux, notifier, config, onUpgrade, governor, live };
 }
 
 function isLoopback(host) {

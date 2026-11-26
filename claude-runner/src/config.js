@@ -113,7 +113,8 @@ config.DEFAULT_SETTINGS = {
   autoSwitchAccounts: true,
   activeAccount: 'main',
   maxRunning: 3,
-  stallMinutes: 20,
+  // Quiet this long while working, with no tool call open, is a stall.
+  stallMinutes: 30,
   unattended: true,
   guard: true,
   resumeInterrupted: true,

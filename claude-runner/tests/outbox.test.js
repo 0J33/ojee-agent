@@ -11,7 +11,12 @@ const { Sessions } = require('../src/sessions');
  * left in the box when the turn ends stays there, unsent.
  */
 function terminal() {
-  const t = { running: true, queue: [], box: '', sent: [], flushBeforeUp: false };
+  // ops: what Claude Code writes to its transcript as the queue moves
+  // (2.1.332: enqueue as typed, dequeue into a turn, popAll on Up).
+  const t = { running: true, queue: [], box: '', sent: [], flushBeforeUp: false, ops: [] };
+  let clock = 1000;
+  const op = (operation, content) => t.ops.push({ type: 'queue-operation', operation, content, timestamp: new Date(clock++).toISOString() });
+  t.enqueue = (text) => { t.queue.push(text); op('enqueue', text); };
   const rule = '─'.repeat(40);
   t.screen = () => {
     const out = [];
@@ -31,13 +36,13 @@ function terminal() {
     type: async (_n, text) => { t.box += text; },
     keys: async (_n, ...keys) => {
       for (const k of keys) {
-        if (k === 'Enter') { if (t.box) { if (t.running) t.queue.push(t.box); else t.sent.push(t.box); t.box = ''; } }
+        if (k === 'Enter') { if (t.box) { if (t.running) t.enqueue(t.box); else t.sent.push(t.box); t.box = ''; } }
         else if (k === 'Up' && !t.box) {
-          if (t.flushBeforeUp) { t.sent.push(t.queue.join('\n')); t.queue = []; t.running = false; t.flushBeforeUp = false; }
-          if (t.queue.length) { t.box = t.queue.join('\n'); t.queue = []; } else t.box = t.sent[t.sent.length - 1] || '';
+          if (t.flushBeforeUp) { t.sent.push(t.queue.join('\n')); for (const _ of t.queue) op('dequeue'); t.queue = []; t.running = false; t.flushBeforeUp = false; }
+          if (t.queue.length) { t.box = t.queue.join('\n'); op('popAll', t.box); t.queue = []; } else t.box = t.sent[t.sent.length - 1] || '';
         } else if (k === 'C-u') { const l = t.box.split('\n'); l[l.length - 1] = ''; t.box = l.join('\n'); }
         else if (k === 'BSpace') { const l = t.box.split('\n'); if (l.length > 1 && l[l.length - 1] === '') { l.pop(); t.box = l.join('\n'); } }
-        else if (k === 'C-s') { if (t.queue.length) { t.sent.push(t.queue.join('\n')); t.queue = []; } }
+        else if (k === 'C-s') { if (t.queue.length) { t.sent.push(t.queue.join('\n')); for (const _ of t.queue) op('dequeue'); t.queue = []; } }
       }
     },
   };
@@ -59,9 +64,11 @@ function rig() {
     // The real type() presses Enter once the text has landed; here at once.
     type: async (s, text) => { typed.push(text); await term.tmux.type(s.tmux, text); await term.tmux.keys(s.tmux, 'Enter'); s.state = 'running'; },
   };
-  for (const k of ['send', 'takeOutbox', 'deliverOutbox', 'withScreenLock', 'typedTextOf', 'refreshQueue', 'watchQueue', 'clearBox', 'takeQueued', 'sendQueueNow']) {
+  for (const k of ['send', 'takeOutbox', 'deliverOutbox', 'withScreenLock', 'refreshQueue', 'clearBox', 'takeQueued', 'sendQueueNow', 'queueOp']) {
     ctx[k] = Sessions.prototype[k].bind(ctx);
   }
+  // The transcript, read: the queue's operations as they were written.
+  ctx.readTranscript = (s) => { while (term.ops.length) ctx.queueOp(s, term.ops.shift()); };
   const s = { id: 's1', tmux: 'p', state: 'running', model: { current: 'm', preferred: 'm' }, outbox: [] };
   return { ctx, s, term, typed };
 }
@@ -79,9 +86,9 @@ test('a mid-turn message goes into Claude Code\'s own queue, and the console lis
   done(ctx);
 });
 
-test('a message queued in the terminal tab shows in the console', async () => {
+test('a message queued in the terminal tab shows in the console, from the transcript', async () => {
   const { ctx, s, term } = rig();
-  term.queue.push('typed in the terminal');
+  term.enqueue('typed in the terminal');
   await ctx.refreshQueue(s);
   assert.deepEqual(s.ccQueue.map((m) => m.text), ['typed in the terminal']);
   done(ctx);
