@@ -154,3 +154,19 @@ test('an account that is off is skipped everywhere and the last one stays on', a
   assert.deepEqual(checked, ['main', 'b']);
   store.flush();
 });
+
+test('the main login can be taken out of the list and put back', () => {
+  const { accounts, store, main } = setup();
+  assert.throws(() => accounts.remove('main'), /only account/);
+  const second = accounts.add('Second');
+  const r = accounts.remove('main');
+  assert.equal(r.main, true);
+  assert.equal(r.leftOnDisk, main);
+  assert.ok(fs.existsSync(path.join(main, '.credentials.json')), 'the ~/.claude login itself is untouched');
+  assert.deepEqual(accounts.list().map((a) => a.id), [second.id]);
+  assert.equal(store.settings.activeAccount, second.id);
+  const back = accounts.addMain();
+  assert.equal(back.dir, null);
+  assert.equal(accounts.addMain(), back, 'adding it twice keeps one');
+  assert.equal(accounts.list().filter((a) => !a.dir).length, 1);
+});

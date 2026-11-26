@@ -756,6 +756,12 @@ function createRunner(overrides = {}) {
   app.get('/api/accounts', auth, (_req, res) => res.json({ accounts: accountsView(), activeAccount: store.settings.activeAccount }));
 
   app.post('/api/accounts', auth, wrap(async (req, res) => {
+    if (req.body?.main === true) {
+      const m = accounts.addMain();
+      await accounts.status(m);
+      sessions.emit('accounts');
+      return res.status(201).json(accounts.describe(m));
+    }
     const label = String(req.body?.label || '').trim();
     if (!label) return res.status(400).json({ error: 'label required' });
     const a = accounts.add(label);

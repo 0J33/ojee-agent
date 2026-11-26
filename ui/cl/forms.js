@@ -272,6 +272,11 @@ export function createAccounts({ dev: dev0, acct, onBack }) {
         h('div', { class: 'panel clip' },
           h('div', { class: 'set' }, h('div', { class: 't' }, 'Auto-switch accounts'), h('div', { class: 'd' }, 'When one runs out, sessions move to the next available account in this order and carry on. Off, they pause until it resets.'),
             h('div', { class: 'ctrl' }, (() => { const b = sw(settings.autoSwitchAccounts, (v) => saveSettings(dev, { autoSwitchAccounts: v })); b.classList.add('cl-autosw'); return b; })())),
+          accounts.some((x) => x.main) ? null : h('div', { class: 'set' }, h('div', { class: 't' }, 'This machine\'s own login'), h('div', { class: 'd' }, 'The ~/.claude login was removed from this list. Add it back to use it again.'),
+            h('div', { class: 'ctrl' }, h('button', { class: 'btn sm', type: 'button', onclick: async () => {
+              const m = await act('add-main', () => post(dev, '/accounts', { main: true }));
+              if (m) { d.data.accounts = [...d.data.accounts.filter((x) => x.id !== m.id), m]; paint(); }
+            } }, 'Add this machine\'s own login'))),
           h('div', { class: 'set cl-addacct' }, h('div', { class: 't' }, 'Add an account'), h('div', { class: 'd' }, 'Gets its own login folder; history, settings and CLAUDE.md stay shared, so any session can continue on it.'),
             h('div', { class: 'cl-inline' }, label, h('button', { class: 'btn sm', type: 'button', onclick: add }, 'Add and log in'))))));
     paintLogin();
@@ -296,7 +301,7 @@ export function createAccounts({ dev: dev0, acct, onBack }) {
     const choice = await ask({
       title: a.label,
       body: h('p', {}, a.main ? `${multi() ? devLabel(dev) : 'This machine'}'s own ~/.claude login.` : `Login folder: ${a.dir}`),
-      actions: [{ label: 'Check login', value: 'refresh', variant: 'ghost' }, { label: 'Forget limits', value: 'clear', variant: 'ghost' }, { label: 'Rename', value: 'rename', variant: 'ghost' }, ...(a.main ? [] : [{ label: 'Remove', value: 'remove', variant: 'danger' }])],
+      actions: [{ label: 'Check login', value: 'refresh', variant: 'ghost' }, { label: 'Forget limits', value: 'clear', variant: 'ghost' }, { label: 'Rename', value: 'rename', variant: 'ghost' }, { label: 'Remove', value: 'remove', variant: 'danger' }],
     });
     if (choice === 'refresh') await act(`r:${a.id}`, () => post(dev, `/accounts/${a.id}/refresh`), 'Checked');
     else if (choice === 'clear') await act(`c:${a.id}`, () => post(dev, `/accounts/${a.id}/clear-limits`), 'Limits forgotten');
@@ -304,7 +309,10 @@ export function createAccounts({ dev: dev0, acct, onBack }) {
       const input = h('input', { class: 'input', value: a.label, maxlength: '40' });
       if (await ask({ title: 'Rename account', body: field('Name', input), actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'Save', value: true, variant: 'primary' }] })) await act(`n:${a.id}`, () => patch(dev, `/accounts/${a.id}`, { label: input.value }));
     } else if (choice === 'remove') {
-      if (await ask({ title: `Remove ${a.label}?`, body: h('p', {}, `Its login folder stays on disk (${a.dir}); delete it by hand to remove the login itself.`), actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'Remove', value: true, variant: 'danger solid' }] })) {
+      const why = a.main
+        ? `This is ${multi() ? devLabel(dev) : 'this machine'}'s own ~/.claude login. Removing it only takes it out of this list: the login stays in ~/.claude, and "Add this machine's own login" below brings it back.`
+        : `Its login folder stays on disk (${a.dir}); delete it by hand to remove the login itself.`;
+      if (await ask({ title: `Remove ${a.label}?`, body: h('p', {}, why), actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'Remove', value: true, variant: 'danger solid' }] })) {
         const r = await act(`rm:${a.id}`, () => api(dev, `/accounts/${a.id}`, { method: 'DELETE' }), 'Removed');
         if (r) { const x = dataOf(dev); if (x) x.accounts = x.accounts.filter((y) => y.id !== a.id); paint(); }
       }

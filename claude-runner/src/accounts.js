@@ -165,14 +165,27 @@ class Accounts {
   remove(id) {
     const acct = this.get(id);
     if (!acct) return false;
-    if (!acct.dir) throw new Error('The main account is this machine\'s own ~/.claude and cannot be removed.');
     if (this.enabled(acct) && this.enabledList().length <= 1) throw Object.assign(new Error('It is the only account that is on. Turn another on first.'), { status: 409 });
+    if (this.list().length <= 1) throw Object.assign(new Error('It is the only account. Add another first.'), { status: 409 });
     this.store.data.accounts = this.store.accounts.filter((a) => a.id !== id);
     if (this.store.settings.activeAccount === id) this.store.settings.activeAccount = this.firstEnabled()?.id || this.store.accounts[0]?.id || 'main';
     this.store.save();
     // The login dir is left on disk: deleting a credential by accident is
-    // worse than a stray folder. Say where it is.
-    return { removed: true, leftOnDisk: acct.dir };
+    // worse than a stray folder. Say where it is. The main account has no dir
+    // of its own: removing it only takes this machine's ~/.claude login out of
+    // the list (addMain() brings it back).
+    return { removed: true, leftOnDisk: acct.dir || this.config.DEFAULT_CLAUDE_DIR, main: !acct.dir };
+  }
+
+  /** Put this machine's own ~/.claude login back in the list after a removal. */
+  addMain() {
+    const have = this.list().find((a) => !a.dir);
+    if (have) return have;
+    const id = this.get('main') ? 'main-login' : 'main';
+    const acct = { id, label: 'Main', dir: null, addedAt: Date.now(), limits: {} };
+    this.store.accounts.push(acct);
+    this.store.save();
+    return acct;
   }
 
   /* ── login state ────────────────────────────────────────────────────── */
