@@ -1,17 +1,15 @@
 /**
- * ojee-agent — the AI and automation module.
+ * ojee-agent, shown in the console as **Claude**: unattended Claude Code
+ * sessions on each machine that runs them, through the host runner in
+ * claude-runner/ (HP, and LOQ when it is awake).
  *
- * What it is now: unattended Claude Code sessions (through the host runner in
- * claude-runner/), the Assistant (OpenCode's Zen gateway, hosted as
- * opencode serve), n8n's workflows, the Odysseus stack, and the services
- * those depend on. What it used to be: a host dashboard with CPU graphs, a
- * list of every container on the box, and a whitelist of restart commands.
- *
- * That half is gone, and its absence is the point. Monitoring lives in
- * ojee-fleet, which reads this machine directly rather than asking a service
- * on it over HTTP for numbers already sitting in /proc. A module that both
- * watched the host AND ran the automations was two modules wearing one name,
- * and neither half could be understood without ignoring the other.
+ * That is the whole module now (26 Nov redesign). What else used to live
+ * here is either off or out of sight:
+ *   - Assistant, Workflows, Odysseus: off behind AGENT_DISABLE (features.js)
+ *   - the stack's containers: a health check that says nothing until
+ *     something is wrong, then one line here and an alert
+ *   - Work: moved to forsa-aios; only the endpoints HP's Forsa loop still
+ *     calls stay, server-side (work-legacy.js)
  *
  * Runs standalone or as an ojee-console module. Authentication is NOT here:
  * mounted, the console has already run three gates (tailnet, TOTP, device
@@ -24,8 +22,10 @@ const fetch = require('node-fetch');
 const { exec } = require('child_process');
 /* The Assistant: OpenCode's Zen gateway, hosted on this stack as
    `opencode serve` and reached through OPENCODE_URL. */
+const fs = require('fs');
 const assistantModule = require('./assistant');
-const mountWork = require('./work');
+const mountWorkLegacy = require('./work-legacy');
+const notifyStream = require('./notify-stream');
 const features = require('./features');
 
 const PORT = process.env.PORT || 8080;
@@ -93,26 +93,53 @@ const runnerById = (id) => RUNNERS.find((r) => r.id === id) || null;
 
 /* ── notifications ────────────────────────────────────────────────────── */
 
-const claudeType = (kind, label, description, channels, severity = 'warn') => ({
-  id: `agent.claude-${kind}`, label: `Claude: ${label}`, description, severity, defaultChannels: channels, view: 'claude', discordBy: 'module', cooldownMin: 10,
+/**
+ * Every alert this module can raise, for the console's Settings → Notifications
+ * (each kind listed and switchable) and its inbox. An alert's `key` is
+ * `<kind>:<device>:<subject>` — the session or account it is about — so the
+ * same thing stays one inbox item however its words or numbers change.
+ *
+ *   blocking         toast + push (Claude is waiting on you); the rest is
+ *                    inbox + badge only
+ *   defaultChannels  where it goes until the owner chooses: app, discord
+ *   threshold        the condition behind it, where there is one to tune
+ *   hold / clearMin  how many checks it must hold before it raises, and how
+ *                    long it must be gone before it resolves (flapping)
+ */
+const kind = (id, label, description, o = {}) => ({
+  id,
+  label,
+  description,
+  severity: o.severity || 'warn',
+  blocking: !!o.blocking,
+  defaultChannels: o.channels || ['app'],
+  view: 'claude',
+  discordBy: id.startsWith('agent.claude-') ? 'module' : undefined,
+  cooldownMin: 10,
+  hold: o.hold ?? 1,
+  clearMin: o.clearMin ?? 0,
+  ...(o.threshold ? { threshold: o.threshold } : {}),
 });
-const NOTIFY_TYPES = [
-  claudeType('needs-input', 'needs your input', 'A session asked a question or wants a tool approved.', ['app', 'discord']),
-  claudeType('blocked', 'blocked', 'A session cannot go on without you (a guard stopped it, a prompt it cannot answer).', ['app', 'discord']),
-  claudeType('error', 'hit an error', 'A session failed to start, crashed, or kept failing after retries.', ['app', 'discord']),
-  claudeType('stalled', 'gone quiet', 'A session working with no output for longer than the stall time.', ['app', 'discord']),
-  claudeType('all-limited', 'every account out', 'All Claude accounts hit their limits; sessions are paused until one resets.', ['app', 'discord']),
-  claudeType('needs-login', 'lost its login', 'An account needs signing in again.', ['app', 'discord']),
-  claudeType('model-fallback', 'switched model', 'A model hit its limit and the session moved to the fallback.', ['discord'], 'info'),
-  claudeType('account-switch', 'switched account', 'An account ran out and sessions moved to another.', ['discord'], 'info'),
-  claudeType('done', 'finished', 'A session finished its turn (off by default: unattended work finishing is the normal case). A session set to ping when done always does.', [], 'info'),
-  // Claude's messages to the owner about the Forsa work (src/work.js): what used to go to a Discord webhook.
-  { id: 'agent.work-update', label: 'Work: message from Claude', description: 'Claude reports something about the Forsa work: a release, a moved deadline, a decision taken, a problem.', severity: 'info', defaultChannels: ['app'], view: 'work' },
-  { id: 'agent.work-alert', label: 'Work: needs your attention', description: 'Claude hit something only you can unblock.', severity: 'warn', defaultChannels: ['app'], view: 'work' },
-  { id: 'agent.assistant-needs-you', label: 'Assistant: needs you', description: 'The Assistant wants to use a tool that asks first, or has a question.', severity: 'warn', defaultChannels: ['app'], view: 'assistant' },
-  { id: 'agent.assistant-failed', label: 'Assistant: could not answer', description: 'Every model refused, or the turn broke.', severity: 'warn', defaultChannels: ['app'], view: 'assistant' },
-  { id: 'agent.assistant-replied', label: 'Assistant: replied', description: 'A reply finished, with its first lines.', severity: 'info', defaultChannels: [], view: 'assistant' },
-];
+const ALERT_KINDS = [
+  kind('agent.claude-needs-input', 'Claude: asks you something', 'A session asked a question, wants a plan approved, or wants permission for a tool. It waits until you answer.', { blocking: true, channels: ['app', 'discord'] }),
+  kind('agent.claude-blocked', 'Claude: blocked', 'A session ended its turn with BLOCKED: it cannot go on without you.', { channels: ['app', 'discord'] }),
+  kind('agent.claude-error', 'Claude: session error', 'A session failed to start, crashed, or kept failing after three retries.', { severity: 'err', channels: ['app', 'discord'] }),
+  kind('agent.claude-stalled', 'Claude: gone quiet', 'A working session wrote nothing for this long while no tool was running and nothing ran in the background. Long builds and subagents do not count.', { threshold: { key: 'stallMinutes', label: 'Quiet for', unit: 'min', default: 30, min: 5, max: 240 } }),
+  kind('agent.claude-needs-login', 'Claude: account needs login', 'An account is logged out (found by a session or by the check every 15 minutes). Sessions cannot use it until it is logged in again.', { channels: ['app', 'discord'] }),
+  kind('agent.claude-account-limited', 'Claude: account limited', 'An account hit its 5-hour or weekly limit; sessions move to another or wait until it resets.', { severity: 'info', clearMin: 5 }),
+  kind('agent.claude-all-limited', 'Claude: every account out', 'Every account is limited or logged out; sessions are paused until the soonest reset.', { channels: ['app', 'discord'] }),
+  kind('agent.claude-model-fallback', 'Claude: switched model', 'A model hit its limit and a session moved to the fallback model.', { severity: 'info', channels: [] }),
+  kind('agent.claude-account-switch', 'Claude: switched account', 'An account ran out and sessions moved to another.', { severity: 'info', channels: [] }),
+  kind('agent.claude-done', 'Claude: finished', 'A session ended with DONE. Off by default: unattended work finishing is the normal case. A session set to ping when done always does.', { severity: 'info', channels: [] }),
+  kind('agent.claude-runner-down', 'Claude: runner not answering', 'The runner on a machine that should be up (not a laptop that sleeps) stopped answering for 3 minutes.', { hold: 3, clearMin: 2 }),
+  kind('agent.service-down', 'Claude: a stack service stopped', 'One of the containers this module looks after (n8n, CouchDB…) is stopped.', { severity: 'err', hold: 2, clearMin: 2 }),
+  // Claude's messages to the owner about the Forsa work (work-legacy.js) until forsa-aios takes them.
+  { ...kind('agent.work-update', 'Forsa: message from Claude', 'Claude reports something about the Forsa work: a release, a moved deadline, a decision taken.', { severity: 'info' }), view: null },
+  { ...kind('agent.work-alert', 'Forsa: needs your attention', 'Claude hit something on the Forsa work only you can unblock.'), view: null },
+  { ...kind('agent.assistant-needs-you', 'Assistant: needs you', 'The Assistant wants to use a tool that asks first, or has a question.', { blocking: true }), view: 'assistant', off: 'assistant' },
+  { ...kind('agent.assistant-failed', 'Assistant: could not answer', 'Every model refused, or the turn broke.'), view: 'assistant', off: 'assistant' },
+  { ...kind('agent.assistant-replied', 'Assistant: replied', 'A reply finished, with its first lines.', { severity: 'info', channels: [] }), view: 'assistant', off: 'assistant' },
+].filter((k) => !(k.off && features.off(k.off))).map(({ off, ...k }) => k);
 
 /**
  * How far back "recent runs" goes.
@@ -160,54 +187,35 @@ const execP = (cmd, timeout = 6000) => new Promise((resolve) => {
 /* ── module contract ──────────────────────────────────────────────────── */
 
 const VIEWS = [
-  { id: 'overview', label: 'Overview', icon: 'i-grid' },
-  { id: 'work', label: 'Work', icon: 'i-summary' },
-  { id: 'claude', label: 'Claude', icon: 'i-log' },
-  { id: 'assistant', label: 'Assistant', icon: 'i-assistant' },
-  { id: 'workflows', label: 'Workflows', icon: 'i-auto' },
-  // The Router tab is gone: the Laya router lives on Loq, a laptop that is
-  // asleep more often than it is on, and it was the one view on this module
-  // that always had something to explain about another machine. src/router.js
-  // and ui/router.js are still in the tree — put the entry above back and it
-  // returns.
-  { id: 'odysseus', label: 'Odysseus', icon: 'i-shield' },
-  { id: 'services', label: 'Services', icon: 'i-gauge' },
-].filter((v) => !features.off(v.id));
+  { id: 'claude', label: 'Claude', icon: 'i-term' },
+  // Off by default and not part of the redesigned module; AGENT_DISABLE=
+  // brings them back (src/features.js), drawn by their old UI.
+  ...(features.off('assistant') ? [] : [{ id: 'assistant', label: 'Assistant', icon: 'i-assistant' }]),
+];
 
 app.get('/module.json', (_req, res) => res.json({
   id: process.env.MODULE_ID || 'agent',
-  name: process.env.MODULE_NAME || 'Agent',
-  version: '3.1.0',
-  icon: 'i-cpu',
+  name: process.env.MODULE_NAME || 'Claude',
+  version: '4.0.0',
+  icon: 'i-term',
   views: VIEWS,
+  defaultView: 'claude',
   ui: '/ui/index.js',
   // The console opens this without mounting the module first — the
-  // Assistant button on the overview and the idle display both import it
-  // straight into a dialog — so it is advertised on its own.
+  // Assistant button on the overview — so it is advertised on its own.
   assistant: features.off('assistant') ? undefined : '/ui/assistant.js',
   health: '/api/health',
   capabilities: ['summary', 'sse', 'notify'],
-  // For the console's Settings → Notifications. The Claude runners send
-  // their own Discord pings (so a laptop session still reaches you when HP is
-  // down) using the choices made there; everything else is routed by the console.
-  notifications: NOTIFY_TYPES.filter((t) => !(features.off('assistant') && t.id.startsWith('agent.assistant-'))),
+  // Every alert kind (see ALERT_KINDS). `notifications` is the name older
+  // consoles read; `alerts` the one the redesigned shell does.
+  alerts: ALERT_KINDS,
+  notifications: ALERT_KINDS,
   notifyTest: CLAUDE_CONFIGURED ? ['discord'] : [],
 }));
 
 app.get('/api/config', (_req, res) => res.json({
   timezone: TIMEZONE,
-  links: [
-    N8N_DOMAIN ? { label: 'n8n', href: `https://${N8N_DOMAIN}` } : null,
-    ODYSSEUS_DOMAIN && !features.off('odysseus') ? { label: 'Odysseus', href: `https://${ODYSSEUS_DOMAIN}` } : null,
-    COUCHDB_DOMAIN ? { label: 'CouchDB', href: `https://${COUCHDB_DOMAIN}` } : null,
-  ].filter(Boolean),
-  has: {
-    n8n: !!N8N_API_KEY,
-    odysseus: !!ODYSSEUS_URL && !features.off('odysseus'),
-    claude: CLAUDE_CONFIGURED,
-    assistant: assistantModule.configured(),
-    workflows: !features.off('workflows'),
-  },
+  has: { claude: CLAUDE_CONFIGURED, assistant: assistantModule.configured() },
   off: features.list(),
   devices: RUNNERS.map((r) => ({ id: r.id, label: r.label, sleeps: r.sleeps })),
 }));
@@ -368,9 +376,9 @@ async function odysseus() {
 
 app.get('/api/odysseus', auth, async (_req, res) => res.json(await odysseus()));
 
-/* ── Work: the Forsa work picture (src/work.js) ──────────────────────── */
+/* ── Forsa work loop: server-side only, until forsa-aios (work-legacy.js) ── */
 
-mountWork(app, auth, RUNNERS, (n) => assistantModule.emitNotify(n));
+mountWorkLegacy(app, auth, RUNNERS, (n) => notifyStream.emit(n));
 
 /* ── the Claude runners ───────────────────────────────────────────────── */
 
@@ -413,7 +421,7 @@ function runnerRequest(runner, rest, req, res) {
       if (req.get('x-file-name')) headers['x-file-name'] = req.get('x-file-name');
     }
   }
-  const events = String(req.get('accept') || '').includes('text/event-stream') || /\/events(\?|$)/.test(rest);
+  const events = String(req.get('accept') || '').includes('text/event-stream') || /\/(events|live)(\?|$)/.test(rest);
   const up = http.request({
     hostname: target.hostname, port: target.port, path: target.pathname + target.search, method: req.method, headers,
     // A laptop that is asleep answers nothing at all: give up rather than hang.
@@ -598,8 +606,8 @@ function runnerUpgrade(req, socket, head) {
 }
 
 /**
- * Every runner's one-line state for the front page, added up. Never throws.
- * A laptop that is offline is not a problem and is not reported as one.
+ * Every runner's summary, added up. Never throws. A laptop that is offline
+ * is not a problem and is not reported as one.
  */
 async function claudeSummary() {
   if (!CLAUDE_CONFIGURED) return { configured: false };
@@ -610,127 +618,155 @@ async function claudeSummary() {
   return {
     configured: true,
     up: up.length > 0,
-    down: all.filter(({ r, x }) => !x.ok && !r.sleeps).map(({ r, x }) => ({ id: r.id, label: r.label, error: x.error })),
-    error: up.length ? null : all.map(({ r, x }) => `${r.label}: ${x.error}`).join(' · '),
+    multi,
+    runners: all.map(({ r, x }) => ({ id: r.id, label: r.label, sleeps: r.sleeps, ok: x.ok, error: x.ok ? null : x.error, data: x.ok ? x.data : null })),
     running: sum('running'),
     waiting: sum('waiting'),
     blocked: sum('blocked'),
     paused: sum('paused'),
     errors: sum('errors'),
-    attention: up.flatMap(({ r, x }) => (x.data.attention || []).map((a) => ({ ...a, device: r.id, title: multi ? `${a.title} (${r.label})` : a.title }))),
+    idle: sum('idle'),
   };
 }
+
+/* ── the stack's containers: a check that says nothing until something is wrong ── */
+
+/** Down since when, per service, so a restart in progress does not alert. */
+const serviceDown = new Map();
+async function serviceHealth() {
+  const services = await stackServices();
+  const deployed = services.filter((s) => s.present);
+  const now = Date.now();
+  for (const s of deployed) {
+    if (s.ok) serviceDown.delete(s.id);
+    else if (!serviceDown.has(s.id)) serviceDown.set(s.id, now);
+  }
+  const down = deployed.filter((s) => !s.ok).map((s) => ({ ...s, since: serviceDown.get(s.id) }));
+  return { total: deployed.length, down, ok: !down.length };
+}
+
+/* ── a two-hour history of how many sessions work and wait, for the overview's spark ── */
+
+const SPARK_FILE = path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'claude-spark.json');
+const SPARK_POINTS = 120; // one a minute
+let spark = (() => { try { const j = JSON.parse(fs.readFileSync(SPARK_FILE, 'utf8')); return Array.isArray(j) ? j.slice(-SPARK_POINTS) : []; } catch { return []; } })();
+let lastClaude = null;
+async function sampleSpark() {
+  const cc = await claudeSummary().catch(() => null);
+  if (cc?.configured) lastClaude = { at: Date.now(), cc };
+  if (!cc?.up) return;
+  spark.push({ t: Date.now(), working: cc.running, needs: cc.waiting + cc.blocked + cc.errors });
+  spark = spark.filter((p) => Date.now() - p.t < SPARK_POINTS * 60_000 + 30_000).slice(-SPARK_POINTS);
+  try { fs.mkdirSync(path.dirname(SPARK_FILE), { recursive: true }); fs.writeFileSync(SPARK_FILE, JSON.stringify(spark)); } catch { /* a read-only disk loses the history, not the module */ }
+}
+if (CLAUDE_CONFIGURED) { setTimeout(sampleSpark, 5000); setInterval(sampleSpark, 60_000).unref(); }
 
 /* ── health and summary ───────────────────────────────────────────────── */
 
 app.get('/api/health', async (_req, res) => {
-  const services = await stackServices();
-  const deployed = services.filter((s) => s.present);
-  const down = deployed.filter((s) => !s.ok);
+  const h = await serviceHealth();
   res.json({
     ok: true,
-    reason: down.length ? `${down.map((s) => s.name).join(', ')} stopped` : null,
-    services: deployed.length,
-    running: deployed.length - down.length,
+    reason: h.down.length ? `${h.down.map((s) => s.name).join(', ')} stopped` : null,
+    services: h.total,
+    running: h.total - h.down.length,
   });
 });
 
+/** The one line the Claude view shows when a container is down, and nothing otherwise. */
+app.get('/api/stack', auth, async (_req, res) => res.json(await serviceHealth()));
+
+const ago = (ms) => {
+  const m = Math.round((Date.now() - ms) / 60_000);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min` : `${Math.round(m / 60)} h`;
+};
+const clockAt = (ms) => new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: TIMEZONE });
+
+/**
+ * Everything wrong right now, each with a stable key: the console raises
+ * an item when a key appears (after the kind's hold), updates it while the
+ * key stays, and resolves it quietly when the key is gone.
+ */
+function claudeAlerts(cc) {
+  const out = [];
+  if (!cc?.configured) return out;
+  for (const r of cc.runners) {
+    const tag = cc.multi ? ` (${r.label})` : '';
+    if (!r.ok) {
+      if (!r.sleeps) out.push({ key: `agent.claude-runner-down:${r.id}`, kind: 'agent.claude-runner-down', severity: 'warn', text: `The Claude runner on ${r.label} is not answering`, detail: r.error, route: '#/agent/claude' });
+      continue;
+    }
+    const d = r.data;
+    for (const a of d.attention || []) {
+      const k = a.state === 'waiting' ? 'needs-input' : a.state === 'blocked' ? 'blocked' : 'error';
+      const what = a.prompt === 'permission' ? 'wants permission' : a.prompt === 'plan' ? 'wants a plan approved' : a.state === 'waiting' ? 'is asking a question' : a.state === 'blocked' ? 'is blocked' : 'hit an error';
+      out.push({
+        key: `agent.claude-${k}:${r.id}:${a.id}`, kind: `agent.claude-${k}`,
+        severity: k === 'error' ? 'err' : 'warn', blocking: k === 'needs-input',
+        text: `${a.title}${tag} ${what}`, detail: a.question || a.detail || null,
+        route: `#/agent/claude/${a.id}`, since: a.at || null, action: k === 'needs-input' ? 'Answer' : 'Open',
+      });
+    }
+    for (const st of d.stalled || []) {
+      out.push({ key: `agent.claude-stalled:${r.id}:${st.id}`, kind: 'agent.claude-stalled', severity: 'warn', text: `${st.title}${tag} has gone quiet`, detail: st.since ? `Nothing new for ${ago(st.since)}, with nothing running` : null, route: `#/agent/claude/${st.id}`, since: st.since });
+    }
+    const accts = d.accounts || [];
+    for (const a of accts) {
+      if (a.status === 'needs-login') {
+        out.push({ key: `agent.claude-needs-login:${r.id}:${a.id}`, kind: 'agent.claude-needs-login', severity: 'warn', text: `Claude account ${a.label}${tag} needs login`, detail: a.text || a.authError || 'Not logged in', route: '#/agent/claude/accounts', action: 'Log in' });
+      } else if (a.status === 'limited') {
+        out.push({ key: `agent.claude-account-limited:${r.id}:${a.id}`, kind: 'agent.claude-account-limited', severity: 'info', text: `Claude account ${a.label}${tag} is limited${a.limitedUntil ? ` until ${clockAt(a.limitedUntil)}` : ''}`, detail: a.limitWindow === 'five_hour' ? '5-hour window' : a.limitWindow === 'seven_day' ? 'weekly limit' : a.text, route: '#/agent/claude/accounts' });
+      }
+    }
+    if (accts.length && accts.every((a) => a.status === 'needs-login' || a.status === 'limited') && (d.paused || 0) > 0) {
+      out.push({ key: `agent.claude-all-limited:${r.id}:-`, kind: 'agent.claude-all-limited', severity: 'warn', text: `Every Claude account${tag} is out`, detail: `${d.paused} session${d.paused === 1 ? '' : 's'} paused until the soonest reset`, route: '#/agent/claude/accounts' });
+    }
+  }
+  return out;
+}
+
 app.get('/api/summary', auth, async (_req, res) => {
-  const noWf = features.off('workflows');
-  const skipped = { ok: false, reason: 'off' };
-  const [services, wf, ex, ody, cc, as] = await Promise.all([
-    stackServices(),
-    noWf ? skipped : n8n('/workflows?limit=100'),
-    noWf ? skipped : n8n('/executions?limit=25&includeData=false'),
-    odysseus(),
+  const [stack, cc, as] = await Promise.all([
+    serviceHealth(),
     claudeSummary(),
     assistantModule.summary().catch(() => ({ configured: false })),
   ]);
-  const deployed = services.filter((s) => s.present);
-  const stopped = deployed.filter((s) => !s.ok);
-
-  const workflows = wf.ok ? (wf.data.data || []) : [];
-  const active = workflows.filter((w) => w.active).length;
-  const cutoff = Date.now() - EXEC_WINDOW_DAYS * 86400_000;
-  const execs = (ex.ok ? (ex.data.data || []) : []).filter((e) => {
-    const t = Date.parse(e.startedAt);
-    return !Number.isFinite(t) || t >= cutoff;
-  });
-  const failed = execs.filter((e) => e.status === 'error' || e.status === 'failed');
-
-  const ccNeeds = cc.up ? (cc.waiting || 0) + (cc.blocked || 0) + (cc.errors || 0) : 0;
-  const facts = [
-    cc.configured
-      ? {
-        k: 'Claude',
-        v: !cc.up ? 'runner not answering'
-          : [`${cc.running} running`, ccNeeds ? `${ccNeeds} need${ccNeeds === 1 ? 's' : ''} you` : null, cc.paused ? `${cc.paused} paused` : null]
-            .filter(Boolean).join(' · '),
-      }
-      : null,
-    as.configured
-      ? {
-        k: 'Assistant',
-        v: !as.up ? 'OpenCode not answering'
-          : [as.working ? `${as.working} working` : null, as.waiting.length ? `${as.waiting.length} asking` : null,
-            !as.working && !as.waiting.length ? `idle · ${as.sessions} chats` : null].filter(Boolean).join(' · '),
-      }
-      : null,
-    noWf ? null : wf.ok
-      ? { k: 'Workflows', v: `${active} active of ${workflows.length}` }
-      : { k: 'n8n', v: wf.reason === 'bad-key' ? 'key rejected' : wf.reason === 'no-key' ? 'no API key' : 'not answering' },
-    ex.ok && execs.length
-      ? {
-        k: 'Last run',
-        v: `${execs[0].workflowData?.name
-          || workflows.find((w) => String(w.id) === String(execs[0].workflowId))?.name
-          || execs[0].workflowId} · ${execs[0].status || 'running'}`,
-      }
-      : null,
-    failed.length ? { k: 'Failed runs', v: `${failed.length} of the last ${execs.length}` } : null,
-    ody.configured ? { k: 'Odysseus', v: ody.up ? (ody.status || 'up') : (ody.error || 'down') } : null,
-    stopped.length
-      ? { k: 'Stopped', v: stopped.map((s) => s.name).join(', ') }
-      : { k: 'Stack', v: `all ${deployed.length} up` },
-  ].filter(Boolean).slice(0, 4);
-
+  lastClaude = cc.configured ? { at: Date.now(), cc } : lastClaude;
   const alerts = [
-    ...(cc.up ? (cc.attention || []).map((x) => ({
-      text: `${x.title} ${x.state === 'waiting' ? 'needs your input' : x.state === 'blocked' ? 'is blocked' : 'hit an error'}`,
-      severity: x.state === 'error' ? 'err' : 'warn',
-      view: 'claude',
-    })) : []),
-    ...(as.configured && as.up ? as.waiting.map((x) => ({ text: `The Assistant is asking to use a tool in “${x.title}”`, severity: 'warn', view: 'assistant' })) : []),
-    ...(cc.configured ? (cc.down || []).map((d) => ({ text: RUNNERS.length > 1 ? `The Claude runner on ${d.label} is not answering` : 'The Claude runner is not answering', severity: 'warn', view: 'claude' })) : []),
-    ...stopped.map((s) => ({ text: `${s.name} is not running`, severity: 'err', view: 'services' })),
-    ...(wf.ok || noWf ? [] : [{ text: n8nWhy(wf.reason, wf.detail), severity: 'warn', view: 'workflows' }]),
-    ...(ody.configured && !ody.up ? [{ text: `Odysseus is not answering`, severity: 'warn', view: 'odysseus' }] : []),
-    ...(failed.length ? [{ text: `${failed.length} workflow run${failed.length === 1 ? '' : 's'} failed`, severity: 'warn', view: 'workflows' }] : []),
+    ...claudeAlerts(cc),
+    ...stack.down.map((sv) => ({ key: `agent.service-down:${sv.id}`, kind: 'agent.service-down', severity: 'err', text: `${sv.name} is not running`, detail: sv.detail, route: '#/agent/claude', since: sv.since })),
+    ...(as.configured && as.up ? as.waiting.map((x) => ({ key: `agent.assistant-needs-you:${x.id}`, kind: 'agent.assistant-needs-you', severity: 'warn', blocking: true, text: `The Assistant is asking in “${x.title}”`, route: '#/agent/assistant' })) : []),
   ];
-
+  const needs = cc.up ? cc.waiting + cc.blocked + cc.errors : 0;
+  const accts = cc.up ? cc.runners.filter((r) => r.ok).flatMap((r) => r.data.accounts || []) : [];
+  const acctOk = accts.filter((a) => a.status === 'ok').length;
+  const blocking = alerts.some((a) => a.blocking);
+  const status = !cc.configured ? (stack.down.length ? 'err' : 'ok')
+    : !cc.up ? 'warn'
+      : alerts.some((a) => a.severity === 'err') ? 'err'
+        : alerts.some((a) => a.severity === 'warn') ? 'warn' : 'ok';
   res.json({
-    status: stopped.length ? 'err' : alerts.length ? 'warn' : 'ok',
-    headline: stopped.length
-      ? `${stopped.length} of ${deployed.length} services stopped`
-      : noWf
-        ? `all ${deployed.length} services up`
-      : wf.ok
-        ? `${active} workflow${active === 1 ? '' : 's'} active${failed.length ? ` · ${failed.length} failed run${failed.length === 1 ? '' : 's'}` : ''}`
-        : 'automation stack up · n8n unreachable',
-    facts,
-    alerts: alerts.slice(0, 5),
-    // The console draws this module as a board with traffic on its traces:
-    // the rate follows what is actually running, a queue bead lights per
-    // waiting job, and a failed run turns one trace red. Idle has to LOOK
-    // idle, so nothing here is padded to keep the board busy.
-    model: {
-      running: (cc.up ? Number(cc.running) || 0 : 0) + (as.up ? as.working : 0)
-        + execs.filter((e) => e.status === 'running').length,
-      queued: (cc.up ? Number(cc.waiting) || 0 : 0) + (as.up ? as.waiting.length : 0)
-        + execs.filter((e) => e.status === 'waiting' || e.status === 'new').length,
-      failed: failed.length,
-      idle: !(cc.up && Number(cc.running) > 0) && !(as.up && as.working) && !execs.some((e) => e.status === 'running'),
-    },
+    status,
+    // The verdict under the module's name on the overview.
+    headline: !cc.configured ? (stack.down.length ? `${stack.down.length} service${stack.down.length === 1 ? '' : 's'} stopped` : 'no runner configured')
+      : !cc.up ? 'runner not answering'
+        : needs ? `${needs} waiting${blocking ? ' for you' : ''}`
+          : cc.running ? `${cc.running} working` : 'all quiet',
+    // Four numbers for the overview's row.
+    metrics: cc.up ? [
+      { k: 'working', label: 'Working', v: cc.running },
+      { k: 'needs', label: 'Needs you', v: needs, sev: needs ? 'err' : null },
+      { k: 'idle', label: 'Idle', v: cc.idle },
+      { k: 'accounts', label: 'Accounts', v: acctOk, of: accts.length, unit: 'ok', sev: accts.length && acctOk < accts.length ? 'warn' : null },
+    ] : [],
+    // Sessions working, one point a minute for the last two hours.
+    spark: { label: 'working', points: spark.map((p) => [p.t, p.working]), max: Math.max(1, ...spark.map((p) => p.working)) },
+    facts: cc.up ? [
+      { k: 'Claude', v: [`${cc.running} working`, needs ? `${needs} need${needs === 1 ? 's' : ''} you` : null, cc.paused ? `${cc.paused} paused` : null].filter(Boolean).join(' · ') },
+      { k: 'Accounts', v: `${acctOk} of ${accts.length} ok` },
+      stack.down.length ? { k: 'Stopped', v: stack.down.map((sv) => sv.name).join(', ') } : null,
+    ].filter(Boolean) : [{ k: 'Claude', v: cc.configured ? 'runner not answering' : 'not configured' }],
+    alerts,
   });
 });
 
@@ -827,7 +863,10 @@ function relayRunner(runner) {
             const n = JSON.parse(data);
             if (typeof n.id !== 'string' || !n.id.startsWith('agent.claude-')) continue;
             lastAt = Math.max(lastAt, Number(n.at) || Date.now());
-            assistantModule.emitNotify(n);
+            // The runner's tag is `<kind>:<subject>`; the console's key is
+            // `<alert kind>:<device>:<subject>`, the same one /api/summary uses.
+            const subject = String(n.tag || '').split(':').slice(1).join(':') || '-';
+            notifyStream.emit({ ...n, key: `${n.id}:${runner.id}:${subject}`, device: runner.id, blocking: n.id === 'agent.claude-needs-input' });
           } catch { /* not ours */ }
         }
       });
@@ -841,6 +880,7 @@ function relayRunner(runner) {
 }
 for (const r of RUNNERS) relayRunner(r);
 
+notifyStream.mount(app, auth);
 assistantModule.mount(app, auth);
 
 app.use('/ui', express.static(`${__dirname}/../ui`, {

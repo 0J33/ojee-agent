@@ -197,7 +197,6 @@ const H = {
   failed: new Map(),      // id → { model, error, at } — the last turn's failure
   turns: new Map(),       // id → the turn being supervised
   clients: new Set(),     // page streams
-  pings: new Set(),       // /api/events streams (notify only)
   recentPings: [],
 };
 
@@ -545,17 +544,11 @@ async function refreshPending() {
  * Notifications). The Claude runners' own pings are relayed onto the same
  * stream. Kept half an hour so a console that reconnects (?since=) catches up.
  */
-const recentNotify = [];
-const routers = new Set();
-let routerGoneAt = Date.now();
+// The stream itself is src/notify-stream.js: the Claude alerts must not
+// depend on the Assistant being switched on.
+const stream = require('./notify-stream');
 let consolePrefs = null;
-
-function emitNotify(n) {
-  recentNotify.push(n);
-  while (recentNotify.length > 50) recentNotify.shift();
-  const frame = `event: notify\ndata: ${JSON.stringify(n)}\n\n`;
-  for (const res of H.pings) { try { res.write(frame); } catch { /* closed */ } }
-}
+const emitNotify = (n) => stream.emit(n);
 
 /** assistant:<kind>:… -> [catalogue id, the old switch, severity]. */
 const KINDS = { ask: ['agent.assistant-needs-you', 'needsYou', 'warn'], err: ['agent.assistant-failed', 'errors', 'warn'], done: ['agent.assistant-replied', 'done', 'info'], test: ['agent.assistant-replied', null, 'info'] };
@@ -568,10 +561,10 @@ function notify(title, body, tag, sessionID) {
   const n = { title, body, tag, sessionID: sessionID || null, at: Date.now(), discord: !!WEBHOOK };
   H.recentPings.unshift(n);
   H.recentPings.length = Math.min(H.recentPings.length, 20);
-  emitNotify({ id, title, body: String(body || '').slice(0, 600), tag, severity, view: 'assistant', at: n.at });
+  emitNotify({ id, key: `${id}:${sessionID || tag}`, title, body: String(body || '').slice(0, 600), tag, severity, blocking: id === 'agent.assistant-needs-you', view: 'assistant', at: n.at });
   broadcast('notify', n);
   // Its own webhook only when no console has been listening for two minutes.
-  const routed = routers.size > 0 || Date.now() - routerGoneAt < 120_000;
+  const routed = stream.routed();
   const wanted = consolePrefs ? consolePrefs.types?.[id]?.discord === true : true;
   if (WEBHOOK && !routed && wanted) {
     fetch(WEBHOOK, {
@@ -850,27 +843,9 @@ function mount(app, auth) {
 
   app.use('/api/assistant', r);
 
-  /**
-   * The module's ping stream: the phone app subscribes to every module's
-   * /api/events and turns `notify` events into notifications.
-   */
-  app.get('/api/events', auth, (req, res) => {
-    res.setHeader('content-type', 'text/event-stream');
-    res.setHeader('cache-control', 'no-cache');
-    res.setHeader('x-accel-buffering', 'no');
-    res.flushHeaders();
-    const since = Number(req.query.since);
-    if (since > 0) for (const n of recentNotify) if (n.at > since && Date.now() - n.at < 30 * 60_000) res.write(`event: notify\ndata: ${JSON.stringify(n)}\n\n`);
-    H.pings.add(res);
-    if (req.query.router === '1') routers.add(res);
-    if (configured()) connect();
-    const ping = setInterval(() => res.write(': ping\n\n'), 20000);
-    req.on('close', () => {
-      clearInterval(ping);
-      H.pings.delete(res);
-      if (routers.delete(res) && !routers.size) routerGoneAt = Date.now();
-    });
-  });
+  // Its pings go out on /api/events (src/notify-stream.js); a console
+  // subscribing there also starts the OpenCode subscription.
+  stream.onConnect(() => { if (configured()) connect(); });
 
   // Watch from the start: a turn must be supervised whether or not a page is open.
   if (configured()) setTimeout(connect, 500);
