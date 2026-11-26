@@ -32,11 +32,27 @@ test('the stack folder is off limits from elsewhere, but not from inside it', ()
   assert.equal(run('docker compose build console', '/home/ojee/stack'), null);
 });
 
+test('a symlinked stack counts by its real path too', () => {
+  const real = '/home/ojee/agent.ojee.net/stack';
+  const r = (command, cwd) => check({ command, cwd, home, stackDir, stackReal: real });
+  // A session started in ~/stack reports the real path as its cwd: it is inside.
+  assert.equal(r('docker compose build console', real), null);
+  assert.equal(r('docker compose --project-directory ~/odysseus stop', real), null);
+  assert.equal(r('cat ~/stack/console/config/console.json', `${real}/console`), null);
+  // From elsewhere the real path is as off limits as the link.
+  assert.ok(r('cat ~/agent.ojee.net/stack/.env', '/home/ojee/projects/app'));
+  assert.ok(r('cd /home/ojee/agent.ojee.net/stack && docker compose down', '/home/ojee/projects/app'));
+  assert.equal(r('ls ~/agent.ojee.net/stack-notes', '/home/ojee/projects/app'), null);
+});
+
 test('stopping the console stack containers is refused', () => {
   assert.ok(run('docker stop caddy'));
   assert.ok(run('docker restart ojee-console'));
   assert.ok(run('docker rm -f n8n'));
   assert.equal(run('docker stop my-test-db'), null);
+  assert.ok(run('docker stop odysseus-ntfy-1'));
+  assert.ok(run('docker restart stack-caddy-1'));
+  assert.equal(run('docker stop homework-db'), null);
   assert.ok(run('docker system prune -af'));
 });
 
