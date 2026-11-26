@@ -1188,6 +1188,7 @@ class Sessions extends EventEmitter {
     let lastErr = null;
     let freed = false;
     let queueMoved = false;
+    const openBefore = Object.keys(s.openTools || {}).join();
     for (const e of entries) {
       if (e.isSidechain) continue;
       if (e.type === 'queue-operation') { if (this.queueOp(s, e)) queueMoved = true; continue; }
@@ -1232,7 +1233,9 @@ class Sessions extends EventEmitter {
       // Sessions parked behind that limit should not sit out the rest of it.
       if (this.accountRestored()) this.log('limits', 'paused sessions will try again');
     }
-    if (queueMoved) this.emit('change', s);
+    // The queue moved, or a tool call started or finished: what the
+    // session is doing now changed, and the console shows that.
+    if (queueMoved || Object.keys(s.openTools || {}).join() !== openBefore) this.emit('change', s);
     if (lastErr && lastErr.uuid !== s.lastErrorUuid) {
       s.lastErrorUuid = lastErr.uuid;
       this.onError(s, lastErr.c, 'transcript').catch((e) => this.log('error-handler', e.message));

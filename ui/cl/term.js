@@ -2,17 +2,14 @@
    The Claude terminal: xterm.js over the runner's WebSocket,
    which is `tmux attach` to the session's real terminal.
 
-   Deliberately the same as ojee-remote's Shell view - same wire
-   protocol (binary bytes both ways, JSON {t:'resize'} up and
-   {t:'status'} down), same key row for phones, same xterm build
-   loaded from /vendor as classic scripts - so a terminal in the
-   console behaves one way whichever module it is in.
-
-   Closing it detaches. The session keeps running.
+   Same wire protocol as ojee-remote's Shell (binary bytes both
+   ways, JSON {t:'resize'} up and {t:'status'} down). Closing it
+   detaches; the session keeps running.
    ============================================================ */
 
-let loading = null;
+import { h, icon, copyText } from './dom.js';
 
+let loading = null;
 function loadXterm(base) {
   if (window.Terminal && window.FitAddon) return Promise.resolve();
   if (loading) return loading;
@@ -39,112 +36,59 @@ function loadXterm(base) {
 function themeFromCss() {
   const v = (n, d) => getComputedStyle(document.documentElement).getPropertyValue(n).trim() || d;
   return {
-    background: v('--bg-0', '#000000'),
-    foreground: v('--ink', '#ffffff'),
-    cursor: v('--accent', '#ffffff'),
-    cursorAccent: v('--bg-0', '#000000'),
-    // Not --accent-08: on a white accent that is an 8% wash and a selection
-    // nobody can see. A fixed grey that reads on the black ground.
-    selectionBackground: 'rgba(255,255,255,0.28)',
+    background: v('--term', '#080808'),
+    foreground: v('--term-fg', '#d8d8dc'),
+    cursor: '#2fd8ee',
+    cursorAccent: v('--term', '#080808'),
+    selectionBackground: 'rgba(47,216,238,0.28)',
   };
 }
 
 /**
- * What a phone keyboard cannot send, grouped the way they are used. Each key
- * is [label, bytes for the terminal, tmux key name for the runner, title].
- * Esc is Claude Code's "stop"; Shift+Tab cycles its permission modes; Ctrl+O
- * shows the detail view (thinking, full tool output).
+ * What a phone keyboard cannot send, in the order a thumb reaches for them.
+ * Each: [label, bytes for the terminal, tmux key name for the runner, title].
+ * Esc is Claude Code's "stop"; Shift+Tab cycles permission modes; Ctrl+O
+ * opens the detail view.
  */
-export const KEY_GROUPS = [
-  ['Stop', [
-    ['Esc', '\x1b', 'Escape', 'Esc: stop the turn, close a menu, back out'],
-    ['Ctrl+C', '\x03', 'C-c', 'Ctrl+C: clear the input (twice quickly exits Claude)'],
-  ]],
-  ['Move', [
-    ['←', '\x1b[D', 'Left', 'Left'], ['↑', '\x1b[A', 'Up', 'Up: previous option, or the last message'],
-    ['↓', '\x1b[B', 'Down', 'Down: next option'], ['→', '\x1b[C', 'Right', 'Right'],
-    ['PgUp', '\x1b[5~', 'PPage', 'Page up'], ['PgDn', '\x1b[6~', 'NPage', 'Page down'],
-  ]],
-  ['Answer', [
-    ['Enter', '\r', 'Enter', 'Enter: pick, confirm, send'],
-    ['y', 'y', 'y', 'y'], ['n', 'n', 'n', 'n'],
-    ['1', '1', '1', 'Option 1'], ['2', '2', '2', 'Option 2'], ['3', '3', '3', 'Option 3'],
-  ]],
-  ['Mode', [
-    ['Tab', '\t', 'Tab', 'Tab: complete'],
-    ['⇧Tab', '\x1b[Z', 'BTab', 'Shift+Tab: switch mode (accept edits, plan)'],
-    ['Ctrl+O', '\x0f', 'C-o', 'Ctrl+O: detail view (thinking, full output)'],
-    ['New line', '\n', 'C-j', 'A new line in the input, without sending'],
-  ]],
+export const KEYS = [
+  ['Esc', '\x1b', 'Escape', 'Esc: stop the turn, close a menu'],
+  ['Tab', '\t', 'Tab', 'Tab: complete'],
+  ['⇧Tab', '\x1b[Z', 'BTab', 'Shift+Tab: switch permission mode'],
+  ['↑', '\x1b[A', 'Up', 'Up: previous option, or the last message'],
+  ['↓', '\x1b[B', 'Down', 'Down: next option'],
+  ['←', '\x1b[D', 'Left', 'Left'],
+  ['→', '\x1b[C', 'Right', 'Right'],
+  ['⏎', '\r', 'Enter', 'Enter: pick, confirm, send'],
+  ['^C', '\x03', 'C-c', 'Ctrl+C: clear the input (twice quickly exits Claude)'],
+  ['1', '1', '1', 'Option 1'], ['2', '2', '2', 'Option 2'], ['3', '3', '3', 'Option 3'],
+  ['y', 'y', 'y', 'y'], ['n', 'n', 'n', 'n'],
+  ['/', '/', '/', 'Slash: commands'],
+  ['^O', '\x0f', 'C-o', 'Ctrl+O: detail view (thinking, full output)'],
+  ['⇧⏎', '\n', 'C-j', 'A new line in the input, without sending'],
+  ['PgUp', '\x1b[5~', 'PPage', 'Page up'], ['PgDn', '\x1b[6~', 'NPage', 'Page down'],
 ];
 
 /**
- * The key row: every key one tap away, in groups. Buttons never take focus
- * (pointerdown is cancelled), so a phone keyboard that is up stays up and the
- * key goes where the typing was.
- * @param {(key: string[]) => void} onKey  called with [label, bytes, tmuxName, title]
+ * The key row. Keys never take focus (pointerdown is cancelled), so a phone
+ * keyboard that is up stays up and the key goes where typing was.
+ * @param {(key: string[]) => void} onKey  [label, bytes, tmuxName, title]
+ * @param {object} [o] keyboard: () => void puts a "show keyboard" key first
  */
-export function keyStrip(onKey, cls = '') {
-  const strip = document.createElement('div');
-  strip.className = `ag-cl-keys ${cls}`.trim();
-  strip.setAttribute('role', 'toolbar');
-  strip.setAttribute('aria-label', 'Special keys');
-  KEY_GROUPS.forEach(([name, keys], g) => {
-    const group = document.createElement('div');
-    group.className = 'ag-cl-kgroup';
-    group.setAttribute('role', 'group');
-    group.setAttribute('aria-label', name);
-    const label = document.createElement('span');
-    label.className = 'ag-cl-klabel';
-    label.textContent = name;
-    group.appendChild(label);
-    keys.forEach((k, i) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = `ag-cl-key${k[0].length > 2 ? ' ag-cl-key--wide' : ''}`;
-      b.dataset.key = `${g}:${i}`;
-      b.title = k[3];
-      b.setAttribute('aria-label', k[3]);
-      b.textContent = k[0];
-      group.appendChild(b);
-    });
-    strip.appendChild(group);
-  });
-  strip.addEventListener('pointerdown', (e) => { if (e.target.closest('.ag-cl-key')) e.preventDefault(); });
-  strip.addEventListener('mousedown', (e) => { if (e.target.closest('.ag-cl-key')) e.preventDefault(); });
-  strip.addEventListener('click', (e) => {
-    const b = e.target.closest('[data-key]');
+export function keyRow(onKey, { keyboard = null } = {}) {
+  const row = h('div', { class: 'keys cl-keys', role: 'toolbar', 'aria-label': 'Special keys' },
+    keyboard ? h('button', { class: 'key cl-kb', type: 'button', title: 'Keyboard', 'aria-label': 'Show the keyboard', dataset: { kb: '1' } }, icon('keyboard', 's')) : null,
+    KEYS.map((k, i) => h('button', { class: `key${k[0].length > 2 ? ' wide' : ''}`, type: 'button', title: k[3], 'aria-label': k[3], dataset: { key: String(i) } }, k[0])));
+  const keep = (e) => { if (e.target.closest('.key')) e.preventDefault(); };
+  row.addEventListener('pointerdown', keep);
+  row.addEventListener('mousedown', keep);
+  row.addEventListener('click', (e) => {
+    const b = e.target.closest('.key');
     if (!b) return;
-    const [g, i] = b.dataset.key.split(':').map(Number);
-    const k = KEY_GROUPS[g]?.[1]?.[i];
+    if (b.dataset.kb) { keyboard?.(); return; }
+    const k = KEYS[Number(b.dataset.key)];
     if (k) onKey(k);
   });
-  return strip;
-}
-
-/**
- * Text to the clipboard, from inside the click or key that asked for it.
- * The async API first (a secure page); else the old copy command, which
- * works over plain http and in browsers that refuse the async one.
- */
-export async function copyText(text) {
-  if (!text) return false;
-  try {
-    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
-  } catch { /* refused: try the old way */ }
-  const ta = document.createElement('textarea');
-  ta.value = text;
-  ta.setAttribute('readonly', '');
-  ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px;';
-  const prev = document.activeElement;
-  document.body.appendChild(ta);
-  ta.select();
-  ta.setSelectionRange(0, text.length);
-  let ok = false;
-  try { ok = document.execCommand('copy'); } catch { ok = false; }
-  ta.remove();
-  try { prev?.focus?.({ preventScroll: true }); } catch { /* gone */ }
-  return ok;
+  return row;
 }
 
 /* ── links ─────────────────────────────────────────────────────────────── */
@@ -298,18 +242,18 @@ function touchScroll(el, term) {
 export function startTerminal({ host, ctx, path, onState, onImage, onPick, onCopied, keys: keysOn = false }) {
   host.replaceChildren();
   const send = (seq) => { if (ws?.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(seq)); };
-  const keys = keyStrip((k) => send(k[1]), 'ag-cl-keys--term');
-  keys.hidden = !keysOn;
   const termEl = document.createElement('div');
-  termEl.className = 'ag-cl-term';
+  termEl.className = 'cl-xterm';
+  const keys = keyRow((k) => { send(k[1]); }, { keyboard: () => term?.focus() });
+  keys.hidden = !keysOn;
   // A copy that could not go to the clipboard by itself (no click to ride
   // on): one tap here finishes it.
   const chip = document.createElement('button');
   chip.type = 'button';
-  chip.className = 'ag-cl-copychip';
+  chip.className = 'cl-copychip';
   chip.hidden = true;
   termEl.appendChild(chip);
-  host.append(keys, termEl);
+  host.append(termEl, keys);
   // Keys typed in the terminal are the terminal's. xterm has already handled
   // them by the time they bubble here; stopping them keeps the console's own
   // shortcuts (/ and Ctrl+K open its jump menu) from firing on top.
@@ -444,10 +388,11 @@ export function startTerminal({ host, ctx, path, onState, onImage, onPick, onCop
       return;
     }
     if (disposed) return;
-    const mono = getComputedStyle(document.documentElement).getPropertyValue('--mono').trim();
+    const mono = getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim();
     term = new window.Terminal({
       fontFamily: mono || 'ui-monospace, SFMono-Regular, Menlo, monospace',
-      fontSize: window.matchMedia('(max-width: 560px)').matches ? 12 : 13,
+      fontSize: window.matchMedia('(max-width: 560px)').matches ? 11.5 : 13,
+      lineHeight: 1.15,
       cursorBlink: true,
       scrollback: 5000,
       // Shift+drag (Option+drag on a Mac) selects in xterm even while an app
@@ -498,7 +443,7 @@ export function startTerminal({ host, ctx, path, onState, onImage, onPick, onCop
     let down = null;
     termEl.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, t: e.timeStamp }; }, true);
     termEl.addEventListener('click', (e) => {
-      if (e.target.closest('.ag-cl-copychip')) return;
+      if (e.target.closest('.cl-copychip')) return;
       if (pressed) { pressed = false; return; }
       // A drag (a selection) is not a click on a link.
       if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return;

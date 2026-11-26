@@ -1,177 +1,51 @@
-<!DOCTYPE html>
+<!doctype html>
 <!--
-  ojee-ui standalone module shell — TEMPLATE.
-
-  A module mounted in ojee-console gets its chrome from the console. Run on
-  its own, it needs a shell of its own, and this is it: a complete one, in one
-  file, that works for ANY module implementing the contract.
-
-  It reads the module's own /module.json, builds nav from its views, and
-  mounts /ui/index.js through the same ModuleHost the console uses. Nothing in
-  here is module-specific, so a module vendors it unchanged:
-
-      cp node_modules/ojee-ui/standalone.html  public/index.html
-      cp node_modules/ojee-ui/ojee-ui.css      public/
-      cp node_modules/ojee-ui/chrome.js        public/
-
-  Then serve public/ from the module's own server and set the two <meta>
-  values below. That is the entire standalone story — which matters, because
-  a "runs standalone" claim that requires bespoke work per module is a claim
-  that quietly stops being true.
-
-  What this shell deliberately does NOT do is authenticate. A module is
-  tailnet-only and single-purpose; the console owns auth. If you expose a
-  module beyond a tailnet, put a real gate in front of it.
+  The module on its own (no console): the v3 shell, cut down to what one
+  module needs — the wordmark, the page, toasts and dialogs. It mounts
+  /ui/index.js through the same ModuleHost the console uses, so what runs
+  here is what runs there. Tailnet-only; the console owns auth.
 -->
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#08080e">
-
-<!-- Set these two per module. -->
-<meta name="ojee-module-base" content="">
-<meta name="ojee-module-title" content="agent">
-
-<title>module</title>
-
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500;700;900&display=swap" rel="stylesheet">
-
-
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#fafafa">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0a0a">
+<meta name="color-scheme" content="light dark">
+<title>Claude · ojee.console</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="ojee-ui2.css">
-<!-- Optional branding overlay. Delete if you use the default theme. -->
-<link id="theme-link" rel="stylesheet" href="">
+<link rel="stylesheet" href="ojee-ui3.css">
+<style>
+  .sa-top{display:flex;align-items:center;gap:8px;height:calc(var(--topbar-h) + var(--safe-t));padding:var(--safe-t) calc(12px + var(--safe-r)) 0 calc(16px + var(--safe-l));border-bottom:1px solid var(--line);background:var(--page)}
+  .sa-top .wm{margin-right:auto}
+  .sa-shell{container:app/inline-size;height:100vh;height:100dvh;display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden}
+</style>
 </head>
-<body class="app grid-bg">
-
-<!--
-  Shared icon sprite. A module appends its own <symbol>s here on mount; these
-  are the ones the shell itself references.
--->
-<svg class="sprite" id="sprite" aria-hidden="true" focusable="false">
-  <symbol id="i-refresh" viewBox="0 -960 960 960"><path d="M480-160q-133 0-226.5-93.5T160-480q0-133 93.5-226.5T480-800q85 0 149 34.5T740-671v-129h60v254H546v-60h168q-38-60-97-97t-137-37q-109 0-184.5 75.5T220-480q0 109 75.5 184.5T480-220q83 0 152-47.5T728-393h62q-29 105-115 169t-195 64Z"/></symbol>
-  <symbol id="i-warn" viewBox="0 -960 960 960"><path d="m40-120 440-760 440 760H40Zm104-60h672L480-760 144-180Zm361.5-65.68q8.5-8.67 8.5-21.5 0-12.82-8.68-21.32-8.67-8.5-21.5-8.5-12.82 0-21.32 8.68-8.5 8.67-8.5 21.5 0 12.82 8.68 21.32 8.67 8.5 21.5 8.5 12.82 0 21.32-8.68ZM454-348h60v-224h-60v224Zm26-122Z"/></symbol>
-  <symbol id="i-power" viewBox="0 -960 960 960"><path d="M480-80q-82 0-155-31.5t-127.5-86Q143-252 111.5-325T80-480q0-84 32-156.5T198-763l42 42q-47 46-73.5 108T140-480q0 141 99.5 240.5T480-140q142 0 241-99.5T820-480q0-71-26-133t-73-108l42-42q54 54 85.5 126.5T880-480q0 82-31.5 155T763-197.5q-54 54.5-127 86T480-80Zm-30-360v-440h60v440h-60Z"/></symbol>
-  <symbol id="i-gauge" viewBox="0 -960 960 960"><path d="M473.5-303.5Q517-305 537-336l216-339-335 219q-30 20-32 64t21 67q23 23 66.5 21.5ZM478-799q57 0 119 18.5T716-717l-52 37q-45-30-96.5-44.5T477.98-739q-140.47 0-239.23 100.22Q140-538.57 140-396.02 140-351 152.5-305q12.5 46 35.5 85h579q22-36 35-84t13-94q0-42-12.5-90.5T758-578l39-52q38 56 57 112.5T875-404q2 60-12 113t-41 98q-12 23-25.5 28t-33.5 5H192q-17 0-33.5-8.5T134-193q-26-48-40-97.5T80-396q0-83 31.5-156.5t85.5-128Q251-735 323.68-767T478-799Zm-9 331Z"/></symbol>
-  <symbol id="i-grid" viewBox="0 -960 960 960"><path d="M120-510v-330h330v330H120Zm0 390v-330h330v330H120Zm390-390v-330h330v330H510Zm0 390v-330h330v330H510ZM180-570h210v-210H180v210Zm390 0h210v-210H570v210Zm0 390h210v-210H570v210Zm-390 0h210v-210H180v210Zm390-390Zm0 180Zm-180 0Zm0-180Z"/></symbol>
-  <symbol id="i-log" viewBox="0 -960 960 960"><path d="M319-250h322v-60H319v60Zm0-170h322v-60H319v60ZM220-80q-24 0-42-18t-18-42v-680q0-24 18-42t42-18h361l219 219v521q0 24-18 42t-42 18H220Zm331-554v-186H220v680h520v-494H551ZM220-820v186-186 680-680Z"/></symbol>
-  <!-- The Assistant: loq's user-robot.svg, on the console's own sprite rules. -->
-  <symbol id="i-assistant" viewBox="-2 -2.5 28.5 28.5"><path d="m21,23c0,.553-.448,1-1,1s-1-.447-1-1c0-2.206-1.794-4-4-4h-6c-2.206,0-4,1.794-4,4,0,.553-.448,1-1,1s-1-.447-1-1c0-3.309,2.691-6,6-6h6c3.309,0,6,2.691,6,6Zm1-15.5v2c0,.827-.673,1.5-1.5,1.5h-.5c0,2.206-1.794,4-4,4h-8c-2.206,0-4-1.794-4-4h-.5c-.827,0-1.5-.673-1.5-1.5v-2c0-.827.673-1.5,1.5-1.5h.5c0-2.206,1.794-4,4-4h3v-1c0-.553.448-1,1-1s1,.447,1,1v1h3c2.206,0,4,1.794,4,4h.5c.827,0,1.5.673,1.5,1.5Zm-4-1.5c0-1.103-.897-2-2-2h-8c-1.103,0-2,.897-2,2v5c0,1.103.897,2,2,2h8c1.103,0,2-.897,2-2v-5Zm-8.5,1c-.828,0-1.5.672-1.5,1.5s.672,1.5,1.5,1.5,1.5-.672,1.5-1.5-.672-1.5-1.5-1.5Zm5,0c-.828,0-1.5.672-1.5,1.5s.672,1.5,1.5,1.5,1.5-.672,1.5-1.5-.672-1.5-1.5-1.5Z"/></symbol>
-
-
-</svg>
-
-<a class="skip" href="#main">Skip to content</a>
-
-<div class="hudbar">
-  <span class="seg seg--accent seg--live"><b id="hud-state">booting</b></span>
-  <span class="seg hide-sm">mode <b>standalone</b></span>
-  <span class="seg hide-sm">version <b id="hud-version">–</b></span>
-  <span class="seg right">local <b id="hud-clock">--:--:--</b></span>
+<body>
+<div class="sa-shell" id="app">
+  <header class="sa-top">
+    <a class="wm" href="#/agent/claude">ojee<b>.</b><span>console</span></a>
+    <button class="ib" id="theme" type="button" aria-label="Switch theme"><svg class="i" aria-hidden="true"><use href="#i-contrast"/></svg></button>
+  </header>
+  <main class="main" id="main"><div class="page" id="view"></div></main>
 </div>
-
-<nav class="nav" aria-label="Primary">
-  <span class="nav-logo" id="nav-logo">module</span>
-  <div class="nav-links" id="nav-links"></div>
-</nav>
-
-<main class="wrap" id="main"><div id="view"></div></main>
-
-<nav class="tabbar" id="tabbar" aria-label="Views"></nav>
-
-<div class="statusbar">
-  <span class="ok" id="sb-conn">standalone</span>
-  <span class="hide-sm" id="sb-note">no console attached</span>
-  <span class="right" id="sb-updated">—</span>
-</div>
-
+<div class="toasts" id="toasts" aria-live="polite"></div>
 <div id="modal-root"></div>
-<div class="toast-stack" id="toasts" aria-live="polite" aria-atomic="false"></div>
-
 <script type="module">
-import { ModuleHost, clock, esc, icon, onRoute, toast } from './chrome.js';
-
-const $ = (s) => document.querySelector(s);
-const meta = (n) => document.querySelector(`meta[name="${n}"]`)?.content || '';
-
-// '' when the module is served from its own root — which is the whole point:
-// the module's own code never knows or cares which it is.
-const BASE = meta('ojee-module-base').replace(/\/+$/, '');
-
-const host = new ModuleHost({ el: $('#view'), base: BASE });
-let manifest = null;
-
-clock($('#hud-clock'));
-
-function renderNav(active) {
-  const views = manifest?.views || [];
-  $('#nav-links').innerHTML = views.map((v) => `
-    <a class="nav-link${v.id === active ? ' active' : ''}" href="#/${esc(v.id)}">${esc(v.label)}</a>`).join('');
-  $('#tabbar').innerHTML = views.slice(0, 5).map((v) => `
-    <button class="tabitem${v.id === active ? ' active' : ''}" data-goto="${esc(v.id)}">
-      ${icon(v.icon || 'i-grid', 'ic ic--lg')}<span>${esc(v.label)}</span>
-    </button>`).join('');
-  $('#tabbar').querySelectorAll('.tabitem').forEach((b) => {
-    b.addEventListener('click', () => { location.hash = `#/${b.dataset.goto}`; });
+  import { ModuleHost } from './chrome.js';
+  import { ensureSprite } from './ojee-ui3.js';
+  await ensureSprite('icons3.svg');
+  try { const t = localStorage.getItem('sa-theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
+  document.getElementById('theme').addEventListener('click', () => {
+    const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    const next = cur === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem('sa-theme', next); } catch {}
   });
-}
-
-async function boot() {
-  try {
-    manifest = await (await fetch(`${BASE}/module.json`)).json();
-  } catch (e) {
-    host.error('Cannot read module.json', e.message, { retry: false });
-    $('#hud-state').textContent = 'error';
-    return;
-  }
-
-  const title = meta('ojee-module-title') || manifest.name || manifest.id;
-  document.title = title;
-  $('#nav-logo').textContent = title;
-  $('#hud-version').textContent = manifest.version || '–';
-  $('#hud-state').textContent = 'standalone';
-
-  // Health is advisory here: a standalone module still renders its UI so you
-  // can see WHY it is unhappy. Hiding the UI when the hardware is unplugged
-  // would remove the only screen that could tell you.
-  try {
-    const h = await (await fetch(`${BASE}${manifest.health || '/api/health'}`)).json();
-    if (h && h.ok === false) {
-      $('#sb-conn').textContent = h.reason || 'degraded';
-      $('#sb-conn').classList.add('warn');
-      toast('warn', 'Module degraded', h.reason || '');
-    }
-  } catch { /* the mount below will surface it */ }
-
-  const uiUrl = `${BASE}${manifest.ui || '/ui/index.js'}${manifest.version ? `?v=${encodeURIComponent(manifest.version)}` : ''}`;
-  let mounted = false;
-
-  onRoute(async ({ a }) => {
-    const views = manifest.views || [];
-    const view = views.some((v) => v.id === a) ? a : (views[0]?.id || null);
-    renderNav(view);
-    $('#sb-updated').textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
-
-    if (!mounted) {
-      try {
-        await host.mount(manifest, view, uiUrl);
-        mounted = true;
-      } catch {
-        // host.mount already rendered the failure; wire its retry.
-        const btn = $('#view [data-retry]');
-        btn?.addEventListener('click', () => location.reload());
-      }
-      return;
-    }
-    // Switching views must not remount — that would drop the module's stream.
-    await host.setView(view, uiUrl);
-  });
-}
-
-boot();
+  const manifest = await (await fetch('module.json')).json();
+  if (!location.hash) location.hash = '#/agent/claude';
+  const host = new ModuleHost({ el: document.getElementById('view'), base: '' });
+  await host.mount(manifest, 'claude', new URL('ui/index.js', location.href).href);
 </script>
 </body>
 </html>
