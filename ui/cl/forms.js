@@ -129,7 +129,7 @@ export function createNewSession({ onBack }) {
       h('div', { class: 'cl-grid2' },
         field('Model', sel(ms, F.model, { onchange: bind('model') })),
         field('Fallback when it runs out', sel([['', 'None'], ...ms], F.fallback, { onchange: bind('fallback') })),
-        field('Account', sel((dataOf(dev).accounts || []).map((a) => [a.id, `${a.label}${a.status !== 'ok' ? ` (${a.status === 'limited' ? `out until ${clock(a.limitedUntil)}` : a.status === 'needs-login' ? 'needs login' : a.status})` : ''}`]), F.account, { onchange: bind('account') })),
+        field('Account', sel((dataOf(dev).accounts || []).filter((a) => a.status !== 'off' || a.id === F.account).map((a) => [a.id, `${a.label}${a.status !== 'ok' ? ` (${a.status === 'limited' ? `out until ${clock(a.limitedUntil)}` : a.status === 'needs-login' ? 'needs login' : a.status})` : ''}`]), F.account, { onchange: bind('account') })),
         field('Ping when done', sel([['default', `As in settings (${set.notify?.done ? 'on' : 'off'})`], ['on', 'On'], ['off', 'Off']], F.notifyDone, { onchange: bind('notifyDone') })),
         field('Nudge to continue', h('div', { class: 'cl-inline' }, h('input', { class: 'input num', type: 'number', min: '0', max: '10', value: String(F.autoContinue), inputmode: 'numeric', oninput: bind('autoContinue') }), h('span', { class: 'unit' }, 'times without DONE/BLOCKED')))),
       h('div', { class: 'set' }, h('div', { class: 't' }, 'Unattended instructions'), h('div', { class: 'd' }, 'Decide instead of asking, and end with DONE: or BLOCKED:'), h('div', { class: 'ctrl' }, sw(F.unattended, (v) => { F.unattended = v; }, 'Unattended instructions'))));
@@ -168,23 +168,81 @@ export function createAccounts({ dev: dev0, acct, onBack }) {
   const listHost = h('div', { class: 'rows' });
   const loginHost = h('div', { class: 'cl-login-host' });
 
-  const status = (a) => (a.status === 'needs-login' ? ['err', a.limitText ? `Needs login: ${a.limitText}` : 'Needs login']
+  const status = (a) => (a.status === 'off' ? [null, 'Off · not used, not checked']
+    : a.status === 'needs-login' ? ['err', a.limitText ? `Needs login: ${a.limitText}` : 'Needs login']
     : a.status === 'limited' ? ['warn', `Limited until ${clock(a.limitedUntil)}${a.limitWindow === 'five_hour' ? ' (5-hour)' : a.limitWindow === 'seven_day' ? ' (weekly)' : ''}`]
       : a.status === 'unknown' ? [null, a.authError || 'Not checked yet'] : ['ok', 'Available']);
 
   function row(a) {
     const [tone, text] = status(a);
     const models2 = Object.entries(a.modelLimits || {});
-    return h('div', { class: `row cl-arow${a.active ? ' active' : ''}` },
+    const off = a.status === 'off';
+    return h('div', { class: `row cl-arow${a.active ? ' active' : ''}${off ? ' off' : ''}` },
       h('span', { class: 'dot', style: `--c:${tone ? `var(--${tone})` : 'var(--fg-3)'}` }),
       h('div', { class: 'grow' },
-        h('div', { class: 't' }, h('span', { class: 'm' }, a.label), a.active ? h('span', { class: 'tag acc' }, 'active') : null),
-        h('div', { class: 'd' }, text, models2.length ? ` · ${models2.map(([f, u]) => `${f[0].toUpperCase()}${f.slice(1)} out until ${clock(u)}`).join(', ')}` : ''),
+        h('div', { class: 't' }, h('span', { class: 'm' }, a.label), a.active ? h('span', { class: 'tag acc' }, 'active') : null, off ? h('span', { class: 'tag' }, 'Off') : null),
+        h('div', { class: 'd' }, text, !off && models2.length ? ` · ${models2.map(([f, u]) => `${f[0].toUpperCase()}${f.slice(1)} out until ${clock(u)}`).join(', ')}` : ''),
         h('div', { class: 'd m' }, [a.email, a.plan ? a.plan.toUpperCase() : null, a.main ? '~/.claude' : tailPath(shortPath(a.dir, dev), 36)].filter(Boolean).join(' · '))),
       h('div', { class: 'btns' },
-        !a.active ? h('button', { class: 'btn sm', type: 'button', onclick: () => activate(a) }, 'Make active') : null,
-        h('button', { class: `btn sm${a.status === 'needs-login' ? ' pri' : ' ghost'}`, type: 'button', onclick: () => startLogin(a) }, icon('login', 's'), a.loggedIn ? 'Log in again' : 'Log in'),
-        h('button', { class: 'ib sm', type: 'button', 'aria-label': `More for ${a.label}`, onclick: () => more(a) }, icon('more', 's'))));
+        !a.active && !off ? h('button', { class: 'btn sm', type: 'button', onclick: () => activate(a) }, 'Make active') : null,
+        !off ? h('button', { class: `btn sm${a.status === 'needs-login' ? ' pri' : ' ghost'}`, type: 'button', onclick: () => startLogin(a) }, icon('login', 's'), a.loggedIn ? 'Log in again' : 'Log in') : null,
+        h('button', { class: 'ib sm', type: 'button', 'aria-label': `More for ${a.label}`, onclick: () => more(a) }, icon('more', 's')),
+        h('label', { class: 'cl-acct-on', title: off ? 'Turn on: used and checked again' : 'Turn off: kept, but never used or checked' },
+          h('span', { class: 'lb' }, 'Enabled'), sw(!off, (v) => setEnabled(a, v), `${a.label} enabled`))));
+  }
+
+  /**
+   * Turn an account on or off. Off: it stays listed, nothing uses it, it is
+   * not checked and raises no alerts; its sessions move to the active account.
+   * Turning off the active one first asks which account takes over.
+   */
+  async function setEnabled(a, on) {
+    const accts = dataOf(dev)?.accounts || [];
+    const repaint = () => paint();
+    if (on) {
+      const r = await act(`en:${a.id}`, () => post(dev, `/accounts/${a.id}/enabled`, { enabled: true }));
+      if (r) { upsertAcct(r.account); toast('ok', `${a.label} is on`, 'Checking its login'); }
+      return repaint();
+    }
+    const others = accts.filter((x) => x.id !== a.id && x.status !== 'off');
+    if (!others.length) { toast('warn', 'At least one account has to stay on'); return repaint(); }
+    const using = (dataOf(dev)?.sessions || []).filter((s) => s.account === a.id && !['stopped', 'done'].includes(s.state)).length;
+    let switchTo;
+    if (a.active) {
+      const best = others.find((x) => x.status === 'ok') || others[0];
+      const pickEl = h('select', { class: 'select' }, others.map((x) => h('option', { value: x.id }, `${x.label}${x.status !== 'ok' ? ` (${x.status === 'limited' ? `out until ${clock(x.limitedUntil)}` : x.status === 'needs-login' ? 'needs login' : x.status})` : ''}`)));
+      pickEl.value = best.id;
+      const ok = await ask({
+        title: `Turn off ${a.label}?`,
+        body: h('div', { class: 'stack' },
+          h('p', {}, `${a.label} is the active account. Pick the one new sessions start on instead.`),
+          field('Make active', pickEl),
+          h('p', { class: 'dim' }, using ? `${using} session${using === 1 ? '' : 's'} on ${a.label} move there too: idle ones now, working ones when their turn ends.` : 'It stays in the list, is never used and is not checked until you turn it back on.')),
+        actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'Turn off', value: true, variant: 'primary' }],
+      });
+      if (!ok) return repaint();
+      switchTo = pickEl.value;
+    } else if (using) {
+      const act0 = accts.find((x) => x.active);
+      const ok = await ask({
+        title: `Turn off ${a.label}?`,
+        body: h('p', {}, `${using} session${using === 1 ? '' : 's'} on it move to ${act0?.label || 'the active account'}: idle ones now, working ones when their turn ends.`),
+        actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'Turn off', value: true, variant: 'primary' }],
+      });
+      if (!ok) return repaint();
+    }
+    const r = await act(`en:${a.id}`, () => post(dev, `/accounts/${a.id}/enabled`, { enabled: false, ...(switchTo ? { switchTo } : {}) }));
+    if (r) {
+      upsertAcct(r.account);
+      if (r.active) for (const x of dataOf(dev)?.accounts || []) x.active = x.id === r.active;
+      toast('ok', `${a.label} is off`, r.moved ? `${r.moved} session${r.moved === 1 ? '' : 's'} moving` : '');
+    }
+    repaint();
+  }
+  function upsertAcct(x) {
+    const d = dataOf(dev);
+    if (!x || !d?.accounts) return;
+    d.accounts = d.accounts.map((y) => (y.id === x.id ? { ...y, ...x } : y));
   }
 
   function paint(reason) {

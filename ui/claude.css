@@ -492,3 +492,10 @@
 }
 /* a single choice is sent by tapping it; Send only matters for typed words */
 .cl-card .send.only-other:disabled{display:none}
+
+/* An account that is turned off: kept in the list, dimmed, labelled Off. */
+.cl-arow.off .grow,.cl-arow.off>.dot,.acct.off{opacity:.55}
+.cl-arow.off .tag{color:var(--fg-3)}
+.cl-acct-on{display:inline-flex;align-items:center;gap:8px;margin-left:4px;padding-left:10px;border-left:1px solid var(--line);font-size:12px;color:var(--fg-2);cursor:pointer}
+.cl-acct-on .lb{white-space:nowrap}
+@container app (max-width:699px){.cl-acct-on{margin-left:auto}}

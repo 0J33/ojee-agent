@@ -83,7 +83,8 @@ export function accountsPanel() {
   const dev = curDev();
   const accts = dataOf(dev)?.accounts || [];
   if (!accts.length) return null;
-  const status = (a) => (a.status === 'needs-login' ? ['err', 'Needs login']
+  const status = (a) => (a.status === 'off' ? [null, 'Off']
+    : a.status === 'needs-login' ? ['err', 'Needs login']
     : a.status === 'limited' ? ['warn', `Limited until ${clock(a.limitedUntil)}`]
       : a.status === 'unknown' ? [null, 'Not checked'] : ['ok', 'OK']);
   return h('section', { class: 'sec cl-accts' },
@@ -92,12 +93,12 @@ export function accountsPanel() {
     h('div', { class: 'panel clip' }, accts.map((a) => {
       const [tone, text] = status(a);
       const models = Object.entries(a.modelLimits || {});
-      return h('div', { class: `acct${a.active ? ' active' : ''}` },
+      return h('div', { class: `acct${a.active ? ' active' : ''}${a.status === 'off' ? ' off' : ''}` },
         h('div', { class: 'nm m' }, a.label, a.active ? h('span', { class: 'tag acc', title: 'New sessions start on it' }, 'active') : null),
         a.status === 'needs-login'
           ? h('button', { class: 'btn sm', type: 'button', onclick: () => go('accounts', dev, a.id) }, icon('login', 's'), 'Log in')
           : h('span', { class: 'st' }, h('span', { class: 'dot', style: `--c:${tone ? `var(--${tone})` : 'var(--fg-3)'}` }), h('span', {}, text)),
-        a.email || models.length ? h('div', { class: 'sub' }, [a.email, ...models.map(([f, u]) => `${f[0].toUpperCase()}${f.slice(1)} out until ${clock(u)}`)].filter(Boolean).join(' · ')) : null);
+        a.status !== 'off' && (a.email || models.length) ? h('div', { class: 'sub' }, [a.email, ...models.map(([f, u]) => `${f[0].toUpperCase()}${f.slice(1)} out until ${clock(u)}`)].filter(Boolean).join(' · ')) : null);
     })));
 }
 

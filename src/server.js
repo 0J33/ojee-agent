@@ -725,7 +725,8 @@ function claudeAlerts(cc) {
     for (const st of d.stalled || []) {
       out.push({ key: `${r.id}:${st.id}`, notify: 'agent.claude-stalled', kind: 'agent.claude-stalled', severity: 'warn', text: `${st.title}${tag} has gone quiet`, detail: st.since ? `Nothing new for ${ago(st.since)}, with nothing running` : null, route: `#/agent/claude/${st.id}`, since: st.since });
     }
-    const accts = d.accounts || [];
+    // An account that is turned off raises nothing and is not counted.
+    const accts = (d.accounts || []).filter((a) => a.status !== 'off' && a.enabled !== false);
     for (const a of accts) {
       if (a.status === 'needs-login') {
         out.push({ key: `${r.id}:${a.id}`, notify: 'agent.claude-needs-login', kind: 'agent.claude-needs-login', severity: 'warn', text: `Claude account ${a.label}${tag} needs login`, detail: a.text || a.authError || 'Not logged in', route: '#/agent/claude/accounts', action: 'Log in' });
@@ -755,8 +756,12 @@ app.get('/api/summary', auth, async (_req, res) => {
   // `body` is the line under the title in the console's inbox.
   const alerts = alerts0.map((a) => (a.detail && !a.body ? { ...a, body: a.detail } : a));
   const needs = cc.up ? cc.waiting + cc.blocked + cc.errors : 0;
-  const accts = cc.up ? cc.runners.filter((r) => r.ok).flatMap((r) => r.data.accounts || []) : [];
+  const accts0 = cc.up ? cc.runners.filter((r) => r.ok).flatMap((r) => r.data.accounts || []) : [];
+  const isOff = (a) => a.status === 'off' || a.enabled === false;
+  const accts = accts0.filter((a) => !isOff(a));
+  const acctOff = accts0.length - accts.length;
   const acctOk = accts.filter((a) => a.status === 'ok').length;
+  const offTail = acctOff ? ` · ${acctOff} off` : '';
   const blocking = alerts.some((a) => a.blocking);
   const status = !cc.configured ? (stack.down.length ? 'err' : 'ok')
     : !cc.up ? 'warn'
@@ -774,13 +779,13 @@ app.get('/api/summary', auth, async (_req, res) => {
       { label: 'Working', value: cc.running },
       { label: 'Needs you', value: needs, status: needs ? 'err' : null },
       { label: 'Idle', value: cc.idle },
-      { label: 'Accounts', value: acctOk, unit: `/${accts.length} ok`, status: accts.length && acctOk < accts.length ? 'warn' : null },
+      { label: 'Accounts', value: acctOk, unit: `/${accts.length} ok${offTail}`, status: accts.length && acctOk < accts.length ? 'warn' : null },
     ] : [],
     // Sessions working, one point a minute for the last two hours.
     spark: { label: 'Working · 2h', points: spark.map((p) => p.working), min: 0, max: Math.max(2, ...spark.map((p) => p.working)), cap: spark.length ? `now ${spark[spark.length - 1].working}` : '' },
     facts: cc.up ? [
       { k: 'Claude', v: [`${cc.running} working`, needs ? `${needs} need${needs === 1 ? 's' : ''} you` : null, cc.paused ? `${cc.paused} paused` : null].filter(Boolean).join(' · ') },
-      { k: 'Accounts', v: `${acctOk} of ${accts.length} ok` },
+      { k: 'Accounts', v: `${acctOk} of ${accts.length} ok${offTail}` },
       stack.down.length ? { k: 'Stopped', v: stack.down.map((sv) => sv.name).join(', ') } : null,
     ].filter(Boolean) : [{ k: 'Claude', v: cc.configured ? 'runner not answering' : 'not configured' }],
     alerts,

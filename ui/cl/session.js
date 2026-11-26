@@ -224,7 +224,7 @@ export function createSessionView(s0, { onBack }) {
     const ms = models(dev).map((m) => [m.id, m.label]);
     const model = sel(ms, s.model?.preferred);
     const fallback = sel([['', 'None'], ...ms], s.model?.fallback || '');
-    const account = sel((dataOf(dev)?.accounts || []).map((a) => [a.id, `${a.label}${a.status !== 'ok' ? ` (${a.status === 'limited' ? `out until ${clock(a.limitedUntil)}` : a.status === 'needs-login' ? 'needs login' : a.status})` : ''}`]), s.account);
+    const account = sel((dataOf(dev)?.accounts || []).filter((a) => a.status !== 'off' || a.id === s.account).map((a) => [a.id, `${a.label}${a.status !== 'ok' ? ` (${a.status === 'limited' ? `out until ${clock(a.limitedUntil)}` : a.status === 'needs-login' ? 'needs login' : a.status})` : ''}`]), s.account);
     const doneSet = dataOf(dev)?.settings?.notify?.done;
     const done = sel([['default', `As in settings (${doneSet ? 'on' : 'off'})`], ['on', 'On'], ['off', 'Off']], s.notifyDone === true ? 'on' : s.notifyDone === false ? 'off' : 'default');
     const nudges = h('input', { class: 'input num', type: 'number', min: '0', max: '10', value: String(s.autoContinue || 0), inputmode: 'numeric' });
