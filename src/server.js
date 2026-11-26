@@ -737,11 +737,13 @@ app.get('/api/summary', auth, async (_req, res) => {
     assistantModule.summary().catch(() => ({ configured: false })),
   ]);
   lastClaude = cc.configured ? { at: Date.now(), cc } : lastClaude;
-  const alerts = [
+  const alerts0 = [
     ...claudeAlerts(cc),
     ...stack.down.map((sv) => ({ key: sv.id, notify: 'agent.service-down', kind: 'agent.service-down', severity: 'err', text: `${sv.name} is not running`, detail: sv.detail, route: '#/agent/claude', since: sv.since })),
     ...(as.configured && as.up ? as.waiting.map((x) => ({ key: x.id, notify: 'agent.assistant-needs-you', kind: 'agent.assistant-needs-you', severity: 'warn', blocking: true, text: `The Assistant is asking in “${x.title}”`, route: '#/agent/assistant' })) : []),
   ];
+  // `body` is the line under the title in the console's inbox.
+  const alerts = alerts0.map((a) => (a.detail && !a.body ? { ...a, body: a.detail } : a));
   const needs = cc.up ? cc.waiting + cc.blocked + cc.errors : 0;
   const accts = cc.up ? cc.runners.filter((r) => r.ok).flatMap((r) => r.data.accounts || []) : [];
   const acctOk = accts.filter((a) => a.status === 'ok').length;
@@ -759,13 +761,13 @@ app.get('/api/summary', auth, async (_req, res) => {
           : cc.running ? `${cc.running} working` : 'all quiet',
     // Four numbers for the overview's row.
     metrics: cc.up ? [
-      { k: 'working', label: 'Working', v: cc.running },
-      { k: 'needs', label: 'Needs you', v: needs, sev: needs ? 'err' : null },
-      { k: 'idle', label: 'Idle', v: cc.idle },
-      { k: 'accounts', label: 'Accounts', v: acctOk, of: accts.length, unit: 'ok', sev: accts.length && acctOk < accts.length ? 'warn' : null },
+      { label: 'Working', value: cc.running },
+      { label: 'Needs you', value: needs, status: needs ? 'err' : null },
+      { label: 'Idle', value: cc.idle },
+      { label: 'Accounts', value: acctOk, unit: `/${accts.length} ok`, status: accts.length && acctOk < accts.length ? 'warn' : null },
     ] : [],
     // Sessions working, one point a minute for the last two hours.
-    spark: { label: 'working', points: spark.map((p) => [p.t, p.working]), max: Math.max(1, ...spark.map((p) => p.working)) },
+    spark: { label: 'Working · 2h', points: spark.map((p) => p.working), min: 0, max: Math.max(2, ...spark.map((p) => p.working)), cap: spark.length ? `now ${spark[spark.length - 1].working}` : '' },
     facts: cc.up ? [
       { k: 'Claude', v: [`${cc.running} working`, needs ? `${needs} need${needs === 1 ? 's' : ''} you` : null, cc.paused ? `${cc.paused} paused` : null].filter(Boolean).join(' · ') },
       { k: 'Accounts', v: `${acctOk} of ${accts.length} ok` },

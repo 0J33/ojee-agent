@@ -63,7 +63,7 @@ export function watchFit(el, scroller, onFit) {
     const box = scroller.getBoundingClientRect();
     const top = el.getBoundingClientRect().top;
     const padBottom = parseFloat(getComputedStyle(el.parentElement || el).paddingBottom) || 0;
-    const avail = Math.floor(box.bottom - top - Math.min(padBottom, 24));
+    const avail = Math.floor(box.bottom - top - Math.max(16, Math.min(padBottom, 28)));
     onFit(avail);
   };
   const ro = new ResizeObserver(measure);

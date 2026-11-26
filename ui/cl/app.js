@@ -129,7 +129,8 @@ function paint(reason) {
   S.root.classList.remove('cl-down');
   const line = summary();
   els.sub.textContent = line;
-  S.ctx.header?.setSub?.(line);
+  // The shell sets its own line on navigation: say ours after it.
+  if (S.ctx.header?.setSub) requestAnimationFrame(() => S.ctx?.header?.setSub(line));
   swap(els.stack, JSON.stringify(S.stack?.down?.map((x) => [x.id, S.busy.has(`svc:${x.id}`)]) || []), () => stackLine());
   // The list: rebuilt only when what it shows changed, so a tap on a row is never lost.
   const sig = JSON.stringify([r.id, S.filter, pref('cl-ended'), S.devs.map((d) => [d.id, d.online]), allSessions().map((s) => [s.id, s.title, s.state, s.alive, s.lastActivityAt, s.activity?.tool, s.activity?.text, s.prompt?.kind, s.detail, s.account])]);
