@@ -807,7 +807,9 @@ export function createChat({ session: s0, onPath, onAgent, onOpenAgents, keys = 
     let changed = false;
     for (const m of added) {
       if (m.role !== 'user') continue;
-      const i = pending.findIndex((p) => p.state !== 'failed' && norm(p.text) === norm(m.text));
+      // Attachments arrive as "[Image #1] words": the words are the message.
+      const got = norm(m.text);
+      const i = pending.findIndex((p) => p.state !== 'failed' && (got === norm(p.text) || got.endsWith(norm(p.text))));
       if (i >= 0) { pending.splice(i, 1); changed = true; }
     }
     // Stand-ins that never showed up within a minute and are not queued: drop.

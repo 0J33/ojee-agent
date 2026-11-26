@@ -334,7 +334,7 @@
 .cl-card .opt.cur{border-color:var(--line-2)}
 .cl-card .opt:disabled{opacity:.6}
 .cl-card .otherrow .input{width:100%;height:36px}
-.cl-card .foot{display:flex;align-items:center;gap:8px;font-size:12px}
+.cl-card .foot{display:flex;align-items:center;gap:8px;font-size:12px;position:sticky;bottom:-12px;margin:0 -12px -12px;padding:10px 12px;background:var(--panel);border-top:1px solid var(--line)}
 .cl-card .foot .btn,.cl-card .foot>.btn:last-child{margin-left:auto}
 .cl-card .foot .btn+.btn{margin-left:0}
 .cl-card .cl-pre{background:var(--raised);border:1px solid var(--line);border-radius:var(--r-2);padding:8px 10px;color:var(--fg);max-height:160px;overflow:auto}

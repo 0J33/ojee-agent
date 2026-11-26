@@ -1525,7 +1525,9 @@ class Sessions extends EventEmitter {
       // call still open (a long build, a subagent at work) or background
       // commands write nothing to the transcript while they work. Those get
       // three hours before they count as hung.
-      const stallMs = (this.settings.stallMinutes || 30) * MINUTE;
+      // The console's threshold for this alert (Settings → Notifications) wins over the runner's own.
+      const cp = this.store.data?.consoleNotify?.types?.['agent.claude-stalled']?.params?.stallMinutes;
+      const stallMs = (Number(cp) > 0 ? Number(cp) : (this.settings.stallMinutes || 30)) * MINUTE;
       const openTool = Object.values(s.openTools || {}).some((t) => now - t.at < 3 * 3600_000);
       const longRun = openTool || bgWork(s).length > 0;
       const quietFor = now - (s.lastActivityAt || now);

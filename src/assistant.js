@@ -561,7 +561,7 @@ function notify(title, body, tag, sessionID) {
   const n = { title, body, tag, sessionID: sessionID || null, at: Date.now(), discord: !!WEBHOOK };
   H.recentPings.unshift(n);
   H.recentPings.length = Math.min(H.recentPings.length, 20);
-  emitNotify({ id, key: `${id}:${sessionID || tag}`, title, body: String(body || '').slice(0, 600), tag, severity, blocking: id === 'agent.assistant-needs-you', view: 'assistant', at: n.at });
+  emitNotify({ id, key: String(sessionID || tag), state: id === 'agent.assistant-replied' ? 'update' : 'raise', title, body: String(body || '').slice(0, 600), tag, severity, blocking: id === 'agent.assistant-needs-you', view: 'assistant', at: n.at });
   broadcast('notify', n);
   // Its own webhook only when no console has been listening for two minutes.
   const routed = stream.routed();

@@ -9,7 +9,7 @@
    ============================================================ */
 
 import { h, icon, swap, clip, clock, ago, tailPath, fine, touch, menu, closeMenu, pref, copyText, fmtSize, dur } from './dom.js';
-import { S, api, post, patch, upsert, online, multi, devOf, devLabel, dataOf, offWhy, stateOf, models, modelLabel, acctLabel, shortPath, act, go, toast, allSessions } from './state.js';
+import { S, api, post, patch, upsert, online, multi, devOf, devLabel, dataOf, offWhy, stateOf, models, modelLabel, acctLabel, shortPath, act, go, toast, allSessions, ask, dialog } from './state.js';
 import { startTerminal } from './term.js';
 import { createChat } from './chat.js';
 
@@ -192,15 +192,15 @@ export function createSessionView(s0, { onBack }) {
 
   async function rename() {
     const input = h('input', { class: 'input', value: s.title || '', maxlength: '70', 'aria-label': 'Title' });
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.closest('.modal')?.querySelector('.modal-foot .btn:last-child')?.click(); } });
-    const ok = await S.ctx.modal({ title: 'Rename session', body: h('div', { class: 'field' }, input), actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'Rename', value: true, variant: 'primary' }] });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.closest('.sheet, .modal')?.querySelector('.sheet-f .btn:last-child, .modal-foot .btn:last-child')?.click(); } });
+    const ok = await ask({ title: 'Rename session', body: h('div', { class: 'field' }, input), actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'Rename', value: true, variant: 'primary' }] });
     if (!ok || !input.value.trim()) return;
     const v = await act(`rename:${id}`, () => patch(dev, `/sessions/${id}`, { title: input.value.trim() }));
     if (v) { upsert(dev, v); update(v); S.paint('session'); }
   }
 
   async function end() {
-    const ok = await S.ctx.modal({ title: 'End this session?', body: h('p', {}, 'Claude stops. The conversation is kept and can be resumed.'), actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'End session', value: true, variant: 'primary' }] });
+    const ok = await ask({ title: 'End this session?', body: h('p', {}, 'Claude stops. The conversation is kept and can be resumed.'), actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'End session', value: true, variant: 'primary' }] });
     if (!ok) return;
     const v = await act(`end:${id}`, () => post(dev, `/sessions/${id}/end`));
     if (v) { upsert(dev, v); update(v); S.paint('session'); }
@@ -208,7 +208,7 @@ export function createSessionView(s0, { onBack }) {
 
   async function del() {
     const purge = h('input', { type: 'checkbox' });
-    const ok = await S.ctx.modal({
+    const ok = await ask({
       title: 'Delete this session?',
       body: h('div', { class: 'stack' }, h('p', {}, 'It is ended and removed from the list.'),
         h('label', { class: 'cl-check' }, purge, h('span', {}, 'Also delete the conversation itself. This cannot be undone.'))),
@@ -228,7 +228,7 @@ export function createSessionView(s0, { onBack }) {
     const doneSet = dataOf(dev)?.settings?.notify?.done;
     const done = sel([['default', `As in settings (${doneSet ? 'on' : 'off'})`], ['on', 'On'], ['off', 'Off']], s.notifyDone === true ? 'on' : s.notifyDone === false ? 'off' : 'default');
     const nudges = h('input', { class: 'input num', type: 'number', min: '0', max: '10', value: String(s.autoContinue || 0), inputmode: 'numeric' });
-    const ok = await S.ctx.modal({
+    const ok = await ask({
       title: 'Model, account and pings',
       body: h('div', { class: 'cl-form' },
         h('div', { class: 'field' }, h('label', {}, 'Model'), model),
@@ -283,9 +283,9 @@ export function createSessionView(s0, { onBack }) {
     };
     draw();
     const t = setInterval(draw, 3000);
-    const p = S.ctx.modal({ title: 'Agents and background work', body: bodyEl, actions: [{ label: 'Close', value: false, variant: 'ghost' }] });
-    closeIt = () => document.querySelector('#modal-root .modal-foot .btn')?.click();
-    await p;
+    const sh = await dialog({ title: 'Agents and background work', body: bodyEl, width: 560 });
+    closeIt = () => sh.close();
+    await sh.done;
     clearInterval(t);
   }
 
@@ -299,7 +299,7 @@ export function createSessionView(s0, { onBack }) {
     const bodyEl = h('div', { class: 'stack' }, preEl, h('div', { class: 'btns' },
       copyBtn('Copy selection', () => { const sel = window.getSelection(); return sel && preEl.contains(sel.anchorNode) ? sel.toString() : ''; }),
       copyBtn('Copy all', () => text), note));
-    const p = S.ctx.modal({ title: 'Copy from the terminal', body: bodyEl, actions: [{ label: 'Close', value: false, variant: 'ghost' }] });
+    const p = ask({ title: 'Copy from the terminal', body: bodyEl, width: 720 });
     try { text = String((await api(dev, `/sessions/${id}/screen?history=3000`)).screen || ''); } catch { text = term?.bufferText() || ''; }
     text = text.replace(/\s+$/, '');
     const URLS = /https?:\/\/[^\s<>"'`│┃]+[^\s<>"'`│┃.,;:!?)\]]/g;
@@ -317,7 +317,7 @@ export function createSessionView(s0, { onBack }) {
     if (!el.isConnected || e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.key.length !== 1) return;
     const a = document.activeElement;
     if (a && a !== document.body && (a.closest('input, textarea, select, [contenteditable]') || a.isContentEditable)) return;
-    if (document.querySelector('.modal-backdrop, .cmdk-bg, .cl-menu')) return;
+    if (document.querySelector('.modal-backdrop, .sheet.on, .cmdk-bg, .cl-menu')) return;
     if (!fine()) return;
     if (pane === 'terminal' && term) term.focus();
     else if (pane === 'chat' && chat) chat.input.focus();
@@ -412,8 +412,7 @@ export async function explore(dev, p, cwd) {
     bodyEl.replaceChildren(meta, preEl);
     if (line) requestAnimationFrame(() => preEl.querySelector('.hit')?.scrollIntoView({ block: 'center' }));
   }
-  const p2 = S.ctx.modal({ title: 'Files', body: h('div', { class: 'cl-ex' }, headEl, bodyEl), actions: [{ label: 'Close', value: false, variant: 'ghost' }] });
-  document.querySelector('#modal-root .modal')?.classList.add('wide');
+  const p2 = ask({ title: 'Files', body: h('div', { class: 'cl-ex' }, headEl, bodyEl), width: 720 });
   open(start);
   await p2;
   if (blobUrl) URL.revokeObjectURL(blobUrl);

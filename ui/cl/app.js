@@ -127,7 +127,9 @@ function paint(reason) {
     return;
   }
   S.root.classList.remove('cl-down');
-  els.sub.textContent = summary();
+  const line = summary();
+  els.sub.textContent = line;
+  S.ctx.header?.setSub?.(line);
   swap(els.stack, JSON.stringify(S.stack?.down?.map((x) => [x.id, S.busy.has(`svc:${x.id}`)]) || []), () => stackLine());
   // The list: rebuilt only when what it shows changed, so a tap on a row is never lost.
   const sig = JSON.stringify([r.id, S.filter, pref('cl-ended'), S.devs.map((d) => [d.id, d.online]), allSessions().map((s) => [s.id, s.title, s.state, s.alive, s.lastActivityAt, s.activity?.tool, s.activity?.text, s.prompt?.kind, s.detail, s.account])]);
@@ -162,12 +164,20 @@ function build() {
   els.side = h('aside', { class: 'cl-side', 'aria-label': 'Sessions' }, els.stack, els.list, els.accts);
   els.main = h('div', { class: 'cl-main' });
   els.grid = h('div', { class: 'cl-grid' }, els.side, els.main);
-  const head = h('header', { class: 'ph cl-ph' },
-    h('div', {}, h('h1', {}, 'Claude'), els.sub),
-    h('div', { class: 'acts' },
-      h('button', { class: 'ib', type: 'button', title: 'Settings', 'aria-label': 'Settings', onclick: () => go('settings', curDev()) }, icon('cog')),
-      h('button', { class: 'btn pri', type: 'button', onclick: () => go('new') }, icon('plus', 's'), 'New session')));
-  S.root.replaceChildren(head, els.grid);
+  const acts = [
+    h('button', { class: 'ib', type: 'button', title: 'Settings', 'aria-label': 'Settings', onclick: () => go('settings', curDev()) }, icon('cog')),
+    h('button', { class: 'btn pri', type: 'button', onclick: () => go('new') }, icon('plus', 's'), 'New session'),
+  ];
+  // Inside the console the shell draws the page header (the module's name
+  // and this summary line); its right side takes these buttons.
+  const shellHead = S.ctx.header?.actions;
+  if (shellHead) {
+    els.acts = acts;
+    shellHead.append(...acts);
+    S.root.replaceChildren(els.grid);
+  } else {
+    S.root.replaceChildren(h('header', { class: 'ph cl-ph' }, h('div', {}, h('h1', {}, 'Claude'), els.sub), h('div', { class: 'acts' }, ...acts)), els.grid);
+  }
   // The page fits one screen on a wide display; the side scrolls on its own.
   const scroller = scrollerOf(S.root);
   unwatch.push(watchFit(els.grid, scroller, (avail) => { S.root.style.setProperty('--cl-h', `${Math.max(420, avail)}px`); }));
@@ -228,6 +238,7 @@ export function unmountClaude() {
   document.removeEventListener('visibilitychange', onWake);
   window.removeEventListener('online', onWake);
   window.removeEventListener('pageshow', onWake);
+  for (const b of els.acts || []) b.remove();
   S.root?.classList.remove('cl', 'cl-open', 'max', 'kb');
   S.root = null;
   for (const k of Object.keys(els)) delete els[k];

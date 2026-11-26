@@ -110,29 +110,33 @@ const kind = (id, label, description, o = {}) => ({
   id,
   label,
   description,
-  severity: o.severity || 'warn',
+  severity: o.severity || 'warn',          // info | warn | critical
   blocking: !!o.blocking,
+  // toast: inbox + toast + push (and through quiet hours); inbox: badge only.
+  channel: o.channel || (o.blocking ? 'toast' : o.severity === 'info' && !(o.channels || []).length ? 'off' : 'inbox'),
+  discord: (o.channels || []).includes('discord'),
   defaultChannels: o.channels || ['app'],
   view: 'claude',
   discordBy: id.startsWith('agent.claude-') ? 'module' : undefined,
   cooldownMin: 10,
   hold: o.hold ?? 1,
   clearMin: o.clearMin ?? 0,
-  ...(o.threshold ? { threshold: o.threshold } : {}),
+  ...(o.source ? { source: o.source } : {}),
+  ...(o.params ? { params: o.params } : {}),
 });
 const ALERT_KINDS = [
   kind('agent.claude-needs-input', 'Claude: asks you something', 'A session asked a question, wants a plan approved, or wants permission for a tool. It waits until you answer.', { blocking: true, channels: ['app', 'discord'] }),
   kind('agent.claude-blocked', 'Claude: blocked', 'A session ended its turn with BLOCKED: it cannot go on without you.', { channels: ['app', 'discord'] }),
-  kind('agent.claude-error', 'Claude: session error', 'A session failed to start, crashed, or kept failing after three retries.', { severity: 'err', channels: ['app', 'discord'] }),
-  kind('agent.claude-stalled', 'Claude: gone quiet', 'A working session wrote nothing for this long while no tool was running and nothing ran in the background. Long builds and subagents do not count.', { threshold: { key: 'stallMinutes', label: 'Quiet for', unit: 'min', default: 30, min: 5, max: 240 } }),
+  kind('agent.claude-error', 'Claude: session error', 'A session failed to start, crashed, or kept failing after three retries.', { severity: 'critical', channels: ['app', 'discord'] }),
+  kind('agent.claude-stalled', 'Claude: gone quiet', 'A working session wrote nothing for this long while no tool was running and nothing ran in the background. Long builds and subagents do not count.', { params: [{ key: 'stallMinutes', label: 'Quiet for', type: 'number', unit: 'min', default: 30, min: 5, max: 240 }] }),
   kind('agent.claude-needs-login', 'Claude: account needs login', 'An account is logged out (found by a session or by the check every 15 minutes). Sessions cannot use it until it is logged in again.', { channels: ['app', 'discord'] }),
-  kind('agent.claude-account-limited', 'Claude: account limited', 'An account hit its 5-hour or weekly limit; sessions move to another or wait until it resets.', { severity: 'info', clearMin: 5 }),
+  kind('agent.claude-account-limited', 'Claude: account limited', 'An account hit its 5-hour or weekly limit; sessions move to another or wait until it resets.', { severity: 'info', channel: 'inbox', clearMin: 5, source: 'alerts' }),
   kind('agent.claude-all-limited', 'Claude: every account out', 'Every account is limited or logged out; sessions are paused until the soonest reset.', { channels: ['app', 'discord'] }),
   kind('agent.claude-model-fallback', 'Claude: switched model', 'A model hit its limit and a session moved to the fallback model.', { severity: 'info', channels: [] }),
   kind('agent.claude-account-switch', 'Claude: switched account', 'An account ran out and sessions moved to another.', { severity: 'info', channels: [] }),
   kind('agent.claude-done', 'Claude: finished', 'A session ended with DONE. Off by default: unattended work finishing is the normal case. A session set to ping when done always does.', { severity: 'info', channels: [] }),
-  kind('agent.claude-runner-down', 'Claude: runner not answering', 'The runner on a machine that should be up (not a laptop that sleeps) stopped answering for 3 minutes.', { hold: 3, clearMin: 2 }),
-  kind('agent.service-down', 'Claude: a stack service stopped', 'One of the containers this module looks after (n8n, CouchDB…) is stopped.', { severity: 'err', hold: 2, clearMin: 2 }),
+  kind('agent.claude-runner-down', 'Claude: runner not answering', 'The runner on a machine that should be up (not a laptop that sleeps) stopped answering for 3 minutes.', { hold: 6, clearMin: 2, source: 'alerts' }),
+  kind('agent.service-down', 'Claude: a stack service stopped', 'One of the containers this module looks after (n8n, CouchDB…) is stopped.', { severity: 'critical', hold: 4, clearMin: 2, source: 'alerts' }),
   // Claude's messages to the owner about the Forsa work (work-legacy.js) until forsa-aios takes them.
   { ...kind('agent.work-update', 'Forsa: message from Claude', 'Claude reports something about the Forsa work: a release, a moved deadline, a decision taken.', { severity: 'info' }), view: null },
   { ...kind('agent.work-alert', 'Forsa: needs your attention', 'Claude hit something on the Forsa work only you can unblock.'), view: null },
@@ -200,6 +204,7 @@ app.get('/module.json', (_req, res) => res.json({
   icon: 'i-term',
   views: VIEWS,
   defaultView: 'claude',
+  viewTabs: false,
   ui: '/ui/index.js',
   // The console opens this without mounting the module first — the
   // Assistant button on the overview — so it is advertised on its own.
@@ -693,7 +698,7 @@ function claudeAlerts(cc) {
   for (const r of cc.runners) {
     const tag = cc.multi ? ` (${r.label})` : '';
     if (!r.ok) {
-      if (!r.sleeps) out.push({ key: `agent.claude-runner-down:${r.id}`, kind: 'agent.claude-runner-down', severity: 'warn', text: `The Claude runner on ${r.label} is not answering`, detail: r.error, route: '#/agent/claude' });
+      if (!r.sleeps) out.push({ key: r.id, notify: 'agent.claude-runner-down', kind: 'agent.claude-runner-down', severity: 'warn', text: `The Claude runner on ${r.label} is not answering`, detail: r.error, route: '#/agent/claude' });
       continue;
     }
     const d = r.data;
@@ -701,25 +706,25 @@ function claudeAlerts(cc) {
       const k = a.state === 'waiting' ? 'needs-input' : a.state === 'blocked' ? 'blocked' : 'error';
       const what = a.prompt === 'permission' ? 'wants permission' : a.prompt === 'plan' ? 'wants a plan approved' : a.state === 'waiting' ? 'is asking a question' : a.state === 'blocked' ? 'is blocked' : 'hit an error';
       out.push({
-        key: `agent.claude-${k}:${r.id}:${a.id}`, kind: `agent.claude-${k}`,
+        key: `${r.id}:${a.id}`, notify: `agent.claude-${k}`, kind: `agent.claude-${k}`,
         severity: k === 'error' ? 'err' : 'warn', blocking: k === 'needs-input',
         text: `${a.title}${tag} ${what}`, detail: a.question || a.detail || null,
         route: `#/agent/claude/${a.id}`, since: a.at || null, action: k === 'needs-input' ? 'Answer' : 'Open',
       });
     }
     for (const st of d.stalled || []) {
-      out.push({ key: `agent.claude-stalled:${r.id}:${st.id}`, kind: 'agent.claude-stalled', severity: 'warn', text: `${st.title}${tag} has gone quiet`, detail: st.since ? `Nothing new for ${ago(st.since)}, with nothing running` : null, route: `#/agent/claude/${st.id}`, since: st.since });
+      out.push({ key: `${r.id}:${st.id}`, notify: 'agent.claude-stalled', kind: 'agent.claude-stalled', severity: 'warn', text: `${st.title}${tag} has gone quiet`, detail: st.since ? `Nothing new for ${ago(st.since)}, with nothing running` : null, route: `#/agent/claude/${st.id}`, since: st.since });
     }
     const accts = d.accounts || [];
     for (const a of accts) {
       if (a.status === 'needs-login') {
-        out.push({ key: `agent.claude-needs-login:${r.id}:${a.id}`, kind: 'agent.claude-needs-login', severity: 'warn', text: `Claude account ${a.label}${tag} needs login`, detail: a.text || a.authError || 'Not logged in', route: '#/agent/claude/accounts', action: 'Log in' });
+        out.push({ key: `${r.id}:${a.id}`, notify: 'agent.claude-needs-login', kind: 'agent.claude-needs-login', severity: 'warn', text: `Claude account ${a.label}${tag} needs login`, detail: a.text || a.authError || 'Not logged in', route: '#/agent/claude/accounts', action: 'Log in' });
       } else if (a.status === 'limited') {
-        out.push({ key: `agent.claude-account-limited:${r.id}:${a.id}`, kind: 'agent.claude-account-limited', severity: 'info', text: `Claude account ${a.label}${tag} is limited${a.limitedUntil ? ` until ${clockAt(a.limitedUntil)}` : ''}`, detail: a.limitWindow === 'five_hour' ? '5-hour window' : a.limitWindow === 'seven_day' ? 'weekly limit' : a.text, route: '#/agent/claude/accounts' });
+        out.push({ key: `${r.id}:${a.id}`, notify: 'agent.claude-account-limited', kind: 'agent.claude-account-limited', severity: 'info', text: `Claude account ${a.label}${tag} is limited${a.limitedUntil ? ` until ${clockAt(a.limitedUntil)}` : ''}`, detail: a.limitWindow === 'five_hour' ? '5-hour window' : a.limitWindow === 'seven_day' ? 'weekly limit' : a.text, route: '#/agent/claude/accounts' });
       }
     }
     if (accts.length && accts.every((a) => a.status === 'needs-login' || a.status === 'limited') && (d.paused || 0) > 0) {
-      out.push({ key: `agent.claude-all-limited:${r.id}:-`, kind: 'agent.claude-all-limited', severity: 'warn', text: `Every Claude account${tag} is out`, detail: `${d.paused} session${d.paused === 1 ? '' : 's'} paused until the soonest reset`, route: '#/agent/claude/accounts' });
+      out.push({ key: `${r.id}:-`, notify: 'agent.claude-all-limited', kind: 'agent.claude-all-limited', severity: 'warn', text: `Every Claude account${tag} is out`, detail: `${d.paused} session${d.paused === 1 ? '' : 's'} paused until the soonest reset`, route: '#/agent/claude/accounts' });
     }
   }
   return out;
@@ -734,8 +739,8 @@ app.get('/api/summary', auth, async (_req, res) => {
   lastClaude = cc.configured ? { at: Date.now(), cc } : lastClaude;
   const alerts = [
     ...claudeAlerts(cc),
-    ...stack.down.map((sv) => ({ key: `agent.service-down:${sv.id}`, kind: 'agent.service-down', severity: 'err', text: `${sv.name} is not running`, detail: sv.detail, route: '#/agent/claude', since: sv.since })),
-    ...(as.configured && as.up ? as.waiting.map((x) => ({ key: `agent.assistant-needs-you:${x.id}`, kind: 'agent.assistant-needs-you', severity: 'warn', blocking: true, text: `The Assistant is asking in “${x.title}”`, route: '#/agent/assistant' })) : []),
+    ...stack.down.map((sv) => ({ key: sv.id, notify: 'agent.service-down', kind: 'agent.service-down', severity: 'err', text: `${sv.name} is not running`, detail: sv.detail, route: '#/agent/claude', since: sv.since })),
+    ...(as.configured && as.up ? as.waiting.map((x) => ({ key: x.id, notify: 'agent.assistant-needs-you', kind: 'agent.assistant-needs-you', severity: 'warn', blocking: true, text: `The Assistant is asking in “${x.title}”`, route: '#/agent/assistant' })) : []),
   ];
   const needs = cc.up ? cc.waiting + cc.blocked + cc.errors : 0;
   const accts = cc.up ? cc.runners.filter((r) => r.ok).flatMap((r) => r.data.accounts || []) : [];
@@ -867,7 +872,10 @@ function relayRunner(runner) {
             // `<alert kind>:<device>:<subject>`, the same one /api/summary uses.
             const subject = String(n.tag || '').split(':').slice(1).join(':') || '-';
             const route = typeof n.route === 'string' ? n.route.replace('/accounts/-/', `/accounts/${runner.id}/`) : n.route;
-            notifyStream.emit({ ...n, route, key: `${n.id}:${runner.id}:${subject}`, device: runner.id, blocking: n.id === 'agent.claude-needs-input' });
+            // `key` is the subject (the console makes it module:kind:key), the
+            // same one /api/summary states, so an event and an alert are one item.
+            const info = ['agent.claude-model-fallback', 'agent.claude-account-switch', 'agent.claude-done'].includes(n.id);
+            notifyStream.emit({ ...n, route, key: `${runner.id}:${subject}`, device: runner.id, state: n.state || (info ? 'update' : 'raise'), blocking: n.id === 'agent.claude-needs-input', severity: n.severity === 'err' ? 'critical' : n.severity });
           } catch { /* not ours */ }
         }
       });

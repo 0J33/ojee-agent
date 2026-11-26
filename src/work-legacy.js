@@ -113,7 +113,7 @@ module.exports = function mountWorkLegacy(app, auth, runners, emitNotify = () =>
     const m = { id: `w${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, title, body: clip(b.body, 4000), severity, link: clip(b.link, 500) || null, key, decision: !!b.decision, at: Date.now() };
     writeNotes([m, ...list]);
     const kind = severity === 'warn' ? 'agent.work-alert' : 'agent.work-update';
-    emitNotify({ id: kind, key: `${kind}:${key || m.id}`, title: m.title, body: m.body.slice(0, 600), severity, at: m.at });
+    emitNotify({ id: kind, key: key || m.id, state: 'raise', title: m.title, body: m.body.slice(0, 600), severity, at: m.at });
     res.json({ ok: true, message: m });
   });
 

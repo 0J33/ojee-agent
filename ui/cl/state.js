@@ -140,3 +140,20 @@ export function parseRoute() {
   if (a === 'accounts' || a === 'settings') return { kind: a, id: null, dev: b || null, acct: c || null };
   return { kind: 'list', id: null, dev: null };
 }
+
+/* ── dialogs: the shared sheet (ojee-ui3) ─────────────────────────── */
+
+let ui3 = null;
+/**
+ * A sheet: beside the content on a desktop, from the bottom on a phone.
+ * The console hands one over (ctx.sheet); standalone, ojee-ui3's own.
+ * Resolves `done` with the chosen action's value (null when dismissed).
+ */
+export async function dialog({ title, sub = '', body, actions = [], width = 480 }) {
+  let open = S.ctx.sheet;
+  if (!open) { ui3 ||= import(`${S.ctx.base || ''}/ojee-ui3.js`); open = (await ui3).openSheet; }
+  const sh = open({ title, sub, body, width, actions: actions.map((a) => ({ label: a.label, value: a.value, variant: String(a.variant || '').startsWith('danger') ? 'danger' : a.variant })) });
+  return { done: sh.done, close: sh.close };
+}
+/** dialog(), waited on: the value chosen. */
+export const ask = async (o) => (await dialog(o)).done;

@@ -5,7 +5,7 @@
    ============================================================ */
 
 import { h, icon, swap, ago, clip, clock, pref, menu } from './dom.js';
-import { S, allSessions, online, multi, devOf, devLabel, dataOf, offWhy, stateOf, acctLabel, modelLabel, go, api, post, act, upsert, curDev, setDev, toast } from './state.js';
+import { S, allSessions, online, multi, devOf, devLabel, dataOf, offWhy, stateOf, acctLabel, modelLabel, go, api, post, act, upsert, curDev, setDev, toast, ask, dialog } from './state.js';
 
 const GROUPS = [['needs', 'Needs you'], ['working', 'Working'], ['idle', 'Idle'], ['ended', 'Ended']];
 
@@ -121,6 +121,7 @@ export function stackLine() {
 /** Every other conversation on a machine, to open (adopt) here. */
 async function historySheet() {
   let dev = curDev();
+  let sheet = null;
   const bodyEl = h('div', { class: 'cl-hist' });
   const draw = async () => {
     bodyEl.replaceChildren(
@@ -137,12 +138,11 @@ async function historySheet() {
         class: 'btn sm', type: 'button', disabled: x.runningElsewhere || null, title: x.runningElsewhere ? 'Running in a terminal on that machine. Close it there first.' : 'Open it here: the same conversation, not a copy',
         onclick: async () => {
           const v = await act(`adopt:${x.id}`, () => post(dev, `/history/${x.id}/adopt`, {}));
-          if (v) { upsert(dev, v); document.querySelector('#modal-root .modal-foot .btn')?.click(); go(v.id); }
+          if (v) { upsert(dev, v); sheet?.close(); go(v.id); }
         },
       }, 'Open')))) : h('p', { class: 'dim' }, 'Every conversation on this machine is already in the list.'));
   };
-  const p = S.ctx.modal({ title: 'Other conversations', body: bodyEl, actions: [{ label: 'Close', value: false, variant: 'ghost' }] });
-  document.querySelector('#modal-root .modal')?.classList.add('wide');
+  sheet = await dialog({ title: 'Other conversations', sub: 'Open one here to resume it: the same conversation, not a copy', body: bodyEl, width: 640 });
   draw();
-  await p;
+  await sheet.done;
 }

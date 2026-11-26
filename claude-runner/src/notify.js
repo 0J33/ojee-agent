@@ -67,13 +67,26 @@ class Notifier {
 
   get enabled() { return !!this.webhook; }
 
-  /** The condition behind a key went away: the next alert with it is news again. */
-  clear(key) { return this.last.delete(key); }
+  /**
+   * The condition behind a key went away: the next alert with it is news
+   * again, and the console is told to close the item (state: resolve).
+   */
+  clear(key) {
+    const had = this.last.delete(key);
+    if (had) this.resolve(key);
+    return had;
+  }
 
   /** Everything raised for a session (it moved on: answered, working, ended). */
   clearSession(id) {
     if (!id) return;
-    for (const k of [...this.last.keys()]) if (k.endsWith(`:${id}`)) this.last.delete(k);
+    for (const k of [...this.last.keys()]) if (k.endsWith(`:${id}`)) { this.last.delete(k); this.resolve(k); }
+  }
+
+  resolve(key) {
+    const kind = String(key).split(':')[0];
+    if (!SEVERITY[kind] || SEVERITY[kind] === 'info') return;
+    try { this.emit({ id: typeId(kind), tag: key, state: 'resolve', at: this.now() }); } catch { /* a stream that broke */ }
   }
 
   link(session) {

@@ -5,7 +5,7 @@
    ============================================================ */
 
 import { h, icon, swap, clip, clock, ago, pref, tailPath } from './dom.js';
-import { S, api, post, put, patch, upsert, online, multi, devOf, devLabel, dataOf, offWhy, models, shortPath, act, go, toast, curDev, setDev } from './state.js';
+import { S, api, post, put, patch, upsert, online, multi, devOf, devLabel, dataOf, offWhy, models, shortPath, act, go, toast, curDev, setDev, ask, dialog } from './state.js';
 import { startTerminal } from './term.js';
 
 const sel = (opts, value, attrs = {}) => { const x = h('select', { class: 'select', ...attrs }, opts.map(([v, l]) => h('option', { value: v }, l))); x.value = value ?? ''; return x; };
@@ -94,7 +94,7 @@ export function createNewSession({ onBack }) {
 
   async function mkdir() {
     const input = h('input', { class: 'input', placeholder: 'folder name', autocapitalize: 'none' });
-    const ok = await S.ctx.modal({ title: `New folder in ${shortPath(fs.path, dev)}`, body: field('Name', input), actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'Create', value: true, variant: 'primary' }] });
+    const ok = await ask({ title: `New folder in ${shortPath(fs.path, dev)}`, body: field('Name', input), actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'Create', value: true, variant: 'primary' }] });
     const name = input.value.trim();
     if (!ok || !name) return;
     const r = await act('mkdir', () => post(dev, '/fs/mkdir', { path: name.startsWith('/') ? name : `${fs.path.replace(/\/$/, '')}/${name}` }));
@@ -214,17 +214,19 @@ export function createAccounts({ dev: dev0, acct, onBack }) {
         h('div', { class: 'panel clip' },
           h('div', { class: 'set' }, h('div', { class: 't' }, 'Auto-switch accounts'), h('div', { class: 'd' }, 'When one runs out, sessions move to the next available account in this order and carry on. Off, they pause until it resets.'),
             h('div', { class: 'ctrl' }, (() => { const b = sw(settings.autoSwitchAccounts, (v) => saveSettings(dev, { autoSwitchAccounts: v })); b.classList.add('cl-autosw'); return b; })())),
-          h('div', { class: 'set stack cl-addacct' }, h('div', { class: 't' }, 'Add an account'), h('div', { class: 'd' }, 'Gets its own login folder; history, settings and CLAUDE.md stay shared, so any session can continue on it.'),
+          h('div', { class: 'set cl-addacct' }, h('div', { class: 't' }, 'Add an account'), h('div', { class: 'd' }, 'Gets its own login folder; history, settings and CLAUDE.md stay shared, so any session can continue on it.'),
             h('div', { class: 'cl-inline' }, label, h('button', { class: 'btn sm', type: 'button', onclick: add }, 'Add and log in'))))));
     paintLogin();
   }
   function pick(id) { dev = id; setDev(id); stopLogin(); go('accounts', id); }
 
   async function activate(a) {
-    const move = h('input', { type: 'checkbox', checked: true });
-    const ok = await S.ctx.modal({
+    const move = h('input', { type: 'checkbox', checked: a.status === 'ok' });
+    const ok = await ask({
       title: `Make ${a.label} active?`,
-      body: h('div', { class: 'stack' }, h('p', {}, 'New sessions start on it.'), h('label', { class: 'cl-check' }, move, h('span', {}, 'Move the others too: idle ones now, working ones when their turn ends'))),
+      body: h('div', { class: 'stack' }, h('p', {}, 'New sessions start on it.'),
+        a.status !== 'ok' ? h('p', { class: 'err' }, a.status === 'needs-login' ? `${a.label} is not logged in: sessions on it will stop until it is. Log it in first.` : `${a.label} is out until ${clock(a.limitedUntil)}.`) : null,
+        h('label', { class: 'cl-check' }, move, h('span', {}, 'Move the others too: idle ones now, working ones when their turn ends'))),
       actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'Make active', value: true, variant: 'primary' }],
     });
     if (!ok) return;
@@ -233,7 +235,7 @@ export function createAccounts({ dev: dev0, acct, onBack }) {
   }
 
   async function more(a) {
-    const choice = await S.ctx.modal({
+    const choice = await ask({
       title: a.label,
       body: h('p', {}, a.main ? `${multi() ? devLabel(dev) : 'This machine'}'s own ~/.claude login.` : `Login folder: ${a.dir}`),
       actions: [{ label: 'Check login', value: 'refresh', variant: 'ghost' }, { label: 'Forget limits', value: 'clear', variant: 'ghost' }, { label: 'Rename', value: 'rename', variant: 'ghost' }, ...(a.main ? [] : [{ label: 'Remove', value: 'remove', variant: 'danger' }])],
@@ -242,9 +244,9 @@ export function createAccounts({ dev: dev0, acct, onBack }) {
     else if (choice === 'clear') await act(`c:${a.id}`, () => post(dev, `/accounts/${a.id}/clear-limits`), 'Limits forgotten');
     else if (choice === 'rename') {
       const input = h('input', { class: 'input', value: a.label, maxlength: '40' });
-      if (await S.ctx.modal({ title: 'Rename account', body: field('Name', input), actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'Save', value: true, variant: 'primary' }] })) await act(`n:${a.id}`, () => patch(dev, `/accounts/${a.id}`, { label: input.value }));
+      if (await ask({ title: 'Rename account', body: field('Name', input), actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'Save', value: true, variant: 'primary' }] })) await act(`n:${a.id}`, () => patch(dev, `/accounts/${a.id}`, { label: input.value }));
     } else if (choice === 'remove') {
-      if (await S.ctx.modal({ title: `Remove ${a.label}?`, body: h('p', {}, `Its login folder stays on disk (${a.dir}); delete it by hand to remove the login itself.`), actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'Remove', value: true, variant: 'danger solid' }] })) {
+      if (await ask({ title: `Remove ${a.label}?`, body: h('p', {}, `Its login folder stays on disk (${a.dir}); delete it by hand to remove the login itself.`), actions: [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'Remove', value: true, variant: 'danger solid' }] })) {
         const r = await act(`rm:${a.id}`, () => api(dev, `/accounts/${a.id}`, { method: 'DELETE' }), 'Removed');
         if (r) { const x = dataOf(dev); if (x) x.accounts = x.accounts.filter((y) => y.id !== a.id); paint(); }
       }
