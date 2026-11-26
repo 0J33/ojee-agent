@@ -50,6 +50,9 @@ test('stopping the console stack containers is refused', () => {
   assert.ok(run('docker restart ojee-console'));
   assert.ok(run('docker rm -f n8n'));
   assert.equal(run('docker stop my-test-db'), null);
+  assert.ok(run('docker stop odysseus-ntfy-1'));
+  assert.ok(run('docker restart stack-caddy-1'));
+  assert.equal(run('docker stop homework-db'), null);
   assert.ok(run('docker system prune -af'));
 });
 

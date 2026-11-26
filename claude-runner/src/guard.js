@@ -68,7 +68,8 @@ function check({ command, cwd, home, stackDir, stackReal }) {
       return 'docker prune commands affect every container on this box, including the console stack. Blocked for unattended sessions.';
     }
     const destructive = /\bdocker\b[^;&|]*\b(stop|rm|kill|restart|down|pause|rename|update)\b/.test(cmd);
-    const hit = PROTECTED_CONTAINERS.find((n) => new RegExp(`(^|[\\s/=:"'])${n.replace(/[-]/g, '\\-')}([\\s"';&|]|$)`).test(cmd));
+    // Also compose's own names for them: odysseus-ntfy-1, stack-caddy-1.
+    const hit = PROTECTED_CONTAINERS.find((n) => new RegExp(`(^|[\\s/=:"'])(?:[\\w.]+-)?${n.replace(/[-]/g, '\\-')}(?:-[\\w.-]+)?([\\s"';&|]|$)`).test(cmd));
     if (destructive && hit) {
       return `"${hit}" is part of the console stack on this box. Unattended sessions may not stop, remove or restart it.`;
     }
