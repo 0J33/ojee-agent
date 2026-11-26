@@ -463,6 +463,26 @@
 .cl-bg .row.cur{background:var(--raised)}
 .cl-bg .row .d,.cl-hist .row .d{overflow:hidden;text-overflow:ellipsis}
 .cl-hist .rows{max-height:56vh;overflow-y:auto}
+.cl-hist .row{transition:opacity 160ms var(--ease-out,ease-out),transform 160ms var(--ease-out,ease-out)}
+@starting-style{.cl-hist .row{opacity:0}}
+.cl-hist .row.gone{opacity:0;transform:translateX(12px);pointer-events:none}
+.cl-hist .row .d .tag{height:18px;margin-right:6px;font-size:11px}
+.cl-hist .row .acts{display:flex;align-items:center;gap:4px;flex:none}
+.cl-hist-del .i{flex:none}
+.cl-hist-del:active:not(:disabled){transform:scale(.97)}
+@media (hover:hover) and (pointer:fine){.cl-hist-del:hover:not(:disabled){color:var(--err)}}
+@media (max-width:560px){.cl-hist-del{padding-inline:8px}.cl-hist-del .lbl{display:none}}
+.cl-hist-away:empty{display:none}
+.cl-hist-away{display:grid;gap:4px;font-size:12px;color:var(--fg-3)}
+.cl-hist-away .ln{display:flex;align-items:center;gap:8px}
+.cl-del{display:grid;gap:6px;min-width:min(420px,80vw)}
+.cl-del .t{font-size:14px;font-weight:500;overflow-wrap:anywhere}
+.cl-del .q{margin:0;font-size:13px;color:var(--fg-2);overflow-wrap:anywhere}
+.cl-del .d{margin:0;font-size:12px;color:var(--fg-3);overflow-wrap:anywhere}
+.cl-del .dim{margin:4px 0 0;font-size:12.5px;color:var(--fg-3)}
+/* A toast raised while a sheet is open (Undo, an error from inside it) sits above the sheet's scrim. */
+html.sheet-lock .toasts{z-index:78}
+@media (prefers-reduced-motion:reduce){.cl-hist .row{transition:opacity 120ms ease}.cl-hist .row.gone{transform:none}}
 .cl-picktext{max-height:56vh;overflow:auto;margin:0;padding:10px 12px;font-size:12px;line-height:1.45;background:var(--term);color:var(--term-fg);border-radius:var(--r-2);white-space:pre;user-select:text;-webkit-user-select:text}
 .cl-picktext a{color:#2fd8ee}
 .cl-ex{display:grid;gap:10px}

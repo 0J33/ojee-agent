@@ -345,4 +345,56 @@ test('runner end to end', { skip: !haveTmux && 'no tmux' }, async (t) => {
     assert.ok(r.body.sessions.length >= 1);
     assert.ok(r.body.sessions.every((h) => h.managed));
   });
+
+  await t.test('a conversation can be deleted to the trash and restored, never while open', async () => {
+    const proj = path.join(HOME, '.claude', 'projects', '-tmp-other');
+    fs.mkdirSync(path.join(proj, 'aaaaaaaa-1111-4111-8111-000000000001', 'subagents'), { recursive: true });
+    const cid = 'aaaaaaaa-1111-4111-8111-000000000001';
+    fs.writeFileSync(path.join(proj, `${cid}.jsonl`), `${JSON.stringify({ type: 'user', cwd: '/tmp/other', message: { role: 'user', content: 'old chat' } })}\n`);
+    fs.writeFileSync(path.join(proj, cid, 'subagents', 'agent-x.jsonl'), '{}\n');
+    const listed = (await api('GET', '/api/history')).body.sessions.find((h) => h.id === cid);
+    assert.equal(listed.project, '-tmp-other');
+    assert.equal(listed.managed, null);
+
+    // Running in a terminal (claude agents says so): refused.
+    const agents = path.join(root, 'agents.json');
+    fs.writeFileSync(agents, JSON.stringify([{ pid: 1, sessionId: cid, kind: 'interactive', status: 'idle' }]));
+    process.env.FAKE_AGENTS_FILE = agents;
+    let r = await api('DELETE', `/api/history/${cid}?project=-tmp-other`);
+    assert.equal(r.status, 409);
+    assert.equal(r.body.reason, 'running-elsewhere');
+    assert.ok(fs.existsSync(path.join(proj, `${cid}.jsonl`)));
+    delete process.env.FAKE_AGENTS_FILE;
+
+    // Attached to a runner session: refused.
+    const managed = sessions.all().find((s) => s.claudeId && findFile(s.claudeId));
+    if (managed) {
+      r = await api('DELETE', `/api/history/${managed.claudeId}`);
+      assert.equal(r.status, 409);
+      assert.equal(r.body.reason, 'runner-session');
+    }
+
+    // Traversal and odd ids: refused before anything is looked at.
+    assert.equal((await api('DELETE', `/api/history/${cid}?project=..`)).status, 400);
+    assert.equal((await api('DELETE', `/api/history/${cid}?project=${encodeURIComponent('../../etc')}`)).status, 400);
+    assert.equal((await api('DELETE', '/api/history/..%2F..%2Fx')).status, 400);
+
+    r = await api('DELETE', `/api/history/${cid}?project=-tmp-other`);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.ok(!fs.existsSync(path.join(proj, `${cid}.jsonl`)));
+    assert.ok(!fs.existsSync(path.join(proj, cid)));
+    assert.ok(!(await api('GET', '/api/history')).body.sessions.some((h) => h.id === cid));
+    assert.equal((await api('DELETE', `/api/history/${cid}`)).status, 404);
+
+    r = await api('POST', `/api/history/${cid}/restore`, {});
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.ok(fs.existsSync(path.join(proj, `${cid}.jsonl`)));
+    assert.ok(fs.existsSync(path.join(proj, cid, 'subagents', 'agent-x.jsonl')));
+    assert.equal((await api('POST', `/api/history/${cid}/restore`, {})).status, 404);
+  });
 });
+
+function findFile(id) {
+  const base = path.join(HOME, '.claude', 'projects');
+  try { return fs.readdirSync(base).some((d) => fs.existsSync(path.join(base, d, `${id}.jsonl`))); } catch { return false; }
+}

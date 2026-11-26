@@ -32,6 +32,7 @@ const { Tail, toMessages, readRange, listSessions, findTranscript, listSubagents
 const { parseScreen } = require('./screen');
 const { enterWhenTyped } = require('./submit');
 const { catalogue } = require('./commands');
+const history = require('./history');
 
 /** A browser file name made safe for a path: no folders, no shell-hostile characters. */
 function safeName(raw, type) {
@@ -188,7 +189,7 @@ function createRunner(overrides = {}) {
   const auth = (req, res, next) => (tokenOk(req) ? next() : res.status(401).json({ error: 'unauthorized' }));
 
   const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => {
-    res.status(e.status || 500).json({ error: e.message || String(e) });
+    res.status(e.status || 500).json({ error: e.message || String(e), ...(e.reason ? { reason: e.reason } : {}) });
   });
   const need = (req) => {
     const s = sessions.get(req.params.id);
@@ -727,6 +728,7 @@ function createRunner(overrides = {}) {
         return {
           ...h,
           file: undefined,
+          project: h.file ? path.basename(path.dirname(h.file)) : null,
           managed: managed ? managed.id : null,
           runningElsewhere: !!l && !managed,
           liveStatus: l?.status || null,
@@ -749,6 +751,54 @@ function createRunner(overrides = {}) {
     const info = require('./transcript').describe(file);
     const s = sessions.adopt({ id, cwd: req.body?.cwd || info.cwd, title: req.body?.title || info.title || info.firstPrompt });
     res.json(sessions.view(s));
+  }));
+
+  /**
+   * Delete a conversation: its transcript (and subagent folder) go to the
+   * runner's trash for a week, never straight to unlink. Refused while it is
+   * open anywhere: a runner session (any state: it would resume into nothing),
+   * a terminal `claude` that `claude agents` knows, or any process whose
+   * command line names it.
+   */
+  const trashDir = path.join(config.STATE_DIR, 'trash');
+  async function runningWhere(id) {
+    const s = sessions.byClaudeId(id);
+    if (s) return { reason: 'runner-session', error: `It is attached to the runner session "${s.title || s.id.slice(0, 8)}". Remove that session first.` };
+    const l = (await agentsJson()).find((a) => a.sessionId === id);
+    if (l) return { reason: 'running-elsewhere', error: `It is running in a terminal on this machine (pid ${l.pid}). Close it there first.` };
+    const pids = history.processesNaming(id);
+    if (pids.length) return { reason: 'running-elsewhere', error: `A process on this machine is using it (pid ${pids.join(', ')}). Close it first.` };
+    return null;
+  }
+
+  app.delete('/api/history/:id', auth, wrap(async (req, res) => {
+    const id = req.params.id;
+    const project = req.query.project ? String(req.query.project) : null;
+    let loc;
+    try { loc = history.locate(accounts.projectDirs(), id, project); } catch (e) {
+      log('history', `delete ${id}${project ? ` (${project})` : ''} refused: ${e.message}`);
+      throw e;
+    }
+    const busy = await runningWhere(id);
+    if (busy) {
+      log('history', `delete ${id} refused: ${busy.reason}`);
+      return res.status(409).json(busy);
+    }
+    const info = (() => { try { return require('./transcript').describe(loc.file); } catch { return null; } })();
+    const t = history.trash({ projectDirs: accounts.projectDirs(), trashDir, id, project: loc.project });
+    log('history', `deleted ${id} (${loc.project}${info?.title || info?.firstPrompt ? ` · "${String(info.title || info.firstPrompt).slice(0, 60)}"` : ''}) → ${t.entry} [${t.files.length} item(s)]`);
+    res.json({ ok: true, id, project: loc.project, trashedAt: t.deletedAt, keepDays: Math.round(history.KEEP_MS / 86_400_000) });
+  }));
+
+  app.post('/api/history/:id/restore', auth, wrap(async (req, res) => {
+    const id = req.params.id;
+    let r;
+    try { r = history.restore({ projectDirs: accounts.projectDirs(), trashDir, id }); } catch (e) {
+      log('history', `restore ${id} refused: ${e.message}`);
+      throw e;
+    }
+    log('history', `restored ${id} (${r.project}) → ${r.restored.join(', ')}`);
+    res.json({ ok: true, ...r });
   }));
 
   /* ── accounts ─────────────────────────────────────────────────────── */
@@ -1094,6 +1144,10 @@ function createRunner(overrides = {}) {
     await accounts.refreshAll().catch(() => {});
     loginNotices();
     await sessions.reconcile();
+    try {
+      const n = history.purge(path.join(config.STATE_DIR, 'trash'));
+      if (n) log('history', `purged ${n} conversation(s) deleted more than ${Math.round(history.KEEP_MS / 86_400_000)} days ago`);
+    } catch (e) { log('history', `purge: ${e.message}`); }
 
     if (listen) {
       try { fs.unlinkSync(config.HOOK_SOCK); } catch { /* none */ }

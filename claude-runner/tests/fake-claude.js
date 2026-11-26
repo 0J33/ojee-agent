@@ -30,7 +30,7 @@ const argv = process.argv.slice(2);
 const configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 
 if (argv[0] === '--version') { console.log('9.9.9 (Fake Claude)'); process.exit(0); }
-if (argv[0] === 'agents') { console.log('[]'); process.exit(0); }
+if (argv[0] === 'agents') { let out = '[]'; try { if (process.env.FAKE_AGENTS_FILE) out = require('fs').readFileSync(process.env.FAKE_AGENTS_FILE, 'utf8'); } catch { /* none */ } console.log(out); process.exit(0); }
 if (argv[0] === 'auth' && argv[1] === 'status') {
   const out = fs.existsSync(path.join(configDir, 'FAKE_LOGGED_OUT'))
     ? { loggedIn: false, authMethod: 'none' }

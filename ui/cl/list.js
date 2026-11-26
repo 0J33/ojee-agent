@@ -74,7 +74,8 @@ export function sessionsPanel(current) {
   }
   const off = (S.devs || []).filter((d) => !d.online);
   if (off.length) box.append(h('div', { class: 'cl-offline' }, off.map((d) => h('span', {}, h('span', { class: 'dot' }), offWhy(d)))));
-  box.append(h('button', { class: 'grp fold cl-history', type: 'button', onclick: () => historySheet() }, icon('history', 's'), `Other conversations on ${multi() ? devLabel(curDev()) : 'this machine'}`));
+  const hs = historyScope();
+  box.append(h('button', { class: 'grp fold cl-history', type: 'button', onclick: () => historySheet() }, icon('history', 's'), `Other conversations on ${!multi() ? 'this machine' : hs === 'all' ? 'all devices' : devLabel(hs)}`));
   return box;
 }
 
@@ -119,31 +120,147 @@ export function stackLine() {
     }, 'Restart'))));
 }
 
-/** Every other conversation on a machine, to open (adopt) here. */
+/** Where "Other conversations" looks: the list's device filter, or all of them. */
+function historyScope() {
+  if (!multi()) return curDev();
+  return S.filter !== 'all' && devOf(S.filter) ? S.filter : 'all';
+}
+
+/** "Deleted" with Undo: a toast that stays a little longer than a plain one. */
+function undoToast(title, detail, onUndo) {
+  const node = toast('info', title, detail, { ms: 8000 });
+  if (!(node instanceof Element)) return;
+  const btn = h('button', { class: 'btn sm', type: 'button' }, 'Undo');
+  btn.addEventListener('click', () => { node.classList.add('out'); setTimeout(() => node.remove(), 200); onUndo(); }, { once: true });
+  (node.querySelector('.toast-txt') || node).append(h('div', { class: 'a' }, btn));
+}
+
+/** The confirm, over the sheet: the console's modal when there is one, else a sheet. */
+async function confirmDelete({ x, dev }) {
+  const body = h('div', { class: 'cl-del' },
+    h('b', { class: 't' }, clip(x.title || x.firstPrompt || x.id.slice(0, 8), 120)),
+    x.title && x.firstPrompt ? h('p', { class: 'q' }, clip(x.firstPrompt, 160)) : null,
+    h('p', { class: 'd m' }, [multi() ? devLabel(dev) : null, shortHome(x.cwd, dev), ago(x.modified)].filter(Boolean).join(' · ')),
+    h('p', { class: 'dim' }, `Its transcript${x.size ? ` (${size(x.size)})` : ''} and any subagent logs go to the trash on ${devLabel(dev) || 'this machine'} for 7 days.`));
+  const actions = [{ label: 'Cancel', value: false, variant: 'ghost' }, { label: 'Delete', value: true, variant: 'danger solid' }];
+  if (S.ctx.modal) return !!(await S.ctx.modal({ title: 'Delete this conversation?', body, actions }));
+  return !!(await ask({ title: 'Delete this conversation?', body, actions }));
+}
+
+const size = (b) => (b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
+const shortHome = (p, dev) => (p ? p.replace(dataOf(dev)?.runner?.home || '\u0000', '~') : '?');
+
+/**
+ * Every other conversation on a machine — or, with the list showing every
+ * device, on all of them, merged newest first — to open (adopt) here or
+ * delete. A device that is away is said so, and never holds up the others.
+ */
 async function historySheet() {
-  let dev = curDev();
+  let scope = historyScope();
+  let items = [];        // [{ dev, x }] newest first
+  let away = [];         // [{ dev, why }]
   let sheet = null;
+  let gen = 0;
   const bodyEl = h('div', { class: 'cl-hist' });
-  const draw = async () => {
-    bodyEl.replaceChildren(
-      multi() ? h('div', { class: 'cl-filter' }, S.devs.map((d) => h('button', { class: 'chip', type: 'button', 'aria-pressed': String(d.id === dev), disabled: !d.online || null, onclick: () => { dev = d.id; setDev(d.id); draw(); } }, d.label))) : null,
-      h('div', { class: 'sk', style: 'height:160px' }));
-    if (!online(dev)) { bodyEl.lastChild.replaceWith(h('p', { class: 'dim' }, offWhy(devOf(dev)))); return; }
-    let r;
-    try { r = await api(dev, '/history'); } catch (e) { bodyEl.lastChild.replaceWith(h('p', { class: 'dim' }, e.message)); return; }
-    const others = (r.sessions || []).filter((x) => !x.managed);
-    bodyEl.lastChild.replaceWith(others.length ? h('div', { class: 'rows panel clip' }, others.map((x) => h('div', { class: 'row' },
-      h('div', { class: 'grow' }, h('div', { class: 't' }, clip(x.title || x.firstPrompt || x.id.slice(0, 8), 80)),
-        h('div', { class: 'd m' }, [x.cwd ? x.cwd.replace(dataOf(dev)?.runner?.home || '\u0000', '~') : '?', ago(x.modified), x.runningElsewhere ? 'open in a terminal there' : null].filter(Boolean).join(' · '))),
-      h('button', {
-        class: 'btn sm', type: 'button', disabled: x.runningElsewhere || null, title: x.runningElsewhere ? 'Running in a terminal on that machine. Close it there first.' : 'Open it here: the same conversation, not a copy',
-        onclick: async () => {
-          const v = await act(`adopt:${x.id}`, () => post(dev, `/history/${x.id}/adopt`, {}));
-          if (v) { upsert(dev, v); sheet?.close(); go(v.id); }
-        },
-      }, 'Open')))) : h('p', { class: 'dim' }, 'Every conversation on this machine is already in the list.'));
+  const chipsEl = h('div', { class: 'cl-filter', role: 'group', 'aria-label': 'Conversations on' });
+  const noteEl = h('div', { class: 'cl-hist-away' });
+  const listEl = h('div');
+
+  const paintChips = () => chipsEl.replaceChildren(...[['all', 'All'], ...S.devs.map((d) => [d.id, d.label])].map(([id, label]) => h('button', {
+    class: 'chip', type: 'button', 'aria-pressed': String(scope === id),
+    title: id !== 'all' ? offWhy(devOf(id)) || `Only ${label}` : null,
+    onclick: () => { if (scope === id) return; scope = id; if (id !== 'all') setDev(id); load(); },
+  }, id !== 'all' ? h('span', { class: 'dot', style: `--c:var(--${online(id) ? 'ok' : 'fg-3'})` }) : null, label)));
+
+  const paintAway = () => noteEl.replaceChildren(...away.map((a) => h('div', { class: 'ln' }, h('span', { class: 'dot', style: '--c:var(--fg-3)' }), h('span', {}, a.why))));
+
+  const row = ({ dev, x }) => {
+    const running = x.runningElsewhere;
+    const meta = [shortHome(x.cwd, dev), ago(x.modified), running ? 'open in a terminal there' : null].filter(Boolean).join(' · ');
+    return h('div', { class: 'row', dataset: { key: `${dev}:${x.id}` } },
+      h('div', { class: 'grow' },
+        h('div', { class: 't' }, clip(x.title || x.firstPrompt || x.id.slice(0, 8), 80)),
+        h('div', { class: 'd m' }, multi() && scope === 'all' ? h('span', { class: 'tag' }, devLabel(dev)) : null, meta)),
+      h('div', { class: 'acts' },
+        h('button', {
+          class: 'btn ghost sm cl-hist-del', type: 'button', disabled: running || null,
+          title: running ? 'Running in a terminal on that machine. Close it there first.' : `Delete it from ${devLabel(dev) || 'this machine'} (kept in the trash for 7 days)`,
+          'aria-label': 'Delete', onclick: () => remove({ dev, x }),
+        }, icon('trash', 's'), h('span', { class: 'lbl' }, 'Delete')),
+        h('button', {
+          class: 'btn sm', type: 'button', disabled: running || null, title: running ? 'Running in a terminal on that machine. Close it there first.' : 'Open it here: the same conversation, not a copy',
+          onclick: async () => {
+            const v = await act(`adopt:${x.id}`, () => post(dev, `/history/${x.id}/adopt`, {}));
+            if (v) { upsert(dev, v); sheet?.close(); go(v.id); }
+          },
+        }, 'Open')));
   };
+
+  const paintList = () => {
+    if (!items.length) {
+      listEl.replaceChildren(...(away.length && scope !== 'all' ? [] : [h('p', { class: 'dim' }, `Every conversation on ${scope === 'all' ? 'these machines' : 'this machine'} is already in the list.`)]));
+      return;
+    }
+    listEl.replaceChildren(h('div', { class: 'rows panel clip' }, items.map(row)));
+  };
+
+  const load = async () => {
+    const my = ++gen;
+    paintChips();
+    away = [];
+    paintAway();
+    listEl.replaceChildren(h('div', { class: 'sk', style: 'height:160px' }));
+    const devs = scope === 'all' ? S.devs.map((d) => d.id) : [scope];
+    const got = await Promise.all(devs.map(async (dev) => {
+      if (!online(dev)) return { dev, why: offWhy(devOf(dev)) };
+      try { return { dev, list: (await api(dev, '/history')).sessions || [] }; } catch (e) { return { dev, why: `${devLabel(dev)}: ${e.message}` }; }
+    }));
+    if (my !== gen) return;
+    away = got.filter((g) => g.why).map((g) => ({ dev: g.dev, why: g.why }));
+    items = got.filter((g) => g.list).flatMap((g) => g.list.filter((x) => !x.managed).map((x) => ({ dev: g.dev, x })))
+      .sort((a, b) => (b.x.modified || 0) - (a.x.modified || 0));
+    paintAway();
+    paintList();
+  };
+
+  /** Optimistic: the row goes now, comes back if the runner says no. */
+  async function remove(it) {
+    if (!(await confirmDelete(it))) return;
+    const key = `${it.dev}:${it.x.id}`;
+    const same = (y) => y.dev === it.dev && y.x.id === it.x.id;
+    const at = items.findIndex(same);
+    const el = listEl.querySelector(`[data-key="${CSS.escape(key)}"]`);
+    items = items.filter((y) => !same(y));
+    const settle = () => paintList();
+    if (el && !matchMedia('(prefers-reduced-motion: reduce)').matches) { el.classList.add('gone'); setTimeout(settle, 160); } else settle();
+    const name = clip(it.x.title || it.x.firstPrompt || it.x.id.slice(0, 8), 60);
+    try {
+      await api(it.dev, `/history/${encodeURIComponent(it.x.id)}${it.x.project ? `?project=${encodeURIComponent(it.x.project)}` : ''}`, { method: 'DELETE' });
+    } catch (e) {
+      putBack(it, at);
+      toast('err', 'Not deleted', e.message);
+      return;
+    }
+    undoToast('Conversation deleted', multi() ? `${name} · ${devLabel(it.dev)}` : name, async () => {
+      try {
+        await post(it.dev, `/history/${encodeURIComponent(it.x.id)}/restore`, {});
+        putBack(it, at);
+        toast('ok', 'Restored', name);
+      } catch (e) { toast('err', 'Could not restore it', e.message); }
+    });
+  }
+
+  function putBack(it, at) {
+    if (items.some((y) => y.dev === it.dev && y.x.id === it.x.id)) return;
+    items.splice(Math.min(Math.max(at, 0), items.length), 0, it);
+    items.sort((a, b) => (b.x.modified || 0) - (a.x.modified || 0));
+    paintList();
+  }
+
+  if (multi()) bodyEl.append(chipsEl);
+  bodyEl.append(noteEl, listEl);
   sheet = await dialog({ title: 'Other conversations', sub: 'Open one here to resume it: the same conversation, not a copy', body: bodyEl, width: 640 });
-  draw();
+  load();
   await sheet.done;
+  gen++;
 }
