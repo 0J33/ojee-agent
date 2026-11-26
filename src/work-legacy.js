@@ -117,6 +117,15 @@ module.exports = function mountWorkLegacy(app, auth, runners, emitNotify = () =>
     res.json({ ok: true, message: m });
   });
 
+  // Close messages in the console's notifications once they are handled
+  // (by the owner elsewhere, or by the agent that sent them): { keys: [...] }.
+  app.post('/api/work/messages/resolve', auth, express_json, (req, res) => {
+    const keys = (Array.isArray(req.body?.keys) ? req.body.keys : [req.body?.key]).map((k) => clip(k, 120)).filter(Boolean).slice(0, 200);
+    if (!keys.length) return res.status(400).json({ error: 'Give key or keys.' });
+    for (const key of keys) for (const id of ['agent.work-update', 'agent.work-alert']) emitNotify({ id, key, state: 'resolve', at: Date.now() });
+    res.json({ ok: true, resolved: keys.length });
+  });
+
   /* ── the owner's answers ─────────────────────────────────────────── */
 
   app.get('/api/work/replies', auth, (_req, res) => res.json({ replies: readReplies() }));
