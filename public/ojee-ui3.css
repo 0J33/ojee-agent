@@ -630,6 +630,13 @@ table.t tr.grp td{background:var(--raised);font-size:12px;font-weight:600;color:
   --line-strong:var(--line-2);--line-hover:var(--fg-3);--err-wash:color-mix(in srgb,var(--err) 10%,transparent);
   --s-1:4px;--s-2:8px;--s-3:12px;--s-4:16px;--s-5:24px;--s-6:32px;
   --radius:var(--r-3);--radius-sm:var(--r-2);
+  /* v2 names Remote's full-screen session / shell / files pages still use */
+  --bg-0:var(--page);--bg-2:var(--raised);--tint-1:var(--hover);
+  --chrome-surface:color-mix(in srgb,var(--panel) 88%,transparent);--chrome-2:var(--panel);--chrome-3:var(--raised);
+  --chrome-blur:saturate(140%) blur(14px);
+  --accent-08:color-mix(in srgb,var(--acc) 8%,transparent);--accent-03:color-mix(in srgb,var(--acc) 3%,transparent);
+  --mono:var(--font-mono);--hud:var(--font-mono);
+  --dur:.3s;--dur-2:.15s;--hit:44px;--z-modal:300;
 }
 .ic{width:16px;height:16px;flex:none;fill:currentColor;vertical-align:middle}
 .ic--sm{width:14px;height:14px}.ic--lg{width:20px;height:20px}.ic--xl{width:24px;height:24px}

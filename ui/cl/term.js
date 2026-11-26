@@ -358,7 +358,13 @@ export function startTerminal({ host, ctx, path, onState, onImage, onPick, onCop
         term.writeln('\r\n\x1b[33mdisconnected. Press Reconnect\x1b[0m');
       }
     };
-    ws.onerror = () => set('error', 'websocket');
+    ws.onerror = () => {
+      // Refused before it opened (runner down, a proxy in the way): say so in
+      // the terminal itself, or the pane is just black.
+      if (disposed) return;
+      if (state !== 'connected') term.writeln('\r\n\x1b[33mCould not reach the terminal. Press Reconnect\x1b[0m');
+      set('error', 'websocket');
+    };
   }
 
   /** The cell under a point on the screen, as a 0-based buffer row and column. */

@@ -616,7 +616,17 @@ function runnerUpgrade(req, socket, head) {
  */
 async function claudeSummary() {
   if (!CLAUDE_CONFIGURED) return { configured: false };
-  const all = await Promise.all(RUNNERS.map(async (r) => ({ r, x: await runnerJson(r, '/summary', 3000) })));
+  const all = await Promise.all(RUNNERS.map(async (r) => {
+    const x = await runnerJson(r, '/summary', 3000);
+    // A runner older than this module has no accounts in its summary: read them
+    // from /accounts, so the overview and the needs-login alerts hold while the
+    // runners and the module are updated one after the other.
+    if (x.ok && x.data && !Array.isArray(x.data.accounts)) {
+      const a = await runnerJson(r, '/accounts', 3000);
+      if (a.ok && Array.isArray(a.data?.accounts)) x.data = { ...x.data, accounts: a.data.accounts };
+    }
+    return { r, x };
+  }));
   const up = all.filter(({ x }) => x.ok);
   const sum = (k) => up.reduce((n, { x }) => n + (Number(x.data[k]) || 0), 0);
   const multi = RUNNERS.length > 1;
